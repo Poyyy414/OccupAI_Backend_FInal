@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>OccupAI — Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Epilogue:wght@300;400;500&display=swap" rel="stylesheet"/>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#06080d;--surface:#0d1117;--surface2:#111620;--border:#1c2233;
+  --accent:#00e5a0;--accent2:#0066ff;--warn:#ffd32a;--danger:#ff6b35;
+  --red:#ff4d6d;--text:#eef0f6;--muted:#4a5568;
+}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Epilogue',sans-serif;overflow-x:hidden}
+::-webkit-scrollbar{width:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
+
+.sidebar{position:fixed;top:0;left:0;bottom:0;width:220px;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;z-index:100}
+.sidebar-brand{padding:1.4rem 1.4rem 1rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px}
+.brand-mark{width:32px;height:32px;border-radius:9px;background:var(--accent);color:#000;display:flex;align-items:center;justify-content:center;font-family:'Syne',sans-serif;font-weight:800;font-size:.8rem;flex-shrink:0}
+.brand-name{font-family:'Syne',sans-serif;font-weight:800;font-size:1rem}
+.brand-name span{color:var(--accent)}
+.nav{flex:1;padding:1rem .7rem;display:flex;flex-direction:column;gap:2px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:.65rem .85rem;border-radius:10px;color:var(--muted);font-size:.88rem;font-weight:500;cursor:pointer;transition:all .2s;text-decoration:none;border:none;background:none;width:100%}
+.nav-item:hover{background:var(--surface2);color:var(--text)}
+.nav-item.active{background:rgba(0,229,160,.1);color:var(--accent)}
+.nav-item .icon{font-size:1rem;width:20px;text-align:center;flex-shrink:0}
+.sidebar-bottom{padding:.8rem .7rem 1.2rem;border-top:1px solid var(--border)}
+.user-card{display:flex;align-items:center;gap:10px;padding:.6rem .8rem;border-radius:10px;background:var(--surface2);margin-bottom:.5rem}
+.user-avatar{width:30px;height:30px;border-radius:50%;background:var(--accent);color:#000;display:flex;align-items:center;justify-content:center;font-family:'Syne',sans-serif;font-weight:700;font-size:.75rem;flex-shrink:0}
+.user-info{min-width:0}
+.user-name{font-size:.82rem;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.user-role{font-size:.7rem;color:var(--muted);text-transform:capitalize}
+.btn-logout{width:100%;padding:.55rem;border:1px solid var(--border);background:none;color:var(--muted);border-radius:9px;cursor:pointer;font-size:.82rem;font-family:'Epilogue',sans-serif;transition:all .2s}
+.btn-logout:hover{border-color:var(--red);color:var(--red)}
+
+.main{margin-left:220px;min-height:100vh;display:flex;flex-direction:column}
+.panel{display:none;flex:1;padding:2rem 2.2rem;flex-direction:column;gap:1.5rem}
+.panel.active{display:flex}
+.panel-header{display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:1rem}
+.panel-title{font-family:'Syne',sans-serif;font-weight:700;font-size:1.5rem}
+.panel-sub{color:var(--muted);font-size:.85rem;margin-top:.2rem}
+
+.status-pill{display:flex;align-items:center;gap:7px;padding:.4rem 1rem;border-radius:20px;font-size:.8rem;font-weight:500;background:var(--surface);border:1px solid var(--border)}
+.dot{width:7px;height:7px;border-radius:50%}
+.dot.online{background:var(--accent);box-shadow:0 0 8px rgba(0,229,160,.6);animation:pulse 2s infinite}
+.dot.offline{background:var(--red)}
+.dot.idle{background:var(--warn)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+.stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:1rem}
+@media(max-width:1100px){.stats-row{grid-template-columns:repeat(2,1fr)}}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:1.3rem 1.5rem;position:relative;overflow:hidden;transition:border-color .2s,transform .2s;cursor:default}
+.stat-card:hover{transform:translateY(-2px)}
+.stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;border-radius:2px 2px 0 0}
+.stat-card.c-green::before{background:var(--accent)}
+.stat-card.c-red::before{background:var(--red)}
+.stat-card.c-blue::before{background:var(--accent2)}
+.stat-card.c-orange::before{background:var(--danger)}
+.stat-label{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;font-weight:500;margin-bottom:.7rem}
+.stat-val{font-family:'Syne',sans-serif;font-weight:800;font-size:2.4rem;line-height:1}
+.stat-val.c-green{color:var(--accent)}
+.stat-val.c-red{color:var(--red)}
+.stat-val.c-blue{color:var(--accent2)}
+.stat-val.c-orange{color:var(--danger)}
+.stat-hint{font-size:.75rem;color:var(--muted);margin-top:.4rem}
+
+.occ-card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:1.5rem 1.8rem}
+.occ-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.2rem;flex-wrap:wrap;gap:.5rem}
+.occ-label{font-family:'Syne',sans-serif;font-weight:600;font-size:1rem}
+.occ-big{font-family:'Syne',sans-serif;font-weight:800;font-size:2rem;color:var(--accent)}
+.occ-track{height:14px;background:var(--bg);border-radius:99px;overflow:hidden}
+.occ-fill{height:100%;border-radius:99px;background:linear-gradient(90deg,var(--accent),#00c8e0);transition:width 1s cubic-bezier(.4,0,.2,1),background .5s}
+.occ-fill.warn{background:linear-gradient(90deg,var(--warn),#ffaa00)}
+.occ-fill.danger{background:linear-gradient(90deg,var(--danger),#ff4444)}
+.occ-fill.full{background:var(--red)}
+.occ-markers{display:flex;justify-content:space-between;margin-top:.5rem;font-size:.72rem;color:var(--muted)}
+
+.lot-banner{background:rgba(255,77,109,.08);border:1px solid rgba(255,77,109,.3);border-radius:12px;padding:.8rem 1.2rem;display:none;align-items:center;gap:10px;font-size:.88rem}
+.lot-banner.show{display:flex}
+
+.card{background:var(--surface);border:1px solid var(--border);border-radius:16px;overflow:hidden}
+.card-head{padding:1rem 1.4rem;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.card-title{font-family:'Syne',sans-serif;font-weight:600;font-size:.9rem}
+.card-body{padding:1rem}
+.history-scroll{max-height:280px;overflow-y:auto}
+.hist-item{display:flex;align-items:center;justify-content:space-between;padding:.55rem .4rem;border-bottom:1px solid var(--border);font-size:.83rem;transition:background .15s}
+.hist-item:last-child{border-bottom:none}
+.hist-item:hover{background:var(--surface2);border-radius:6px}
+.hist-time{color:var(--muted);font-size:.78rem;width:80px;flex-shrink:0}
+.hist-bar-wrap{flex:1;margin:0 .8rem;height:6px;background:var(--bg);border-radius:3px;overflow:hidden}
+.hist-bar{height:100%;border-radius:3px;background:var(--accent);transition:width .3s}
+.hist-pct{font-family:'Syne',sans-serif;font-weight:600;font-size:.82rem;color:var(--accent);width:42px;text-align:right;flex-shrink:0}
+.empty-msg{color:var(--muted);font-size:.83rem;text-align:center;padding:2rem}
+.meta-row{display:flex;gap:1.5rem;flex-wrap:wrap}
+.meta-item{font-size:.82rem;color:var(--muted)}
+.meta-item strong{color:var(--text);font-weight:500}
+
+/* FEED PANEL */
+.feed-wrap{background:var(--surface);border:1px solid var(--border);border-radius:16px;overflow:hidden}
+.feed-head{padding:1rem 1.4rem;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.live-badge{display:flex;align-items:center;gap:5px;background:rgba(255,77,109,.12);color:var(--red);border:1px solid rgba(255,77,109,.25);border-radius:20px;padding:.22rem .7rem;font-size:.72rem;font-weight:700;letter-spacing:.05em}
+
+/* ── SMALLER VIDEO: max-width keeps it compact ── */
+.feed-viewport{
+  width:100%;max-width:520px;   /* cap width so it's smaller */
+  aspect-ratio:4/3;             /* 480x360 ratio */
+  background:var(--bg);
+  display:flex;align-items:center;justify-content:center;
+  position:relative;overflow:hidden;margin:0 auto;
+}
+.feed-stream{width:100%;height:100%;object-fit:contain;display:block}
+.feed-ph{text-align:center;color:var(--muted);position:absolute}
+.feed-ph svg{opacity:.25;margin-bottom:.8rem}
+.feed-ph p{font-size:.85rem}
+.feed-ph small{font-size:.75rem;opacity:.6}
+.feed-foot{padding:.7rem 1.4rem;border-top:1px solid var(--border);font-size:.78rem;color:var(--muted);display:flex;justify-content:space-between}
+
+.zone-list{display:flex;flex-direction:column}
+.zone-item{display:flex;align-items:center;justify-content:space-between;padding:.6rem 1rem;border-bottom:1px solid var(--border);font-size:.83rem}
+.zone-item:last-child{border-bottom:none}
+.zone-badge{padding:.18rem .6rem;border-radius:6px;font-size:.72rem;font-weight:600}
+.zone-badge.occ{background:rgba(255,77,109,.12);color:var(--red)}
+.zone-badge.free{background:rgba(0,229,160,.1);color:var(--accent)}
+.btn-refresh{padding:.35rem .8rem;border:1px solid var(--border);background:none;color:var(--muted);border-radius:8px;cursor:pointer;font-size:.78rem;font-family:'Epilogue',sans-serif;transition:all .2s}
+.btn-refresh:hover{border-color:var(--accent);color:var(--accent)}
+.stream-error{display:none;background:rgba(255,77,109,.08);border:1px solid rgba(255,77,109,.3);border-radius:8px;padding:.6rem 1rem;font-size:.8rem;color:var(--red);margin:.5rem 1rem}
+.stream-error.show{display:block}
+</style>
+</head>
+<body>
+
+<div class="sidebar">
+  <div class="sidebar-brand">
+    <div class="brand-mark">AI</div>
+    <div class="brand-name">Occup<span>AI</span></div>
+  </div>
+  <nav class="nav">
+    <button class="nav-item active" onclick="showPanel('overview')">
+      <span class="icon">📊</span> Overview
+    </button>
+    <button class="nav-item" onclick="showPanel('feed')">
+      <span class="icon">📷</span> Live Feed
+    </button>
+  </nav>
+  <div class="sidebar-bottom">
+    <div class="user-card">
+      <div class="user-avatar" id="user-avatar">?</div>
+      <div class="user-info">
+        <div class="user-name" id="user-name">Loading...</div>
+        <div class="user-role" id="user-role">driver</div>
+      </div>
+    </div>
+    <button class="btn-logout" onclick="doLogout()">← Sign out</button>
+  </div>
+</div>
+
+<div class="main">
+
+  <!-- OVERVIEW PANEL -->
+  <div class="panel active" id="panel-overview">
+    <div class="panel-header">
+      <div>
+        <div class="panel-title">Parking Overview</div>
+        <div class="panel-sub">105 Peñafrancia Ave, Naga City — real-time data</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:.8rem;flex-wrap:wrap">
+        <div class="meta-row">
+          <div class="meta-item">FPS <strong id="fps-val">—</strong></div>
+          <div class="meta-item">Updated <strong id="last-update">—</strong></div>
+        </div>
+        <div class="status-pill">
+          <div class="dot idle" id="status-dot"></div>
+          <span id="status-text">Connecting...</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="lot-banner" id="lot-banner">
+      <span style="font-size:1.1rem">🚫</span>
+      <span><strong>Lot is full.</strong> No available spaces right now.</span>
+    </div>
+
+    <div class="stats-row">
+      <div class="stat-card c-green">
+        <div class="stat-label">Free Slots</div>
+        <div class="stat-val c-green" id="stat-free">—</div>
+        <div class="stat-hint">Available right now</div>
+      </div>
+      <div class="stat-card c-red">
+        <div class="stat-label">Occupied</div>
+        <div class="stat-val c-red" id="stat-occ">—</div>
+        <div class="stat-hint">Cars detected</div>
+      </div>
+      <div class="stat-card c-blue">
+        <div class="stat-label">Total Capacity</div>
+        <div class="stat-val c-blue" id="stat-total">—</div>
+        <div class="stat-hint">Virtual zones</div>
+      </div>
+      <div class="stat-card c-orange">
+        <div class="stat-label">Occupancy Rate</div>
+        <div class="stat-val c-orange" id="stat-pct">—%</div>
+        <div class="stat-hint">Of total capacity</div>
+      </div>
+    </div>
+
+    <div class="occ-card">
+      <div class="occ-top">
+        <div class="occ-label">Live Occupancy</div>
+        <div class="occ-big" id="occ-big">0%</div>
+      </div>
+      <div class="occ-track">
+        <div class="occ-fill" id="occ-fill" style="width:0%"></div>
+      </div>
+      <div class="occ-markers">
+        <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div class="card-title">Recent Activity</div>
+        <button class="btn-refresh" onclick="fetchHistory()">↻ Refresh</button>
+      </div>
+      <div class="history-scroll" id="history-list">
+        <div class="empty-msg">Waiting for YOLO service data...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FEED PANEL -->
+  <div class="panel" id="panel-feed">
+    <div class="panel-header">
+      <div>
+        <div class="panel-title">Live Camera Feed</div>
+        <div class="panel-sub">Real-time MJPEG stream · YOLOv8 · port 8001</div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 280px;gap:1rem;align-items:start">
+
+      <!-- VIDEO -->
+      <div class="feed-wrap">
+        <div class="feed-head">
+          <span style="font-family:'Syne',sans-serif;font-weight:600;font-size:.9rem">Camera View</span>
+          <div class="live-badge">
+            <div class="dot" style="background:var(--red);animation:pulse 1s infinite"></div>LIVE
+          </div>
+        </div>
+        <div class="feed-viewport">
+          <!-- MJPEG stream — browser handles it natively, no JS polling needed -->
+          <img
+            class="feed-stream"
+            id="feed-stream"
+            src="http://localhost:8001/stream"
+            alt="Live feed"
+            onerror="onStreamError()"
+            onload="onStreamLoad()"
+          />
+          <div class="feed-ph" id="feed-ph" style="display:none">
+            <svg width="48" height="48" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1"
+                d="M15 10l4.553-2.069A1 1 0 0121 8.87v6.26a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h10a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/>
+            </svg>
+            <p>Stream offline</p>
+            <small>Start the YOLO detector service</small>
+          </div>
+        </div>
+        <div class="stream-error" id="stream-error">
+          ⚠ Cannot connect to stream at localhost:8001 — make sure the YOLO detector is running.
+        </div>
+        <div class="feed-foot">
+          <span id="feed-ts">MJPEG stream (live)</span>
+          <span id="feed-fps">—</span>
+        </div>
+      </div>
+
+      <!-- SIDEBAR -->
+      <div style="display:flex;flex-direction:column;gap:1rem">
+        <div class="card">
+          <div class="card-head"><div class="card-title">Zone Status</div></div>
+          <div class="zone-list" id="zone-list">
+            <div class="empty-msg" style="padding:1.2rem">No zones yet</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><div class="card-title">Quick Stats</div></div>
+          <div class="card-body" style="display:flex;flex-direction:column;gap:.7rem">
+            <div style="display:flex;justify-content:space-between;font-size:.85rem">
+              <span style="color:var(--muted)">Free</span>
+              <span style="color:var(--accent);font-family:'Syne',sans-serif;font-weight:700" id="feed-free">—</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:.85rem">
+              <span style="color:var(--muted)">Occupied</span>
+              <span style="color:var(--red);font-family:'Syne',sans-serif;font-weight:700" id="feed-occ">—</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:.85rem">
+              <span style="color:var(--muted)">Rate</span>
+              <span style="color:var(--accent2);font-family:'Syne',sans-serif;font-weight:700" id="feed-pct">—%</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:.85rem">
+              <span style="color:var(--muted)">FPS</span>
+              <span style="color:var(--text);font-family:'Syne',sans-serif;font-weight:700" id="feed-fps-side">—</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const API         = 'http://localhost:8000';
+const STREAM_URL  = 'http://localhost:8001/stream';
+let pollId        = null;
+let currentPanel  = 'overview';
+let streamOk      = false;
+let retryTimer    = null;
+
+// ── AUTH GUARD ──────────────────────────────────────────────────────────────
+const raw = localStorage.getItem('occupai_user');
+if (!raw) { window.location.href = '/login'; }
+const user = JSON.parse(raw);
+const initials = (user.first_name[0] + (user.last_name?.[0] || '')).toUpperCase();
+document.getElementById('user-avatar').textContent = initials;
+document.getElementById('user-name').textContent   = (user.first_name || '') + ' ' + (user.last_name || '');
+document.getElementById('user-role').textContent   = user.role || 'driver';
+
+function doLogout() {
+  clearInterval(pollId);
+  localStorage.removeItem('occupai_user');
+  window.location.href = '/login';
+}
+
+// ── PANELS ──────────────────────────────────────────────────────────────────
+function showPanel(name) {
+  currentPanel = name;
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.getElementById(`panel-${name}`).classList.add('active');
+  document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.nav-item')[name === 'overview' ? 0 : 1].classList.add('active');
+}
+
+// ── STREAM HANDLERS ──────────────────────────────────────────────────────────
+function onStreamLoad() {
+  streamOk = true;
+  document.getElementById('stream-error').classList.remove('show');
+  document.getElementById('feed-ph').style.display = 'none';
+  if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+}
+
+function onStreamError() {
+  streamOk = false;
+  document.getElementById('stream-error').classList.add('show');
+  document.getElementById('feed-ph').style.display = 'flex';
+  // Retry connecting every 3s
+  if (!retryTimer) {
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      const img = document.getElementById('feed-stream');
+      img.src = STREAM_URL + '?t=' + Date.now(); // cache-bust
+    }, 3000);
+  }
+}
+
+// ── FETCH STATS ─────────────────────────────────────────────────────────────
+async function fetchStats() {
+  try {
+    const res = await fetch(`${API}/api/stats`);
+    if (!res.ok) throw new Error();
+    const d = await res.json();
+    updateOverview(d);
+    updateFeedQuick(d);
+    updateZones(d.zones || {});
+  } catch { setOffline(); }
+}
+
+async function fetchHistory() {
+  try {
+    const res = await fetch(`${API}/api/history`);
+    if (!res.ok) return;
+    renderHistory(await res.json());
+  } catch {}
+}
+
+// ── UPDATE UI ────────────────────────────────────────────────────────────────
+function updateOverview(d) {
+  document.getElementById('stat-free').textContent  = d.free      ?? '—';
+  document.getElementById('stat-occ').textContent   = d.occupied  ?? '—';
+  document.getElementById('stat-total').textContent = d.total     ?? '—';
+  const pct = +(d.occupancy_pct ?? 0);
+  document.getElementById('stat-pct').textContent   = pct.toFixed(1) + '%';
+  document.getElementById('occ-big').textContent    = pct.toFixed(1) + '%';
+  document.getElementById('fps-val').textContent    = (d.fps ?? 0).toFixed(1);
+  document.getElementById('last-update').textContent =
+    d.timestamp ? new Date(d.timestamp).toLocaleTimeString() : '—';
+
+  const fill = document.getElementById('occ-fill');
+  fill.style.width = Math.min(pct, 100) + '%';
+  fill.className   = 'occ-fill' +
+    (pct >= 95 ? ' full' : pct >= 70 ? ' danger' : pct >= 50 ? ' warn' : '');
+
+  const alive = d.total > 0 || d.fps > 0;
+  document.getElementById('status-dot').className   = 'dot ' + (alive ? 'online' : 'idle');
+  document.getElementById('status-text').textContent = alive ? 'YOLO Online' : 'Waiting for YOLO';
+  document.getElementById('lot-banner').classList.toggle('show', !!d.lot_full);
+}
+
+function updateFeedQuick(d) {
+  document.getElementById('feed-free').textContent     = d.free     ?? '—';
+  document.getElementById('feed-occ').textContent      = d.occupied ?? '—';
+  document.getElementById('feed-pct').textContent      = (+(d.occupancy_pct ?? 0)).toFixed(1) + '%';
+  document.getElementById('feed-fps-side').textContent = d.fps ? d.fps.toFixed(1) + ' fps' : '—';
+  document.getElementById('feed-fps').textContent      = d.fps ? d.fps.toFixed(1) + ' fps' : '—';
+}
+
+function updateZones(zones) {
+  const zl      = document.getElementById('zone-list');
+  const entries = Object.entries(zones);
+  if (!entries.length) {
+    zl.innerHTML = '<div class="empty-msg" style="padding:1.2rem">No zones yet</div>';
+    return;
+  }
+  zl.innerHTML = entries.map(([name, occ]) => `
+    <div class="zone-item">
+      <span>${name}</span>
+      <span class="zone-badge ${occ ? 'occ' : 'free'}">${occ ? 'Occupied' : 'Free'}</span>
+    </div>`).join('');
+}
+
+function setOffline() {
+  document.getElementById('status-dot').className   = 'dot offline';
+  document.getElementById('status-text').textContent = 'Cannot reach server';
+}
+
+function renderHistory(items) {
+  const list = document.getElementById('history-list');
+  if (!items?.length) {
+    list.innerHTML = '<div class="empty-msg">No activity yet.</div>';
+    return;
+  }
+  list.innerHTML = [...items].reverse().slice(0, 25).map(r => {
+    const pct = +(r.pct ?? 0);
+    const col = pct >= 70 ? 'var(--red)' : pct >= 50 ? 'var(--warn)' : 'var(--accent)';
+    return `
+      <div class="hist-item">
+        <span class="hist-time">${new Date(r.time).toLocaleTimeString()}</span>
+        <div class="hist-bar-wrap">
+          <div class="hist-bar" style="width:${pct}%;background:${col}"></div>
+        </div>
+        <span class="hist-pct" style="color:${col}">${pct.toFixed(1)}%</span>
+      </div>`;
+  }).join('');
+}
+
+// ── START ────────────────────────────────────────────────────────────────────
+fetchStats();
+fetchHistory();
+pollId = setInterval(() => { fetchStats(); fetchHistory(); }, 2000);
+</script>
+</body>
+</html>

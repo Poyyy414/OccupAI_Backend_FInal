@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>OccupAI — Sign In</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Epilogue:wght@300;400;500&display=swap" rel="stylesheet"/>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#06080d;
+  --surface:#0d1117;
+  --surface2:#131820;
+  --border:#1c2233;
+  --accent:#00e5a0;
+  --text:#eef0f6;
+  --muted:#4a5568;
+  --red:#ff4d6d;
+}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Epilogue',sans-serif;overflow:hidden}
+
+/* animated grid bg */
+.grid-bg{
+  position:fixed;inset:0;
+  background-image:
+    linear-gradient(rgba(0,229,160,.03) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(0,229,160,.03) 1px,transparent 1px);
+  background-size:60px 60px;
+  animation:gridScroll 20s linear infinite;
+}
+@keyframes gridScroll{to{background-position:60px 60px}}
+
+/* glow orbs */
+.orb{position:fixed;border-radius:50%;filter:blur(80px);pointer-events:none}
+.orb1{width:400px;height:400px;background:rgba(0,229,160,.07);top:-100px;left:-100px}
+.orb2{width:300px;height:300px;background:rgba(0,102,255,.05);bottom:-50px;right:-50px}
+
+/* layout */
+.layout{
+  height:100vh;display:grid;grid-template-columns:1fr 480px;
+  position:relative;z-index:1;
+}
+
+/* left panel */
+.left{
+  display:flex;flex-direction:column;justify-content:center;
+  padding:4rem;border-right:1px solid var(--border);
+  background:linear-gradient(135deg,rgba(0,229,160,.03) 0%,transparent 60%);
+  position:relative;overflow:hidden;
+}
+.left-tag{
+  display:inline-flex;align-items:center;gap:8px;
+  background:rgba(0,229,160,.08);border:1px solid rgba(0,229,160,.2);
+  color:var(--accent);border-radius:20px;padding:.35rem .9rem;
+  font-size:.75rem;font-weight:500;letter-spacing:.08em;text-transform:uppercase;
+  margin-bottom:2rem;width:fit-content;
+}
+.left-tag::before{content:'';width:6px;height:6px;background:var(--accent);border-radius:50%;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.left h1{
+  font-family:'Syne',sans-serif;font-weight:800;
+  font-size:clamp(2.5rem,4vw,3.8rem);line-height:1.05;
+  margin-bottom:1.2rem;
+}
+.left h1 em{
+  font-style:normal;color:transparent;
+  background:linear-gradient(135deg,var(--accent),#00b8ff);
+  -webkit-background-clip:text;background-clip:text;
+}
+.left p{color:var(--muted);font-size:1rem;line-height:1.7;max-width:400px;margin-bottom:3rem}
+
+.features{display:flex;flex-direction:column;gap:1rem}
+.feature{display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted)}
+.feature-icon{
+  width:32px;height:32px;border-radius:8px;
+  background:rgba(0,229,160,.08);border:1px solid rgba(0,229,160,.15);
+  display:flex;align-items:center;justify-content:center;font-size:.9rem;flex-shrink:0;
+}
+
+/* right panel — card */
+.right{
+  display:flex;align-items:center;justify-content:center;
+  padding:3rem 2.5rem;background:var(--surface);
+}
+.card{width:100%;max-width:360px}
+
+.brand{display:flex;align-items:center;gap:10px;margin-bottom:2.5rem}
+.brand-mark{
+  width:36px;height:36px;border-radius:10px;
+  background:var(--accent);color:#000;
+  display:flex;align-items:center;justify-content:center;
+  font-family:'Syne',sans-serif;font-weight:800;font-size:.9rem;
+}
+.brand-name{font-family:'Syne',sans-serif;font-weight:800;font-size:1.2rem}
+.brand-name span{color:var(--accent)}
+
+.card-title{font-family:'Syne',sans-serif;font-weight:700;font-size:1.5rem;margin-bottom:.3rem}
+.card-sub{color:var(--muted);font-size:.88rem;margin-bottom:2rem}
+.card-sub a{color:var(--accent);text-decoration:none;font-weight:500}
+.card-sub a:hover{text-decoration:underline}
+
+.field{margin-bottom:1.2rem}
+.field label{display:block;font-size:.75rem;font-weight:500;color:var(--muted);margin-bottom:.45rem;text-transform:uppercase;letter-spacing:.06em}
+.field input{
+  width:100%;padding:.8rem 1rem;
+  background:var(--bg);border:1px solid var(--border);
+  border-radius:11px;color:var(--text);
+  font-family:'Epilogue',sans-serif;font-size:.95rem;
+  transition:border-color .2s,box-shadow .2s;outline:none;
+}
+.field input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(0,229,160,.1)}
+.field input::placeholder{color:var(--muted)}
+
+.btn{
+  width:100%;padding:.85rem;border:none;border-radius:12px;
+  background:var(--accent);color:#000;
+  font-family:'Syne',sans-serif;font-weight:700;font-size:.95rem;
+  cursor:pointer;transition:all .2s;margin-top:.3rem;
+  display:flex;align-items:center;justify-content:center;gap:8px;
+}
+.btn:hover{background:#00c988;transform:translateY(-1px);box-shadow:0 8px 28px rgba(0,229,160,.3)}
+.btn:active{transform:translateY(0);box-shadow:none}
+.btn:disabled{opacity:.5;cursor:not-allowed;transform:none;box-shadow:none}
+
+.error-box{
+  background:rgba(255,77,109,.08);border:1px solid rgba(255,77,109,.25);
+  color:#ff7a90;border-radius:10px;padding:.7rem 1rem;
+  font-size:.84rem;margin-bottom:1rem;display:none;
+}
+
+.divider{display:flex;align-items:center;gap:10px;margin:1.2rem 0;color:var(--muted);font-size:.78rem}
+.divider::before,.divider::after{content:'';flex:1;height:1px;background:var(--border)}
+
+.spinner{width:16px;height:16px;border:2px solid rgba(0,0,0,.2);border-top-color:#000;border-radius:50%;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+@media(max-width:768px){
+  .layout{grid-template-columns:1fr}
+  .left{display:none}
+  .right{background:var(--bg)}
+}
+</style>
+</head>
+<body>
+<div class="grid-bg"></div>
+<div class="orb orb1"></div>
+<div class="orb orb2"></div>
+
+<div class="layout">
+  <div class="left">
+    <div class="left-tag">Smart Parking System</div>
+    <h1>Park smarter<br/>with <em>AI vision</em></h1>
+    <p>OccupAI uses real-time computer vision to detect available parking spaces and guide you to the nearest free slot — no painted lines needed.</p>
+    <div class="features">
+      <div class="feature"><div class="feature-icon">👁</div>Real-time YOLO detection</div>
+      <div class="feature"><div class="feature-icon">🅿</div>Smart zone assignment</div>
+      <div class="feature"><div class="feature-icon">📊</div>Live occupancy dashboard</div>
+      <div class="feature"><div class="feature-icon">📍</div>105 Peñafrancia Ave, Naga City</div>
+    </div>
+  </div>
+
+  <div class="right">
+    <div class="card">
+      <div class="brand">
+        <div class="brand-mark">AI</div>
+        <div class="brand-name">Occup<span>AI</span></div>
+      </div>
+
+      <div class="card-title">Welcome back</div>
+      <div class="card-sub">No account yet? <a href="/register">Create one</a></div>
+
+      <div class="error-box" id="error-box"></div>
+
+      <div class="field">
+        <label>Email address</label>
+        <input type="email" id="email" placeholder="you@email.com" autocomplete="email"/>
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="password" placeholder="••••••••" autocomplete="current-password"/>
+      </div>
+
+      <button class="btn" id="btn-login" onclick="doLogin()">Sign In</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = 'http://localhost:8000';
+
+document.addEventListener('keydown', e => { if(e.key==='Enter') doLogin(); });
+
+async function doLogin(){
+  const email    = document.getElementById('email').value.trim();
+  const password = document.getElementById('password').value;
+  const errBox   = document.getElementById('error-box');
+  const btn      = document.getElementById('btn-login');
+  errBox.style.display = 'none';
+
+  if(!email || !password){ showErr('Please fill in all fields.'); return; }
+
+  btn.disabled = true;
+  btn.innerHTML = '<div class="spinner"></div> Signing in...';
+
+  try {
+    const res  = await fetch(`${API}/auth/login`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({email, password})
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.detail || 'Login failed.');
+    localStorage.setItem('occupai_user', JSON.stringify(data.user));
+    window.location.href = '/dashboard';
+  } catch(e) {
+    showErr(e.message);
+    btn.disabled = false;
+    btn.innerHTML = 'Sign In';
+  }
+}
+
+function showErr(msg){
+  const b = document.getElementById('error-box');
+  b.textContent = msg; b.style.display = 'block';
+}
+</script>
+</body>
+</html>
