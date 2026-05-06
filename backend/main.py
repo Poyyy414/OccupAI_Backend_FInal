@@ -1,19 +1,14 @@
 """
-backend/main.py — OccupAI FastAPI Backend  v2.0
+backend/main.py — OccupAI FastAPI Backend  v2.1
 Run: uvicorn backend.main:app --reload --port 8000
 
-NO-LAG ARCHITECTURE:
-  detector.py  ──► MJPEG :8001/stream   (raw JPEG bytes in memory, no base64)
-  FastAPI      ──► GET /api/stream      (async proxy → :8001, same-origin)
-  dashboard    ──► <img src="/api/stream">  (browser decodes MJPEG natively)
-  detector.py  ──► POST /yolo/update every ~15 frames  (stats JSON only, ~200 B)
-
-ML Models  (backend/models/):
-  spatio_temporal.keras   lstm_forecast.keras   cnn_gru_attention.keras
-  occupancy_model.keras   pricing_model.pkl     revenue_model.pkl
-  scaler_nb1_X.pkl        scaler_nb1_y.pkl
-  scaler_occ_X.pkl        scaler_occ_y.pkl
-  occ_features.pkl        pricing_features.pkl  rev_features.pkl
+FIXES in v2.1:
+  - NB1_FEATURES corrected to 23 (matches training CSV exactly)
+  - _engineer_nb1 now builds lag_1h/2h/3h, roll_3h, moto_ratio etc.
+  - _engineer_nb2_occ uses occ_features.pkl (loaded at startup)
+  - Revenue insight added to AI Insights
+  - _db_history pulls 168h (7 days) for better lag/roll features
+  - Reduced insight scheduler wait to 15s (was 30s)
 """
 import os, math, bcrypt, uvicorn, joblib, threading, warnings, time
 import numpy as np
@@ -39,7 +34,7 @@ load_dotenv()
 CAM_TOKEN    = os.getenv("CAM_TOKEN",   "occupai_cam_2027")
 DEPLOY_MODE  = os.getenv("DEPLOY_MODE", "local")
 STREAM_PORT  = int(os.getenv("STREAM_PORT", "8001"))
-LOT_CAPACITY = int(os.getenv("LOT_CAPACITY", "30"))
+LOT_CAPACITY = int(os.getenv("LOT_CAPACITY", "44"))  # max in real data ≈ 43.67
 
 BASE_DIR     = Path(__file__).resolve().parent.parent
 TEMPLATE_DIR = BASE_DIR / "template"
@@ -47,13 +42,14 @@ MODEL_DIR    = Path(__file__).resolve().parent / "models"
 
 INTERNAL_STREAM = f"http://127.0.0.1:{STREAM_PORT}/stream"
 
+FLAT_RATE       = 25
+OCC_LOW_THRESH  = 7.0
+OCC_HIGH_THRESH = 20.0
+
 
 # ══════════════════════════════════════════════════════════════════
-#  SoftAttention — MUST be defined at module level with
-#  @register_keras_serializable so Keras can find it when loading
-#  cnn_gru_attention.keras.  Defining it inside a method (the old
-#  approach) means the decorator never runs at import time, so
-#  Keras raises "Could not locate class 'SoftAttention'".
+#  SoftAttention — module-level with @register_keras_serializable
+#  so CNN-GRU+Attention loads correctly
 # ══════════════════════════════════════════════════════════════════
 import keras
 from keras.layers import Dense, Layer
@@ -77,27 +73,36 @@ class SoftAttention(Layer):
 
 
 # ══════════════════════════════════════════════════════════════════
-#  ML — Feature lists
+#  Feature lists — match training CSV exactly
+#
+#  Confirmed from parking_data_training.csv (36 columns):
+#  NB1 uses 23 features (vehicle count forecasting)
+#  NB2 uses features from occ_features.pkl (loaded at startup)
 # ══════════════════════════════════════════════════════════════════
 NB1_SEQ_LEN  = 24
+
+# CONFIRMED 23 features — match scaler_nb1_X.pkl exactly
 NB1_FEATURES = [
     "hour", "day_of_week", "month", "is_weekend",
     "is_morning_peak", "is_lunch_peak", "is_afternoon_peak",
     "hour_sin", "hour_cos", "dow_sin", "dow_cos", "month_sin", "month_cos",
-    "lag_6h", "lag_24h", "roll_7h", "roll_24h",
-]  # 17 features — matches model input (None, 24, 16) — confirmed from test output
+    "lag_1h", "lag_2h", "lag_3h", "lag_24h",
+    "roll_3h", "roll_7h", "roll_24h",
+    "moto_ratio", "car_ratio", "ebike_ratio",
+]  # 23 features
 
-NB2_OCC_SEQ_LEN  = 24
-NB2_OCC_FEATURES = [
+NB2_OCC_SEQ_LEN = 24
+
+# Fallback NB2 feature list — overridden by occ_features.pkl at load time
+NB2_OCC_FEATURES_FALLBACK = [
     "hour", "day_of_week", "month", "is_weekend",
-    "is_morning_peak", "is_lunch_peak", "is_afternoon_peak",
+    "is_morning_peak", "is_lunch_peak", "is_afternoon_peak", "is_peak_hour",
     "hour_sin", "hour_cos", "dow_sin", "dow_cos", "month_sin", "month_cos",
-    "veh_lag_24h", "veh_roll_24h", "occ_lag_24h", "occ_roll_24h",
+    "moto_ratio", "car_ratio", "ebike_ratio",
+    "veh_lag_1h", "veh_lag_2h", "veh_lag_3h", "veh_lag_6h", "veh_lag_24h",
+    "veh_roll_3h", "veh_roll_6h", "veh_roll_24h",
+    "occ_lag_24h", "occ_roll_24h",
 ]
-
-FLAT_RATE       = 25
-OCC_LOW_THRESH  = 7.0
-OCC_HIGH_THRESH = 15.0
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -112,6 +117,9 @@ def _add_calendar(df):
     if "is_morning_peak"   not in df: df["is_morning_peak"]   = df["hour"].between(7,  9).astype(int)
     if "is_lunch_peak"     not in df: df["is_lunch_peak"]     = df["hour"].between(11, 13).astype(int)
     if "is_afternoon_peak" not in df: df["is_afternoon_peak"] = df["hour"].between(16, 18).astype(int)
+    if "is_peak_hour"      not in df: df["is_peak_hour"]      = (
+        df["is_morning_peak"] | df["is_lunch_peak"] | df["is_afternoon_peak"]
+    ).astype(int)
     if "hour_sin"  not in df: df["hour_sin"]  = np.sin(2*math.pi*df["hour"]/24)
     if "hour_cos"  not in df: df["hour_cos"]  = np.cos(2*math.pi*df["hour"]/24)
     if "dow_sin"   not in df: df["dow_sin"]   = np.sin(2*math.pi*df["day_of_week"]/7)
@@ -120,32 +128,107 @@ def _add_calendar(df):
     if "month_cos" not in df: df["month_cos"] = np.cos(2*math.pi*(df["month"]-1)/12)
     return df
 
+
 def _engineer_nb1(df):
+    """
+    Build all 23 NB1 features — must match training CSV exactly.
+    Uses dataset average ratios for vehicle type (moto=0.88, car=0.02, ebike=0.01)
+    since parking_logs doesn't store vehicle type breakdown.
+    """
     df = df.copy()
     df["datetime"] = pd.to_datetime(df["datetime"])
     df = df.sort_values("datetime").reset_index(drop=True)
     df = _add_calendar(df)
     v = df["vehicles_hour"]
-    if "lag_6h"   not in df: df["lag_6h"]   = v.shift(6).fillna(0)
-    if "lag_24h"  not in df: df["lag_24h"]  = v.shift(24).fillna(0)
+
+    # Lag features (match training CSV lag_1h, lag_2h, lag_3h, lag_24h)
+    if "lag_1h"  not in df: df["lag_1h"]  = v.shift(1).fillna(0)
+    if "lag_2h"  not in df: df["lag_2h"]  = v.shift(2).fillna(0)
+    if "lag_3h"  not in df: df["lag_3h"]  = v.shift(3).fillna(0)
+    if "lag_24h" not in df: df["lag_24h"] = v.shift(24).fillna(0)
+
+    # Rolling features (match training CSV roll_3h, roll_7h, roll_24h)
+    if "roll_3h"  not in df: df["roll_3h"]  = v.shift(1).rolling(3,  min_periods=1).mean().fillna(0)
     if "roll_7h"  not in df: df["roll_7h"]  = v.shift(1).rolling(7,  min_periods=1).mean().fillna(0)
     if "roll_24h" not in df: df["roll_24h"] = v.shift(1).rolling(24, min_periods=1).mean().fillna(0)
+
+    # Vehicle type ratios — dataset averages (parking_logs has no breakdown)
+    if "moto_ratio"  not in df: df["moto_ratio"]  = 0.88
+    if "car_ratio"   not in df: df["car_ratio"]   = 0.02
+    if "ebike_ratio" not in df: df["ebike_ratio"] = 0.01
+
     return df
 
-def _engineer_nb2_occ(df):
+
+def _engineer_nb2_occ(df, occ_feats=None):
+    """
+    Build all NB2 occupancy features.
+    Uses occ_feats list from occ_features.pkl if provided.
+    Builds every possible feature so the list can select what it needs.
+    """
     df = df.copy()
     df["datetime"] = pd.to_datetime(df["datetime"])
     df = df.sort_values("datetime").reset_index(drop=True)
     df = _add_calendar(df)
     v = df["vehicles_hour"]
+
+    # Occupancy %
     if "true_occ_pct" not in df:
         df["true_occ_pct"] = (v / LOT_CAPACITY * 100).clip(0, 100)
     o = df["true_occ_pct"]
-    if "veh_lag_24h"  not in df: df["veh_lag_24h"]  = v.shift(24).fillna(0)
-    if "veh_roll_24h" not in df: df["veh_roll_24h"] = v.shift(1).rolling(24, min_periods=1).mean().fillna(0)
-    if "occ_lag_24h"  not in df: df["occ_lag_24h"]  = o.shift(24).fillna(0)
-    if "occ_roll_24h" not in df: df["occ_roll_24h"] = o.shift(1).rolling(24, min_periods=1).mean().fillna(0)
+
+    # Vehicle lags — veh_ prefixed AND plain lag_ (build both)
+    for sh, names in [
+        (1,  ["veh_lag_1h",  "lag_1h"]),
+        (2,  ["veh_lag_2h",  "lag_2h"]),
+        (3,  ["veh_lag_3h",  "lag_3h"]),
+        (6,  ["veh_lag_6h",  "lag_6h"]),
+        (24, ["veh_lag_24h", "lag_24h"]),
+    ]:
+        val = v.shift(sh).fillna(0)
+        for n in names:
+            if n not in df: df[n] = val
+
+    # Vehicle rolling windows — both veh_ prefixed and plain roll_
+    for win, names in [
+        (3,  ["veh_roll_3h",  "roll_3h"]),
+        (6,  ["veh_roll_6h",  "roll_6h"]),
+        (7,  ["veh_roll_7h",  "roll_7h"]),
+        (24, ["veh_roll_24h", "roll_24h"]),
+    ]:
+        val = v.shift(1).rolling(win, min_periods=1).mean().fillna(0)
+        for n in names:
+            if n not in df: df[n] = val
+
+    # Occupancy lags
+    for sh, names in [
+        (1,  ["occ_lag_1h"]),
+        (2,  ["occ_lag_2h"]),
+        (3,  ["occ_lag_3h"]),
+        (6,  ["occ_lag_6h"]),
+        (24, ["occ_lag_24h"]),
+    ]:
+        val = o.shift(sh).fillna(0)
+        for n in names:
+            if n not in df: df[n] = val
+
+    # Occupancy rolling
+    for win, names in [
+        (3,  ["occ_roll_3h"]),
+        (6,  ["occ_roll_6h"]),
+        (24, ["occ_roll_24h"]),
+    ]:
+        val = o.shift(1).rolling(win, min_periods=1).mean().fillna(0)
+        for n in names:
+            if n not in df: df[n] = val
+
+    # Vehicle type ratios (dataset averages)
+    if "moto_ratio"  not in df: df["moto_ratio"]  = 0.88
+    if "car_ratio"   not in df: df["car_ratio"]   = 0.02
+    if "ebike_ratio" not in df: df["ebike_ratio"] = 0.01
+
     return df
+
 
 def _last_sequence(X, seq_len):
     if len(X) < seq_len:
@@ -162,19 +245,16 @@ class _MLEngine:
         self._occ         = None
         self._price       = None
         self._rev         = None
-        self._scX         = None
-        self._scY         = None
+        self._scX         = None   # NB1 X scaler
+        self._scY         = None   # NB1 y scaler
         self._occ_scX     = None
         self._occ_scY     = None
-        self._occ_feats   = None
+        self._occ_feats   = None   # loaded from occ_features.pkl
         self._price_feats = None
         self._rev_feats   = None
         self._ready       = False
 
     def load(self):
-        # SoftAttention is now registered at module level — no need to pass
-        # it as custom_objects; Keras finds it via the registry automatically.
-        # We still pass it explicitly as a fallback for older Keras versions.
         co = {"SoftAttention": SoftAttention}
 
         for name, fname in [
@@ -211,11 +291,19 @@ class _MLEngine:
                         setattr(self, attr, keras.models.load_model(str(p)))
                     else:
                         setattr(self, attr, joblib.load(str(p)))
-                    print(f"[ML] ✓ {fname}")
+                    val = getattr(self, attr)
+                    extra = ""
+                    if hasattr(val, "n_features_in_"):
+                        extra = f"  expects={val.n_features_in_} features"
+                    elif isinstance(val, list):
+                        extra = f"  ({len(val)} features)"
+                    print(f"[ML] ✓ {fname}{extra}")
                 except Exception as e:
                     print(f"[ML] ✗ {fname}: {e}")
 
         self._ready = bool(self._nb1)
+        if self._occ_feats is not None:
+            print(f"[ML] occ_features.pkl has {len(self._occ_feats)} features: {self._occ_feats}")
         print(f"[ML] Ready={self._ready}  models={list(self._nb1)}")
 
     def predict_vehicles(self, history_df):
@@ -223,26 +311,31 @@ class _MLEngine:
             raise RuntimeError("NB1 models not loaded")
         df = _engineer_nb1(history_df)
 
-        # Use only features the model was trained on
-        feats = NB1_FEATURES
-        # Guard: drop any feature not in df
-        feats = [f for f in feats if f in df.columns]
+        # Use NB1_FEATURES but guard against missing columns
+        feats = [f for f in NB1_FEATURES if f in df.columns]
         X = df[feats].values
 
         if self._scX is not None:
+            # Scaler was trained on 23 features — match exactly
+            expected_n = self._scX.n_features_in_
+            if X.shape[1] != expected_n:
+                print(f"[ML] NB1 feature mismatch: have {X.shape[1]}, scaler wants {expected_n}")
+                if X.shape[1] > expected_n:
+                    X = X[:, :expected_n]
+                else:
+                    X = np.pad(X, ((0,0),(0, expected_n - X.shape[1])))
             Xs = self._scX.transform(X)
         else:
             from sklearn.preprocessing import MinMaxScaler
             Xs = MinMaxScaler().fit(X).transform(X)
 
-        # Check feature count matches model
-        expected = list(self._nb1.values())[0].input_shape[-1]
-        if Xs.shape[1] != expected:
-            # Trim or pad to match
-            if Xs.shape[1] > expected:
-                Xs = Xs[:, :expected]
+        # Match model input shape
+        model_feats = list(self._nb1.values())[0].input_shape[-1]
+        if Xs.shape[1] != model_feats:
+            if Xs.shape[1] > model_feats:
+                Xs = Xs[:, :model_feats]
             else:
-                Xs = np.pad(Xs, ((0,0),(0, expected - Xs.shape[1])))
+                Xs = np.pad(Xs, ((0,0),(0, model_feats - Xs.shape[1])))
 
         Xi = _last_sequence(Xs, NB1_SEQ_LEN)
         preds = {}
@@ -280,17 +373,35 @@ class _MLEngine:
     def predict_occupancy(self, history_df):
         if self._occ is None:
             raise RuntimeError("Occupancy model not loaded")
-        df    = _engineer_nb2_occ(history_df)
-        feats = self._occ_feats if self._occ_feats is not None else NB2_OCC_FEATURES
+
+        # Use saved feature list from pkl, fall back to hardcoded list
+        feats = self._occ_feats if self._occ_feats is not None else NB2_OCC_FEATURES_FALLBACK
+
+        df = _engineer_nb2_occ(history_df, feats)
+
+        # Guard: only keep features that exist in df
         feats = [f for f in feats if f in df.columns]
-        X     = df[feats].values
-        Xs    = self._occ_scX.transform(X) if self._occ_scX else \
-                __import__("sklearn.preprocessing", fromlist=["MinMaxScaler"]).MinMaxScaler().fit_transform(X)
-        Xi    = _last_sequence(Xs, NB2_OCC_SEQ_LEN)
-        y_s   = float(self._occ.predict(Xi, verbose=0).flatten()[0])
-        occ   = float(self._occ_scY.inverse_transform([[y_s]])[0][0]) if self._occ_scY else y_s * 100.0
-        occ   = round(max(0.0, min(100.0, occ)), 1)
+        X = df[feats].values
+
+        if self._occ_scX is not None:
+            expected_n = self._occ_scX.n_features_in_
+            if X.shape[1] != expected_n:
+                print(f"[ML] OCC feature mismatch: have {X.shape[1]}, scaler wants {expected_n}")
+                if X.shape[1] > expected_n:
+                    X = X[:, :expected_n]
+                else:
+                    X = np.pad(X, ((0,0),(0, expected_n - X.shape[1])))
+            Xs = self._occ_scX.transform(X)
+        else:
+            from sklearn.preprocessing import MinMaxScaler
+            Xs = MinMaxScaler().fit_transform(X)
+
+        Xi  = _last_sequence(Xs, NB2_OCC_SEQ_LEN)
+        y_s = float(self._occ.predict(Xi, verbose=0).flatten()[0])
+        occ = float(self._occ_scY.inverse_transform([[y_s]])[0][0]) if self._occ_scY else y_s * 100.0
+        occ = round(max(0.0, min(100.0, occ)), 1)
         occupied = round(occ / 100 * LOT_CAPACITY)
+
         return {
             "predicted_occ_pct": occ,
             "occupancy_status":  "LOW" if occ < 30 else ("HIGH" if occ >= 70 else "MEDIUM"),
@@ -370,6 +481,7 @@ def _run_insights_now():
     total    = s.get("total", 0)
     occupied = s.get("occupied", 0)
 
+    # live status
     if s.get("lot_full"):
         out["live_status"] = (
             "🚫 The parking lot is completely full right now. "
@@ -443,7 +555,7 @@ def _run_insights_now():
             price = r["recommended_price_php"]
             chg   = r["price_change_pct"]
             if abs(chg) < 5:
-                out["pricing"] = f"Demand is normal. The standard flat rate of ₱{FLAT_RATE} per hour is appropriate."
+                out["pricing"] = f"Demand is normal. The standard flat rate of ₱{FLAT_RATE}/hr is appropriate."
             elif chg > 0:
                 out["pricing"] = (
                     f"Demand is higher than usual. Raising the rate to ₱{price:.0f}/hr "
@@ -458,6 +570,60 @@ def _run_insights_now():
             out["pricing"] = f"Pricing recommendation temporarily unavailable. ({e})"
     else:
         out["pricing"] = "Dynamic pricing needs more historical data."
+
+    # revenue forecast
+    if ml._ready and ml._rev is not None and ml._rev_feats is not None:
+        try:
+            rows = query("""
+                SELECT DATE(logged_at) AS date,
+                       SUM(occupied)      AS daily_vehicles,
+                       AVG(occupancy_pct) AS avg_occ,
+                       SUM(occupied * 25) AS daily_revenue
+                FROM parking_logs
+                WHERE logged_at >= NOW() - INTERVAL '30 days'
+                GROUP BY DATE(logged_at) ORDER BY date
+            """)
+            if len(rows) >= 7:
+                d = pd.DataFrame(rows)
+                d["date"]        = pd.to_datetime(d["date"])
+                d["day_of_week"] = d["date"].dt.dayofweek
+                d["month"]       = d["date"].dt.month
+                d["is_weekend"]  = (d["day_of_week"] >= 5).astype(int)
+                d["dow_sin"]     = np.sin(2*np.pi*d["day_of_week"]/7)
+                d["dow_cos"]     = np.cos(2*np.pi*d["day_of_week"]/7)
+                d["month_sin"]   = np.sin(2*np.pi*(d["month"]-1)/12)
+                d["month_cos"]   = np.cos(2*np.pi*(d["month"]-1)/12)
+                r = d["daily_revenue"].astype(float)
+                v = d["daily_vehicles"].astype(float)
+                d["rev_lag_1d"]   = r.shift(1).fillna(0)
+                d["rev_lag_2d"]   = r.shift(2).fillna(0)
+                d["rev_lag_7d"]   = r.shift(7).fillna(0)
+                d["rev_roll_3d"]  = r.shift(1).rolling(3, min_periods=1).mean().fillna(0)
+                d["rev_roll_7d"]  = r.shift(1).rolling(7, min_periods=1).mean().fillna(0)
+                d["veh_lag_1d"]   = v.shift(1).fillna(0)
+                d["veh_lag_7d"]   = v.shift(7).fillna(0)
+                d["veh_roll_7d"]  = v.shift(1).rolling(7, min_periods=1).mean().fillna(0)
+                d["avg_occ_lag"]  = d["avg_occ"].shift(1).fillna(0)
+                d["same_dow_wk1"] = r.shift(7).fillna(0)
+                d["same_dow_wk2"] = r.shift(14).fillna(0)
+                d["same_dow_avg"] = (d["same_dow_wk1"] + d["same_dow_wk2"]) / 2
+                rev_result        = ml.predict_revenue(d.iloc[-1].to_dict())
+                rev_php = rev_result["predicted_daily_revenue_php"]
+                out["revenue_forecast"] = (
+                    f"Today's predicted revenue is approximately "
+                    f"₱{rev_php:,.2f}. "
+                    f"This estimate is based on current occupancy patterns and historical trends. "
+                    f"(Model: {rev_result['model_used']} · Confidence: {rev_result['confidence_pct']:.0f}%)"
+                )
+            else:
+                out["revenue_forecast"] = (
+                    f"Revenue forecast needs 7+ days of data. "
+                    f"Currently have {len(rows)} day(s) in the database."
+                )
+        except Exception as e:
+            out["revenue_forecast"] = f"Revenue forecast temporarily unavailable. ({e})"
+    else:
+        out["revenue_forecast"] = "Revenue model not loaded. Check backend/models/revenue_model.pkl."
 
     # peak hours
     try:
@@ -515,7 +681,7 @@ def _run_insights_now():
 
 
 def _insight_scheduler():
-    time.sleep(30)
+    time.sleep(15)   # reduced from 30s
     while True:
         try:
             _run_insights_now()
@@ -536,7 +702,7 @@ async def lifespan(app: FastAPI):
         print(f"[OccupAI] ML warning: {e}")
     t = threading.Thread(target=_insight_scheduler, daemon=True, name="insight-scheduler")
     t.start()
-    print("[OccupAI] Insight scheduler started.")
+    print("[OccupAI] Insight scheduler started (15s warmup, then hourly).")
     yield
     print("[OccupAI] Shutdown.")
 
@@ -544,7 +710,7 @@ async def lifespan(app: FastAPI):
 # ══════════════════════════════════════════════════════════════════
 #  App
 # ══════════════════════════════════════════════════════════════════
-app = FastAPI(title="OccupAI API", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="OccupAI API", version="2.1.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(TEMPLATE_DIR)), name="static")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -588,14 +754,16 @@ def status():
         "status":        "ok",
         "mode":          DEPLOY_MODE,
         "time":          datetime.utcnow().isoformat(),
-        "stream_proxy":  "http://localhost:8000/api/stream",
+        "stream_proxy":  f"http://localhost:8000/api/stream",
+        "stream_direct": f"http://localhost:{STREAM_PORT}/stream",
         "ml_ready":      ml._ready,
         "ml_models":     list(ml._nb1.keys()),
+        "lot_capacity":  LOT_CAPACITY,
     }
 
 
 # ══════════════════════════════════════════════════════════════════
-#  MJPEG proxy
+#  MJPEG proxy — no base64, no polling, browser decodes natively
 # ══════════════════════════════════════════════════════════════════
 @app.get("/api/stream")
 async def stream_proxy():
@@ -661,7 +829,7 @@ def push_frame(data: PushFrame, x_cam_token: str = Header(...)):
 
 
 # ══════════════════════════════════════════════════════════════════
-#  Live state endpoints
+#  Live state
 # ══════════════════════════════════════════════════════════════════
 @app.get("/api/stats")
 def api_stats():
@@ -678,9 +846,9 @@ def api_occupancy():
 
 
 # ══════════════════════════════════════════════════════════════════
-#  DB history helper
+#  DB history — pulls 168h (7 days) for better lag features
 # ══════════════════════════════════════════════════════════════════
-def _db_history(hours: int = 72) -> pd.DataFrame:
+def _db_history(hours: int = 168) -> pd.DataFrame:
     try:
         rows = query(
             f"SELECT logged_at AS datetime, occupied AS vehicles_hour "
@@ -698,7 +866,7 @@ def _db_history(hours: int = 72) -> pd.DataFrame:
 
 
 # ══════════════════════════════════════════════════════════════════
-#  ML prediction endpoints
+#  ML endpoints
 # ══════════════════════════════════════════════════════════════════
 @app.get("/api/ml/predict/vehicles")
 def ml_predict_vehicles():
@@ -823,22 +991,23 @@ def api_predictions():
 
 
 # ══════════════════════════════════════════════════════════════════
-#  Insights endpoints
+#  Insights
 # ══════════════════════════════════════════════════════════════════
 @app.get("/api/insights")
 def api_insights():
     with _insight_lock:
         if not _insight_cache:
             return {
-                "live_status":        "⏳ Insights are being computed for the first time (30s after startup).",
+                "live_status":        "⏳ Insights are being computed (ready in ~15s after startup).",
                 "trend":              "—",
                 "vehicle_forecast":   "—",
                 "occupancy_forecast": "—",
                 "pricing":            "—",
+                "revenue_forecast":   "—",
                 "peak_hours":         "—",
                 "admin_action":       "Please wait — the system is initializing.",
                 "generated_at":       datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "next_refresh":       "~30 seconds",
+                "next_refresh":       "~15 seconds",
             }
         result = dict(_insight_cache)
 
@@ -846,8 +1015,8 @@ def api_insights():
         last      = datetime.strptime(result["generated_at"], "%Y-%m-%d %H:%M:%S")
         mins_ago  = int((datetime.now() - last).total_seconds() / 60)
         mins_left = max(0, 60 - mins_ago)
-        result["next_refresh"]    = f"Auto-refreshes in ~{mins_left} min" if mins_left > 1 else "Refreshing soon…"
-        result["last_refreshed"]  = "just now" if mins_ago < 1 else f"{mins_ago} minute{'s' if mins_ago!=1 else ''} ago"
+        result["next_refresh"]   = f"Auto-refreshes in ~{mins_left} min" if mins_left > 1 else "Refreshing soon…"
+        result["last_refreshed"] = "just now" if mins_ago < 1 else f"{mins_ago} min ago"
     except Exception:
         pass
 
@@ -857,7 +1026,7 @@ def api_insights():
 @app.post("/api/insights/refresh")
 def api_insights_refresh():
     threading.Thread(target=_run_insights_now, daemon=True, name="insight-force").start()
-    return {"ok": True, "message": "Recalculating insights — results ready in a few seconds."}
+    return {"ok": True, "message": "Recalculating — results ready in a few seconds."}
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -913,7 +1082,7 @@ def logout():
 # ══════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     print("\n╔══════════════════════════════════════╗")
-    print("║  OccupAI FastAPI Backend  v2.0       ║")
+    print("║  OccupAI FastAPI Backend  v2.1       ║")
     print("║  http://localhost:8000               ║")
     print("╚══════════════════════════════════════╝\n")
     uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)

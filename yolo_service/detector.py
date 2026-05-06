@@ -19,7 +19,7 @@ load_dotenv()
 # ── Config ────────────────────────────────────────────────────────────────────
 BACKEND_URL  = os.getenv("BACKEND_URL", "http://localhost:8000")
 CAM_TOKEN    = os.getenv("CAM_TOKEN",   "occupai_cam_2027")
-WEBCAM_IDX   = int(os.getenv("WEBCAM_INDEX", "0"))
+WEBCAM_IDX   = int(os.getenv("WEBCAM_INDEX", "1"))
 STREAM_PORT  = int(os.getenv("STREAM_PORT", "8001"))
 
 FEED_W       = 480
