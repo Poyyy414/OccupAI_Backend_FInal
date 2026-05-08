@@ -18,6 +18,9 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 
+from zoneinfo import ZoneInfo  # Python 3.9+
+PH_TZ = ZoneInfo("Asia/Manila")
+
 # ── Find .env ─────────────────────────────────────────────────────────────────
 _here = os.path.dirname(os.path.abspath(__file__))
 for _folder in [_here, os.path.dirname(_here)]:
@@ -57,7 +60,7 @@ def seed():
     # Today is May 2026. Gap = ~77 days → NOW()-7days returns nothing → 0%.
     # Solution: shift all timestamps so the LAST row = now,
     # keeping the same hour/minute pattern.
-    now       = datetime.now().replace(second=0, microsecond=0)
+    now       = datetime.now(PH_TZ).replace(second=0, microsecond=0)
     csv_end   = df["datetime"].iloc[-1]
     shift     = now - csv_end
     df["datetime"] = df["datetime"] + shift

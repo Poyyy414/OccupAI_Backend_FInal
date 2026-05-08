@@ -1,22 +1,20 @@
 """
-backend/main.py — OccupAI FastAPI Backend  v2.1
+backend/main.py — OccupAI FastAPI Backend  v2.2
 Run: uvicorn backend.main:app --reload --port 8000
 
-FIXES in v2.1:
-  - NB1_FEATURES corrected to 23 (matches training CSV exactly)
-  - _engineer_nb1 now builds lag_1h/2h/3h, roll_3h, moto_ratio etc.
-  - _engineer_nb2_occ uses occ_features.pkl (loaded at startup)
-  - Revenue insight added to AI Insights
-  - _db_history pulls 168h (7 days) for better lag/roll features
-  - Reduced insight scheduler wait to 15s (was 30s)
+CHANGES in v2.2:
+  - All timestamps now Philippine Time (Asia/Manila, UTC+8)
+  - /api/predictions now includes weekday_revenue and today_revenue_forecast
+  - Revenue forecast added to predictions endpoint
 """
 import os, math, bcrypt, uvicorn, joblib, threading, warnings, time
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from collections import deque
+from collections import deque, defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Header, Request
@@ -31,10 +29,12 @@ from backend.models import UserRegister, UserLogin, YoloUpdate, PushFrame
 warnings.filterwarnings("ignore")
 load_dotenv()
 
+PH_TZ        = ZoneInfo("Asia/Manila")
+
 CAM_TOKEN    = os.getenv("CAM_TOKEN",   "occupai_cam_2027")
 DEPLOY_MODE  = os.getenv("DEPLOY_MODE", "local")
 STREAM_PORT  = int(os.getenv("STREAM_PORT", "8001"))
-LOT_CAPACITY = int(os.getenv("LOT_CAPACITY", "44"))  # max in real data ≈ 43.67
+LOT_CAPACITY = int(os.getenv("LOT_CAPACITY", "44"))
 
 BASE_DIR     = Path(__file__).resolve().parent.parent
 TEMPLATE_DIR = BASE_DIR / "template"
@@ -48,8 +48,7 @@ OCC_HIGH_THRESH = 20.0
 
 
 # ══════════════════════════════════════════════════════════════════
-#  SoftAttention — module-level with @register_keras_serializable
-#  so CNN-GRU+Attention loads correctly
+#  SoftAttention
 # ══════════════════════════════════════════════════════════════════
 import keras
 from keras.layers import Dense, Layer
@@ -73,15 +72,10 @@ class SoftAttention(Layer):
 
 
 # ══════════════════════════════════════════════════════════════════
-#  Feature lists — match training CSV exactly
-#
-#  Confirmed from parking_data_training.csv (36 columns):
-#  NB1 uses 23 features (vehicle count forecasting)
-#  NB2 uses features from occ_features.pkl (loaded at startup)
+#  Feature lists
 # ══════════════════════════════════════════════════════════════════
 NB1_SEQ_LEN  = 24
 
-# CONFIRMED 23 features — match scaler_nb1_X.pkl exactly
 NB1_FEATURES = [
     "hour", "day_of_week", "month", "is_weekend",
     "is_morning_peak", "is_lunch_peak", "is_afternoon_peak",
@@ -93,7 +87,6 @@ NB1_FEATURES = [
 
 NB2_OCC_SEQ_LEN = 24
 
-# Fallback NB2 feature list — overridden by occ_features.pkl at load time
 NB2_OCC_FEATURES_FALLBACK = [
     "hour", "day_of_week", "month", "is_weekend",
     "is_morning_peak", "is_lunch_peak", "is_afternoon_peak", "is_peak_hour",
@@ -130,29 +123,21 @@ def _add_calendar(df):
 
 
 def _engineer_nb1(df):
-    """
-    Build all 23 NB1 features — must match training CSV exactly.
-    Uses dataset average ratios for vehicle type (moto=0.88, car=0.02, ebike=0.01)
-    since parking_logs doesn't store vehicle type breakdown.
-    """
     df = df.copy()
     df["datetime"] = pd.to_datetime(df["datetime"])
     df = df.sort_values("datetime").reset_index(drop=True)
     df = _add_calendar(df)
     v = df["vehicles_hour"]
 
-    # Lag features (match training CSV lag_1h, lag_2h, lag_3h, lag_24h)
     if "lag_1h"  not in df: df["lag_1h"]  = v.shift(1).fillna(0)
     if "lag_2h"  not in df: df["lag_2h"]  = v.shift(2).fillna(0)
     if "lag_3h"  not in df: df["lag_3h"]  = v.shift(3).fillna(0)
     if "lag_24h" not in df: df["lag_24h"] = v.shift(24).fillna(0)
 
-    # Rolling features (match training CSV roll_3h, roll_7h, roll_24h)
     if "roll_3h"  not in df: df["roll_3h"]  = v.shift(1).rolling(3,  min_periods=1).mean().fillna(0)
     if "roll_7h"  not in df: df["roll_7h"]  = v.shift(1).rolling(7,  min_periods=1).mean().fillna(0)
     if "roll_24h" not in df: df["roll_24h"] = v.shift(1).rolling(24, min_periods=1).mean().fillna(0)
 
-    # Vehicle type ratios — dataset averages (parking_logs has no breakdown)
     if "moto_ratio"  not in df: df["moto_ratio"]  = 0.88
     if "car_ratio"   not in df: df["car_ratio"]   = 0.02
     if "ebike_ratio" not in df: df["ebike_ratio"] = 0.01
@@ -161,23 +146,16 @@ def _engineer_nb1(df):
 
 
 def _engineer_nb2_occ(df, occ_feats=None):
-    """
-    Build all NB2 occupancy features.
-    Uses occ_feats list from occ_features.pkl if provided.
-    Builds every possible feature so the list can select what it needs.
-    """
     df = df.copy()
     df["datetime"] = pd.to_datetime(df["datetime"])
     df = df.sort_values("datetime").reset_index(drop=True)
     df = _add_calendar(df)
     v = df["vehicles_hour"]
 
-    # Occupancy %
     if "true_occ_pct" not in df:
         df["true_occ_pct"] = (v / LOT_CAPACITY * 100).clip(0, 100)
     o = df["true_occ_pct"]
 
-    # Vehicle lags — veh_ prefixed AND plain lag_ (build both)
     for sh, names in [
         (1,  ["veh_lag_1h",  "lag_1h"]),
         (2,  ["veh_lag_2h",  "lag_2h"]),
@@ -189,7 +167,6 @@ def _engineer_nb2_occ(df, occ_feats=None):
         for n in names:
             if n not in df: df[n] = val
 
-    # Vehicle rolling windows — both veh_ prefixed and plain roll_
     for win, names in [
         (3,  ["veh_roll_3h",  "roll_3h"]),
         (6,  ["veh_roll_6h",  "roll_6h"]),
@@ -200,7 +177,6 @@ def _engineer_nb2_occ(df, occ_feats=None):
         for n in names:
             if n not in df: df[n] = val
 
-    # Occupancy lags
     for sh, names in [
         (1,  ["occ_lag_1h"]),
         (2,  ["occ_lag_2h"]),
@@ -212,7 +188,6 @@ def _engineer_nb2_occ(df, occ_feats=None):
         for n in names:
             if n not in df: df[n] = val
 
-    # Occupancy rolling
     for win, names in [
         (3,  ["occ_roll_3h"]),
         (6,  ["occ_roll_6h"]),
@@ -222,7 +197,6 @@ def _engineer_nb2_occ(df, occ_feats=None):
         for n in names:
             if n not in df: df[n] = val
 
-    # Vehicle type ratios (dataset averages)
     if "moto_ratio"  not in df: df["moto_ratio"]  = 0.88
     if "car_ratio"   not in df: df["car_ratio"]   = 0.02
     if "ebike_ratio" not in df: df["ebike_ratio"] = 0.01
@@ -245,11 +219,11 @@ class _MLEngine:
         self._occ         = None
         self._price       = None
         self._rev         = None
-        self._scX         = None   # NB1 X scaler
-        self._scY         = None   # NB1 y scaler
+        self._scX         = None
+        self._scY         = None
         self._occ_scX     = None
         self._occ_scY     = None
-        self._occ_feats   = None   # loaded from occ_features.pkl
+        self._occ_feats   = None
         self._price_feats = None
         self._rev_feats   = None
         self._ready       = False
@@ -310,13 +284,10 @@ class _MLEngine:
         if not self._nb1:
             raise RuntimeError("NB1 models not loaded")
         df = _engineer_nb1(history_df)
-
-        # Use NB1_FEATURES but guard against missing columns
         feats = [f for f in NB1_FEATURES if f in df.columns]
         X = df[feats].values
 
         if self._scX is not None:
-            # Scaler was trained on 23 features — match exactly
             expected_n = self._scX.n_features_in_
             if X.shape[1] != expected_n:
                 print(f"[ML] NB1 feature mismatch: have {X.shape[1]}, scaler wants {expected_n}")
@@ -329,7 +300,6 @@ class _MLEngine:
             from sklearn.preprocessing import MinMaxScaler
             Xs = MinMaxScaler().fit(X).transform(X)
 
-        # Match model input shape
         model_feats = list(self._nb1.values())[0].input_shape[-1]
         if Xs.shape[1] != model_feats:
             if Xs.shape[1] > model_feats:
@@ -374,12 +344,8 @@ class _MLEngine:
         if self._occ is None:
             raise RuntimeError("Occupancy model not loaded")
 
-        # Use saved feature list from pkl, fall back to hardcoded list
         feats = self._occ_feats if self._occ_feats is not None else NB2_OCC_FEATURES_FALLBACK
-
         df = _engineer_nb2_occ(history_df, feats)
-
-        # Guard: only keep features that exist in df
         feats = [f for f in feats if f in df.columns]
         X = df[feats].values
 
@@ -447,7 +413,7 @@ _insight_lock = threading.Lock()
 
 
 def _run_insights_now():
-    now  = datetime.now()
+    now  = datetime.now(PH_TZ)
     hour = now.hour
     out  = {"generated_at": now.strftime("%Y-%m-%d %H:%M:%S")}
 
@@ -481,7 +447,6 @@ def _run_insights_now():
     total    = s.get("total", 0)
     occupied = s.get("occupied", 0)
 
-    # live status
     if s.get("lot_full"):
         out["live_status"] = (
             "🚫 The parking lot is completely full right now. "
@@ -498,7 +463,6 @@ def _run_insights_now():
 
     out["trend"] = _trend(hist)
 
-    # vehicle forecast
     if ml._ready and len(df) >= 24:
         try:
             r   = ml.predict_vehicles(df)
@@ -525,7 +489,6 @@ def _run_insights_now():
             "Keep the detector running and it will start predicting soon."
         )
 
-    # occupancy forecast
     if ml._ready and ml._occ is not None and len(df) >= 24:
         try:
             r  = ml.predict_occupancy(df)
@@ -548,7 +511,6 @@ def _run_insights_now():
             "Occupancy forecast will appear after 24+ hours of operation."
         )
 
-    # pricing
     if ml._ready and ml._price is not None and ml._price_feats is not None and not df.empty:
         try:
             r     = ml.predict_price(_engineer_nb2_occ(df).iloc[-1].to_dict())
@@ -571,17 +533,16 @@ def _run_insights_now():
     else:
         out["pricing"] = "Dynamic pricing needs more historical data."
 
-    # revenue forecast
     if ml._ready and ml._rev is not None and ml._rev_feats is not None:
         try:
             rows = query("""
-                SELECT DATE(logged_at) AS date,
+                SELECT DATE(logged_at AT TIME ZONE 'Asia/Manila') AS date,
                        SUM(occupied)      AS daily_vehicles,
                        AVG(occupancy_pct) AS avg_occ,
                        SUM(occupied * 25) AS daily_revenue
                 FROM parking_logs
                 WHERE logged_at >= NOW() - INTERVAL '30 days'
-                GROUP BY DATE(logged_at) ORDER BY date
+                GROUP BY DATE(logged_at AT TIME ZONE 'Asia/Manila') ORDER BY date
             """)
             if len(rows) >= 7:
                 d = pd.DataFrame(rows)
@@ -625,10 +586,10 @@ def _run_insights_now():
     else:
         out["revenue_forecast"] = "Revenue model not loaded. Check backend/models/revenue_model.pkl."
 
-    # peak hours
     try:
         rows = query("""
-            SELECT EXTRACT(HOUR FROM logged_at) AS hour, AVG(occupied) AS avg_veh
+            SELECT EXTRACT(HOUR FROM logged_at AT TIME ZONE 'Asia/Manila') AS hour,
+                   AVG(occupied) AS avg_veh
             FROM parking_logs
             WHERE logged_at >= NOW() - INTERVAL '7 days'
             GROUP BY hour ORDER BY hour
@@ -652,7 +613,6 @@ def _run_insights_now():
     except Exception as e:
         out["peak_hours"] = f"Peak hour analysis not available. ({e})"
 
-    # admin action
     actions = []
     if s.get("lot_full"):
         actions.append("Activate overflow parking immediately.")
@@ -681,7 +641,7 @@ def _run_insights_now():
 
 
 def _insight_scheduler():
-    time.sleep(15)   # reduced from 30s
+    time.sleep(15)
     while True:
         try:
             _run_insights_now()
@@ -710,7 +670,7 @@ async def lifespan(app: FastAPI):
 # ══════════════════════════════════════════════════════════════════
 #  App
 # ══════════════════════════════════════════════════════════════════
-app = FastAPI(title="OccupAI API", version="2.1.0", lifespan=lifespan)
+app = FastAPI(title="OccupAI API", version="2.2.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(TEMPLATE_DIR)), name="static")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -743,6 +703,9 @@ def login_page():      return FileResponse(str(TEMPLATE_DIR / "login.html"))
 def register_page():   return FileResponse(str(TEMPLATE_DIR / "register.html"))
 @app.get("/dashboard", response_class=FileResponse)
 def dashboard_page():  return FileResponse(str(TEMPLATE_DIR / "dashboard.html"))
+@app.get("/analytics", response_class=FileResponse)
+def analytics_page():
+    return FileResponse(str(TEMPLATE_DIR / "analytics.html"))
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -753,7 +716,7 @@ def status():
     return {
         "status":        "ok",
         "mode":          DEPLOY_MODE,
-        "time":          datetime.utcnow().isoformat(),
+        "time_ph":       datetime.now(PH_TZ).strftime("%Y-%m-%d %H:%M:%S PHT"),
         "stream_proxy":  f"http://localhost:8000/api/stream",
         "stream_direct": f"http://localhost:{STREAM_PORT}/stream",
         "ml_ready":      ml._ready,
@@ -763,7 +726,7 @@ def status():
 
 
 # ══════════════════════════════════════════════════════════════════
-#  MJPEG proxy — no base64, no polling, browser decodes natively
+#  MJPEG proxy
 # ══════════════════════════════════════════════════════════════════
 @app.get("/api/stream")
 async def stream_proxy():
@@ -790,7 +753,8 @@ async def stream_proxy():
 def yolo_update(data: YoloUpdate, x_cam_token: str = Header(...)):
     if x_cam_token != CAM_TOKEN:
         raise HTTPException(401, "Unauthorized")
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # PH time timestamp
+    ts = datetime.now(PH_TZ).strftime("%Y-%m-%d %H:%M:%S")
     with state_lock:
         state.update({
             "occupied":      data.occupied,
@@ -903,13 +867,13 @@ def ml_predict_revenue():
     if not ml._ready: raise HTTPException(503, "ML not loaded")
     try:
         rows = query("""
-            SELECT DATE(logged_at) AS date,
+            SELECT DATE(logged_at AT TIME ZONE 'Asia/Manila') AS date,
                    SUM(occupied)      AS daily_vehicles,
                    AVG(occupancy_pct) AS avg_occ,
                    SUM(occupied * 25) AS daily_revenue
             FROM parking_logs
             WHERE logged_at >= NOW() - INTERVAL '30 days'
-            GROUP BY DATE(logged_at) ORDER BY date
+            GROUP BY DATE(logged_at AT TIME ZONE 'Asia/Manila') ORDER BY date
         """)
         if len(rows) < 7:
             raise HTTPException(422, f"Need 7+ days, have {len(rows)}")
@@ -944,7 +908,7 @@ def ml_predict_revenue():
 @app.get("/api/ml/dashboard")
 def ml_dashboard():
     df  = _db_history()
-    out = {"ml_ready": ml._ready, "timestamp": datetime.now().isoformat()}
+    out = {"ml_ready": ml._ready, "timestamp": datetime.now(PH_TZ).strftime("%Y-%m-%d %H:%M:%S PHT")}
     if ml._ready and len(df) >= NB1_SEQ_LEN:
         for key, fn in [
             ("vehicles",  lambda: ml.predict_vehicles(df)),
@@ -963,32 +927,202 @@ def ml_dashboard():
     return out
 
 
+# ══════════════════════════════════════════════════════════════════
+#  Predictions — with PH time + revenue forecast per weekday
+# ══════════════════════════════════════════════════════════════════
 @app.get("/api/predictions")
 def api_predictions():
     try:
+        # Hourly avg occupancy in PH time (last 7 days)
         rows = query("""
-            SELECT EXTRACT(HOUR FROM logged_at) AS hour, AVG(occupancy_pct) AS avg_pct
-            FROM parking_logs WHERE logged_at >= NOW() - INTERVAL '7 days'
+            SELECT EXTRACT(HOUR FROM logged_at AT TIME ZONE 'Asia/Manila') AS hour,
+                   AVG(occupancy_pct) AS avg_pct
+            FROM parking_logs
+            WHERE logged_at >= NOW() - INTERVAL '7 days'
             GROUP BY hour ORDER BY hour
         """)
         hourly = {str(int(r["hour"])): round(float(r["avg_pct"]), 1) for r in rows}
         for h in range(24): hourly.setdefault(str(h), 0.0)
         peak = max(hourly, key=lambda h: hourly[h])
+
+        # Daily revenue per weekday (last 30 days), in PH time
+        rev_rows = query("""
+            SELECT EXTRACT(DOW FROM logged_at AT TIME ZONE 'Asia/Manila') AS dow,
+                   DATE(logged_at AT TIME ZONE 'Asia/Manila') AS date,
+                   SUM(occupied * 25) AS daily_revenue
+            FROM parking_logs
+            WHERE logged_at >= NOW() - INTERVAL '30 days'
+            GROUP BY dow, DATE(logged_at AT TIME ZONE 'Asia/Manila')
+            ORDER BY date
+        """)
+
+        day_labels = {0: "Sun", 1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat"}
+        dow_totals = defaultdict(list)
+        for r in rev_rows:
+            dow_totals[int(r["dow"])].append(float(r["daily_revenue"] or 0))
+
+        weekday_revenue = {
+            day_labels[d]: round(sum(v) / len(v), 2) if v else 0.0
+            for d, v in dow_totals.items()
+        }
+        for lbl in day_labels.values():
+            weekday_revenue.setdefault(lbl, 0.0)
+
+        # Today's ML revenue forecast
+        today_forecast = None
+        if ml._ready and ml._rev is not None and ml._rev_feats is not None:
+            try:
+                rows_30 = query("""
+                    SELECT DATE(logged_at AT TIME ZONE 'Asia/Manila') AS date,
+                           SUM(occupied)      AS daily_vehicles,
+                           AVG(occupancy_pct) AS avg_occ,
+                           SUM(occupied * 25) AS daily_revenue
+                    FROM parking_logs
+                    WHERE logged_at >= NOW() - INTERVAL '30 days'
+                    GROUP BY DATE(logged_at AT TIME ZONE 'Asia/Manila')
+                    ORDER BY date
+                """)
+                if len(rows_30) >= 7:
+                    d = pd.DataFrame(rows_30)
+                    d["date"]        = pd.to_datetime(d["date"])
+                    d["day_of_week"] = d["date"].dt.dayofweek
+                    d["month"]       = d["date"].dt.month
+                    d["is_weekend"]  = (d["day_of_week"] >= 5).astype(int)
+                    d["dow_sin"]     = np.sin(2*np.pi*d["day_of_week"]/7)
+                    d["dow_cos"]     = np.cos(2*np.pi*d["day_of_week"]/7)
+                    d["month_sin"]   = np.sin(2*np.pi*(d["month"]-1)/12)
+                    d["month_cos"]   = np.cos(2*np.pi*(d["month"]-1)/12)
+                    r2 = d["daily_revenue"].astype(float)
+                    v2 = d["daily_vehicles"].astype(float)
+                    d["rev_lag_1d"]   = r2.shift(1).fillna(0)
+                    d["rev_lag_2d"]   = r2.shift(2).fillna(0)
+                    d["rev_lag_7d"]   = r2.shift(7).fillna(0)
+                    d["rev_roll_3d"]  = r2.shift(1).rolling(3, min_periods=1).mean().fillna(0)
+                    d["rev_roll_7d"]  = r2.shift(1).rolling(7, min_periods=1).mean().fillna(0)
+                    d["veh_lag_1d"]   = v2.shift(1).fillna(0)
+                    d["veh_lag_7d"]   = v2.shift(7).fillna(0)
+                    d["veh_roll_7d"]  = v2.shift(1).rolling(7, min_periods=1).mean().fillna(0)
+                    d["avg_occ_lag"]  = d["avg_occ"].shift(1).fillna(0)
+                    d["same_dow_wk1"] = r2.shift(7).fillna(0)
+                    d["same_dow_wk2"] = r2.shift(14).fillna(0)
+                    d["same_dow_avg"] = (d["same_dow_wk1"] + d["same_dow_wk2"]) / 2
+                    rev_result = ml.predict_revenue(d.iloc[-1].to_dict())
+                    today_forecast = rev_result["predicted_daily_revenue_php"]
+            except Exception as e:
+                print(f"[predictions revenue] {e}")
+
         return {
-            "hourly_est": hourly,
-            "peak_hour":  int(peak),
-            "peak_label": f"{peak}:00 ({hourly[peak]:.0f}%)",
-            "busy_days":  ["Mon","Tue","Wed"],
-            "quiet_days": ["Sat","Sun"],
+            "hourly_est":             hourly,
+            "peak_hour":              int(peak),
+            "peak_label":             f"{peak}:00 ({hourly[peak]:.0f}%)",
+            "busy_days":              ["Mon", "Tue", "Wed"],
+            "quiet_days":             ["Sat", "Sun"],
+            "weekday_revenue":        weekday_revenue,
+            "today_revenue_forecast": today_forecast,
+            "generated_at_ph":        datetime.now(PH_TZ).strftime("%Y-%m-%d %H:%M:%S"),
         }
     except Exception as e:
         print(f"[predictions] {e}")
         return {
-            "hourly_est": {str(h): 0.0 for h in range(24)},
-            "peak_hour": 8, "peak_label": "N/A",
-            "busy_days": [], "quiet_days": [],
+            "hourly_est":             {str(h): 0.0 for h in range(24)},
+            "peak_hour":              8,
+            "peak_label":             "N/A",
+            "busy_days":              [],
+            "quiet_days":             [],
+            "weekday_revenue":        {},
+            "today_revenue_forecast": None,
+            "generated_at_ph":        datetime.now(PH_TZ).strftime("%Y-%m-%d %H:%M:%S"),
         }
 
+# ══════════════════════════════════════════════════════════════════
+#  ADD THIS ENDPOINT to backend/main.py
+#  Place it after the existing /api/predictions endpoint
+#  (around line where api_predictions() ends)
+# ══════════════════════════════════════════════════════════════════
+
+@app.get("/api/predictions/hourly-by-day")
+def api_hourly_by_day():
+    """
+    Returns average vehicle count per hour per day-of-week
+    from the last 30 days of parking_logs, in Philippine Time.
+    Used by the Analytics page hourly-by-day chart.
+    """
+    try:
+        rows = query("""
+            SELECT
+                EXTRACT(DOW  FROM logged_at AT TIME ZONE 'Asia/Manila') AS dow,
+                EXTRACT(HOUR FROM logged_at AT TIME ZONE 'Asia/Manila') AS hour,
+                AVG(occupied)      AS avg_vehicles,
+                AVG(occupancy_pct) AS avg_occ_pct,
+                COUNT(*)           AS sample_count
+            FROM parking_logs
+            WHERE logged_at >= NOW() - INTERVAL '30 days'
+            GROUP BY dow, hour
+            ORDER BY dow, hour
+        """)
+
+        # Build dow->hour->value map
+        # dow: 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
+        day_map = {i: {h: {"vehicles": 0.0, "occ_pct": 0.0, "samples": 0}
+                       for h in range(24)} for i in range(7)}
+
+        for r in rows:
+            d = int(r["dow"])
+            h = int(r["hour"])
+            day_map[d][h] = {
+                "vehicles": round(float(r["avg_vehicles"] or 0), 1),
+                "occ_pct":  round(float(r["avg_occ_pct"]  or 0), 1),
+                "samples":  int(r["sample_count"] or 0),
+            }
+
+        # If no DB data yet, fall back to historical pattern from training data
+        # Mon=1 is busiest (144/day), Sat=6 quietest (85/day)
+        DAY_AVG_HIST = {0:90, 1:144, 2:138, 3:135, 4:130, 5:125, 6:85}
+        PROFILE = [0,0,0,0,0,2,6,14,18,13,9,8,11,8,7,6,8,6,4,3,2,1,0,0]
+        prof_sum = sum(PROFILE)
+        has_data = any(
+            day_map[d][h]["samples"] > 0
+            for d in range(7) for h in range(24)
+        )
+        if not has_data:
+            for d in range(7):
+                total = DAY_AVG_HIST[d]
+                for h in range(24):
+                    v = round(PROFILE[h] / prof_sum * total, 1)
+                    day_map[d][h] = {
+                        "vehicles": v,
+                        "occ_pct":  round(v / LOT_CAPACITY * 100, 1),
+                        "samples":  0,
+                    }
+
+        # Also compute overall daily totals and peak hours
+        day_labels = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"]
+        daily_summary = {}
+        for d in range(7):
+            hours_data = day_map[d]
+            total_veh  = sum(hours_data[h]["vehicles"] for h in range(24))
+            peak_h     = max(range(24), key=lambda h: hours_data[h]["vehicles"])
+            daily_summary[day_labels[d]] = {
+                "total_vehicles": round(total_veh, 1),
+                "peak_hour":      peak_h,
+                "peak_vehicles":  hours_data[peak_h]["vehicles"],
+                "avg_occ_pct":    round(
+                    sum(hours_data[h]["occ_pct"] for h in range(8, 20)) / 12, 1
+                ),
+            }
+
+        return {
+            "hourly_by_dow":  day_map,
+            "daily_summary":  daily_summary,
+            "day_labels":     day_labels,
+            "lot_capacity":   LOT_CAPACITY,
+            "source":         "db" if has_data else "historical_fallback",
+            "generated_at_ph": datetime.now(PH_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+    except Exception as e:
+        print(f"[hourly-by-day] {e}")
+        raise HTTPException(500, str(e))
 
 # ══════════════════════════════════════════════════════════════════
 #  Insights
@@ -1006,14 +1140,14 @@ def api_insights():
                 "revenue_forecast":   "—",
                 "peak_hours":         "—",
                 "admin_action":       "Please wait — the system is initializing.",
-                "generated_at":       datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "generated_at":       datetime.now(PH_TZ).strftime("%Y-%m-%d %H:%M:%S"),
                 "next_refresh":       "~15 seconds",
             }
         result = dict(_insight_cache)
 
     try:
-        last      = datetime.strptime(result["generated_at"], "%Y-%m-%d %H:%M:%S")
-        mins_ago  = int((datetime.now() - last).total_seconds() / 60)
+        last      = datetime.strptime(result["generated_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=PH_TZ)
+        mins_ago  = int((datetime.now(PH_TZ) - last).total_seconds() / 60)
         mins_left = max(0, 60 - mins_ago)
         result["next_refresh"]   = f"Auto-refreshes in ~{mins_left} min" if mins_left > 1 else "Refreshing soon…"
         result["last_refreshed"] = "just now" if mins_ago < 1 else f"{mins_ago} min ago"
@@ -1063,7 +1197,7 @@ def login(data: UserLogin):
         if not bcrypt.checkpw(data.password.encode(), u["password_hash"].encode()):
             raise HTTPException(401, "Incorrect password")
         execute("UPDATE users SET last_login=%s WHERE user_id=%s",
-                (datetime.utcnow(), u["user_id"]))
+                (datetime.now(PH_TZ), u["user_id"]))
         return {
             "ok": True, "user_id": u["user_id"],
             "first_name": u["first_name"], "last_name": u["last_name"],
@@ -1082,7 +1216,7 @@ def logout():
 # ══════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     print("\n╔══════════════════════════════════════╗")
-    print("║  OccupAI FastAPI Backend  v2.1       ║")
+    print("║  OccupAI FastAPI Backend  v2.2       ║")
     print("║  http://localhost:8000               ║")
     print("╚══════════════════════════════════════╝\n")
     uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)

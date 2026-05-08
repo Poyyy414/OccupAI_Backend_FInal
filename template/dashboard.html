@@ -298,6 +298,17 @@
           <div class="icon">🔮</div>Waiting for prediction data…
         </div>
       </div>
+
+      <!-- Revenue Forecast Row -->
+      <div class="predictions-revenue" style="margin-top:1.5rem;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+          <span style="color:#aaa; font-size:0.8rem; letter-spacing:0.05em;">REVENUE FORECAST</span>
+          <span id="todayRevenueForecast" style="color:#f59e0b; font-weight:700; font-size:1rem;">—</span>
+        </div>
+        <div id="weekdayRevenueGrid" style="display:grid; grid-template-columns:repeat(7,1fr); gap:0.5rem;">
+          <!-- filled by JS -->
+        </div>
+      </div>
     </div>
 
     <div class="panel-card">
@@ -632,7 +643,40 @@ async function fetchPredictions() {
         <div class="pred-val">${p.pct}%</div>
         <div class="pred-label">avg occupancy</div>
       </div>`).join('');
-  } catch (e) {}
+
+    // Today's revenue forecast
+    const todayEl = document.getElementById('todayRevenueForecast');
+    if (d.today_revenue_forecast != null) {
+      todayEl.textContent = `Today: ₱${d.today_revenue_forecast.toLocaleString('en-PH', {minimumFractionDigits:2})}`;
+    }
+
+    // Weekday revenue breakdown
+    const revenueGrid = document.getElementById('weekdayRevenueGrid');
+    console.log('API weekday_revenue:', d.weekday_revenue);
+    console.log('API today_revenue_forecast:', d.today_revenue_forecast);
+    
+    const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    const now = new Date();
+    const phDay = now.toLocaleDateString('en-PH', {timeZone:'Asia/Manila', weekday:'short'});
+    console.log('Today (PH timezone):', phDay);
+    
+    if (d.weekday_revenue && Object.keys(d.weekday_revenue).length > 0) {
+      revenueGrid.innerHTML = days.map(day => {
+        const rev = d.weekday_revenue[day] ?? 0;
+        const isToday = day === phDay;
+        return `
+          <div style="background:${isToday ? '#1e3a1e' : '#1a1a2e'}; border:1px solid ${isToday ? '#22c55e' : '#333'};
+                      border-radius:8px; padding:0.5rem; text-align:center;">
+            <div style="font-size:0.7rem; color:${isToday ? '#22c55e' : '#888'}; margin-bottom:0.25rem;">${day}</div>
+            <div style="font-size:0.75rem; color:#f59e0b; font-weight:600;">₱${rev.toLocaleString('en-PH', {maximumFractionDigits:0})}</div>
+          </div>`;
+      }).join('');
+    } else {
+      revenueGrid.innerHTML = '<div style="grid-column:1/-1; text-align:center; color:var(--muted); padding:1rem;">No revenue data yet</div>';
+    }
+  } catch (e) {
+    console.error('fetchPredictions error:', e);
+  }
 }
 
 // ── RENDER ZONES ────────────────────────────────────────────────────
@@ -662,6 +706,7 @@ function renderZones(zones, total, occupied) {
       <span class="zone-badge ${isOccupied ? 'occ':'free'}">${isOccupied ? 'Occupied':'Free'}</span>
     </div>`).join('');
 }
+
 
 // ── INSIGHTS ─────────────────────────────────────────────────────────────────
 async function fetchInsights() {
@@ -753,6 +798,7 @@ fetchPredictions();
 setInterval(fetchStats,       3000);
 setInterval(fetchHistory,     5000);
 setInterval(fetchPredictions, 30000);
+
 </script>
 </body>
 </html>
