@@ -1,296 +1,610 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>OccupAI — Create Account</title>
-<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Epilogue:wght@300;400;500&display=swap" rel="stylesheet"/>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-:root{
-  --bg:#06080d;
-  --surface:#0d1117;
-  --surface2:#131820;
-  --border:#1c2233;
-  --accent:#00e5a0;
-  --text:#eef0f6;
-  --muted:#4a5568;
-  --red:#ff4d6d;
-}
-html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Epilogue',sans-serif}
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OccupAI - Create Account</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    * { margin: 0; padding: 0; }
 
-.grid-bg{
-  position:fixed;inset:0;
-  background-image:
-    linear-gradient(rgba(0,229,160,.03) 1px,transparent 1px),
-    linear-gradient(90deg,rgba(0,229,160,.03) 1px,transparent 1px);
-  background-size:60px 60px;
-  animation:gridScroll 20s linear infinite;
-}
-@keyframes gridScroll{to{background-position:60px 60px}}
-.orb{position:fixed;border-radius:50%;filter:blur(80px);pointer-events:none}
-.orb1{width:350px;height:350px;background:rgba(0,229,160,.06);top:-80px;right:-80px}
-.orb2{width:300px;height:300px;background:rgba(0,102,255,.04);bottom:-60px;left:-60px}
+    :root {
+      --bg: #0a0d12;
+      --shell: #0f141b;
+      --surface: #151b24;
+      --surface-2: #1a222d;
+      --border: #2a3544;
+      --text: #f4f7fb;
+      --muted: #8b98aa;
+      --muted-2: #657286;
+      --green: #27d497;
+      --blue: #5aa9ff;
+      --orange: #f4a261;
+      --red: #ff5c7a;
+      --radius: 8px;
+    }
 
-.layout{
-  min-height:100vh;display:grid;grid-template-columns:480px 1fr;
-  position:relative;z-index:1;
-}
+    html { color-scheme: dark; }
 
-/* left — form */
-.left{
-  display:flex;align-items:center;justify-content:center;
-  padding:3rem 2.5rem;background:var(--surface);
-  border-right:1px solid var(--border);
-}
-.card{width:100%;max-width:380px}
+    body {
+      min-height: 100vh;
+      background:
+        linear-gradient(135deg, rgba(90, 169, 255, .08), transparent 34%),
+        linear-gradient(225deg, rgba(244, 162, 97, .07), transparent 38%),
+        var(--bg);
+      color: var(--text);
+      font-family: "DM Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
 
-.brand{display:flex;align-items:center;gap:10px;margin-bottom:2rem}
-.brand-mark{
-  width:36px;height:36px;border-radius:10px;
-  background:var(--accent);color:#000;
-  display:flex;align-items:center;justify-content:center;
-  font-family:'Syne',sans-serif;font-weight:800;font-size:.9rem;
-}
-.brand-name{font-family:'Syne',sans-serif;font-weight:800;font-size:1.2rem}
-.brand-name span{color:var(--accent)}
+    button, input { font: inherit; }
+    button { border: 0; cursor: pointer; }
+    .mono { font-family: "Space Mono", ui-monospace, SFMono-Regular, Consolas, monospace; }
 
-.card-title{font-family:'Syne',sans-serif;font-weight:700;font-size:1.5rem;margin-bottom:.3rem}
-.card-sub{color:var(--muted);font-size:.88rem;margin-bottom:1.8rem}
-.card-sub a{color:var(--accent);text-decoration:none;font-weight:500}
-.card-sub a:hover{text-decoration:underline}
+    .auth-shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: minmax(430px, .78fr) minmax(0, 1fr);
+    }
 
-.form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-.field{margin-bottom:1rem}
-.field label{display:block;font-size:.74rem;font-weight:500;color:var(--muted);margin-bottom:.4rem;text-transform:uppercase;letter-spacing:.06em}
-.field input{
-  width:100%;padding:.78rem 1rem;
-  background:var(--bg);border:1px solid var(--border);
-  border-radius:11px;color:var(--text);
-  font-family:'Epilogue',sans-serif;font-size:.92rem;
-  transition:border-color .2s,box-shadow .2s;outline:none;
-}
-.field input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(0,229,160,.1)}
-.field input::placeholder{color:var(--muted)}
-.field input.valid{border-color:rgba(0,229,160,.5)}
-.field input.invalid{border-color:rgba(255,77,109,.5)}
+    .form-panel {
+      display: grid;
+      place-items: center;
+      min-height: 100vh;
+      padding: 28px;
+      background: rgba(10, 13, 18, .72);
+      border-right: 1px solid rgba(42, 53, 68, .7);
+    }
 
-.strength-bar{height:3px;border-radius:2px;background:var(--border);margin-top:6px;overflow:hidden}
-.strength-fill{height:100%;border-radius:2px;transition:width .3s,background .3s;width:0}
+    .visual-panel {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 36px;
+      min-height: 100vh;
+      padding: 34px;
+      overflow: hidden;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, .035), transparent),
+        rgba(15, 20, 27, .78);
+    }
 
-.btn{
-  width:100%;padding:.85rem;border:none;border-radius:12px;
-  background:var(--accent);color:#000;
-  font-family:'Syne',sans-serif;font-weight:700;font-size:.95rem;
-  cursor:pointer;transition:all .2s;margin-top:.5rem;
-  display:flex;align-items:center;justify-content:center;gap:8px;
-}
-.btn:hover{background:#00c988;transform:translateY(-1px);box-shadow:0 8px 28px rgba(0,229,160,.3)}
-.btn:active{transform:translateY(0);box-shadow:none}
-.btn:disabled{opacity:.5;cursor:not-allowed;transform:none;box-shadow:none}
+    .visual-panel::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(255, 255, 255, .035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, .035) 1px, transparent 1px);
+      background-size: 54px 54px;
+      mask-image: linear-gradient(270deg, black, transparent 86%);
+    }
 
-.error-box{
-  background:rgba(255,77,109,.08);border:1px solid rgba(255,77,109,.25);
-  color:#ff7a90;border-radius:10px;padding:.7rem 1rem;
-  font-size:.84rem;margin-bottom:1rem;display:none;
-}
-.success-box{
-  background:rgba(0,229,160,.08);border:1px solid rgba(0,229,160,.25);
-  color:var(--accent);border-radius:10px;padding:.7rem 1rem;
-  font-size:.84rem;margin-bottom:1rem;display:none;
-  text-align:center;
-}
+    .brand-row, .visual-content, .ops-strip { position: relative; z-index: 1; }
 
-.terms{font-size:.78rem;color:var(--muted);text-align:center;margin-top:1rem;line-height:1.5}
+    .brand-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+    }
 
-.spinner{width:16px;height:16px;border:2px solid rgba(0,0,0,.2);border-top-color:#000;border-radius:50%;animation:spin .6s linear infinite}
-@keyframes spin{to{transform:rotate(360deg)}}
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
 
-/* right — illustration panel */
-.right{
-  display:flex;flex-direction:column;justify-content:center;
-  padding:4rem;position:relative;overflow:hidden;
-}
-.steps{display:flex;flex-direction:column;gap:2rem;position:relative;z-index:1}
-.step{display:flex;align-items:flex-start;gap:1.2rem;opacity:0;animation:fadeUp .5s forwards}
-.step:nth-child(1){animation-delay:.1s}
-.step:nth-child(2){animation-delay:.25s}
-.step:nth-child(3){animation-delay:.4s}
-.step:nth-child(4){animation-delay:.55s}
-@keyframes fadeUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 42px;
+      height: 42px;
+      border-radius: var(--radius);
+      background: linear-gradient(135deg, var(--green), #8ff1cb);
+      color: #06110d;
+      font-family: "Space Mono", monospace;
+      font-weight: 700;
+      box-shadow: 0 10px 25px rgba(39, 212, 151, .24);
+    }
 
-.step-num{
-  width:40px;height:40px;border-radius:12px;flex-shrink:0;
-  border:1px solid var(--border);background:var(--surface2);
-  display:flex;align-items:center;justify-content:center;
-  font-family:'Syne',sans-serif;font-weight:700;font-size:.85rem;color:var(--accent);
-}
-.step-title{font-family:'Syne',sans-serif;font-weight:600;font-size:1rem;margin-bottom:.3rem}
-.step-desc{color:var(--muted);font-size:.85rem;line-height:1.6}
+    .brand-name { font-size: 18px; font-weight: 800; }
+    .brand-meta { margin-top: 2px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .12em; }
 
-.right-heading{font-family:'Syne',sans-serif;font-weight:800;font-size:1.8rem;margin-bottom:.6rem;position:relative;z-index:1}
-.right-heading em{font-style:normal;color:var(--accent)}
-.right-sub{color:var(--muted);font-size:.9rem;margin-bottom:3rem;position:relative;z-index:1}
+    .status-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 34px;
+      padding: 7px 12px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, .035);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
 
-@media(max-width:768px){
-  .layout{grid-template-columns:1fr}
-  .right{display:none}
-  .left{background:var(--bg)}
-}
-</style>
+    .status-chip::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--blue);
+      box-shadow: 0 0 0 5px rgba(90, 169, 255, .11);
+    }
+
+    .auth-card {
+      width: min(100%, 430px);
+      padding: 26px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: linear-gradient(180deg, rgba(255, 255, 255, .05), rgba(255, 255, 255, .025));
+      box-shadow: 0 24px 80px rgba(0, 0, 0, .28);
+    }
+
+    .card-title { font-size: 25px; line-height: 1.12; font-weight: 800; }
+    .card-sub { margin-top: 8px; margin-bottom: 22px; color: var(--muted); font-size: 14px; }
+    .card-sub a { color: var(--green); font-weight: 700; text-decoration: none; }
+    .card-sub a:hover { text-decoration: underline; }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .field { margin-bottom: 14px; }
+    .field label {
+      display: block;
+      margin-bottom: 7px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: .1em;
+    }
+
+    .field input {
+      width: 100%;
+      min-height: 46px;
+      padding: 11px 13px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      outline: 0;
+      background: #0c1118;
+      color: var(--text);
+      font-size: 15px;
+      transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
+    }
+
+    .field input:focus {
+      border-color: rgba(39, 212, 151, .72);
+      background: #0e141c;
+      box-shadow: 0 0 0 4px rgba(39, 212, 151, .12);
+    }
+
+    .field input.valid { border-color: rgba(39, 212, 151, .55); }
+    .field input.invalid { border-color: rgba(255, 92, 122, .7); }
+    .field input::placeholder { color: var(--muted-2); }
+
+    .strength-bar {
+      height: 4px;
+      margin-top: 8px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #0c1118;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .04);
+    }
+
+    .strength-fill {
+      width: 0%;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--red);
+      transition: width .2s ease, background .2s ease;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+      width: 100%;
+      min-height: 48px;
+      margin-top: 4px;
+      border-radius: var(--radius);
+      background: linear-gradient(135deg, var(--green), #8ff1cb);
+      color: #06110d;
+      font-weight: 800;
+      transition: transform .16s ease, box-shadow .16s ease, filter .16s ease;
+    }
+
+    .btn:hover { transform: translateY(-1px); box-shadow: 0 14px 34px rgba(39, 212, 151, .22); }
+    .btn:disabled { cursor: wait; opacity: .72; transform: none; box-shadow: none; }
+
+    .terms {
+      margin-top: 13px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+      text-align: center;
+    }
+
+    .error-box, .success-box {
+      display: none;
+      margin-bottom: 14px;
+      padding: 11px 12px;
+      border-radius: var(--radius);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .error-box {
+      border: 1px solid rgba(255, 92, 122, .32);
+      background: rgba(255, 92, 122, .1);
+      color: #ff9aad;
+    }
+
+    .success-box {
+      border: 1px solid rgba(39, 212, 151, .34);
+      background: rgba(39, 212, 151, .1);
+      color: #8ff1cb;
+    }
+
+    .spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(6, 17, 13, .24);
+      border-top-color: #06110d;
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .visual-content {
+      width: min(690px, 100%);
+      display: grid;
+      gap: 24px;
+    }
+
+    .eyebrow {
+      color: var(--green);
+      font-family: "Space Mono", monospace;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .14em;
+    }
+
+    h1 {
+      max-width: 640px;
+      margin-top: 8px;
+      font-size: clamp(34px, 5vw, 66px);
+      line-height: 1;
+      font-weight: 800;
+    }
+
+    .lead {
+      max-width: 560px;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.7;
+    }
+
+    .route-card {
+      width: min(620px, 100%);
+      padding: 18px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: linear-gradient(180deg, rgba(255, 255, 255, .04), rgba(255, 255, 255, .02));
+      box-shadow: 0 24px 80px rgba(0, 0, 0, .24);
+    }
+
+    .route-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 18px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .1em;
+    }
+
+    .route-line {
+      position: relative;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .route-line::before {
+      content: "";
+      position: absolute;
+      top: 21px;
+      left: 8%;
+      right: 8%;
+      height: 2px;
+      background: linear-gradient(90deg, var(--green), var(--blue), var(--orange));
+      opacity: .75;
+    }
+
+    .route-step {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      gap: 9px;
+      justify-items: center;
+      text-align: center;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .step-dot {
+      display: grid;
+      place-items: center;
+      width: 44px;
+      height: 44px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text);
+      font-family: "Space Mono", monospace;
+      font-weight: 700;
+    }
+
+    .ops-strip {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      width: min(620px, 100%);
+    }
+
+    .ops-metric {
+      padding: 13px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, .03);
+    }
+
+    .ops-metric strong {
+      display: block;
+      color: var(--text);
+      font-family: "Space Mono", monospace;
+      font-size: 18px;
+    }
+
+    .ops-metric span {
+      display: block;
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    @media (max-width: 940px) {
+      .auth-shell { grid-template-columns: 1fr; }
+      .form-panel {
+        min-height: auto;
+        padding: 22px;
+        border-right: 0;
+      }
+      .visual-panel {
+        min-height: auto;
+        padding: 22px;
+        border-top: 1px solid var(--border);
+      }
+      .visual-content { gap: 16px; }
+      h1 { font-size: 34px; }
+      .lead { font-size: 14px; }
+      .route-card { display: none; }
+      .ops-strip { grid-template-columns: 1fr 1fr 1fr; }
+    }
+
+    @media (max-width: 560px) {
+      .form-row, .ops-strip { grid-template-columns: 1fr; }
+      .brand-row { align-items: flex-start; flex-direction: column; }
+      .auth-card { padding: 20px; }
+    }
+  </style>
 </head>
 <body>
-<div class="grid-bg"></div>
-<div class="orb orb1"></div>
-<div class="orb orb2"></div>
-
-<div class="layout">
-  <div class="left">
-    <div class="card">
-      <div class="brand">
-        <div class="brand-mark">AI</div>
-        <div class="brand-name">Occup<span>AI</span></div>
-      </div>
-
-      <div class="card-title">Create account</div>
-      <div class="card-sub">Already have one? <a href="/login">Sign in</a></div>
-
-      <div class="error-box"   id="error-box"></div>
-      <div class="success-box" id="success-box"></div>
-
-      <div class="form-row">
-        <div class="field">
-          <label>First Name</label>
-          <input type="text" id="first_name" placeholder="Juan" oninput="validate()"/>
+  <main class="auth-shell">
+    <section class="form-panel">
+      <div class="auth-card">
+        <div class="brand" style="margin-bottom:22px">
+          <div class="brand-mark">AI</div>
+          <div>
+            <div class="brand-name">OccupAI</div>
+            <div class="brand-meta">Parking Ops</div>
+          </div>
         </div>
-        <div class="field">
-          <label>Last Name</label>
-          <input type="text" id="last_name" placeholder="dela Cruz" oninput="validate()"/>
+
+        <div class="card-title">Create account</div>
+        <div class="card-sub">Already have one? <a href="/login">Sign in</a></div>
+
+        <div class="error-box" id="error-box"></div>
+        <div class="success-box" id="success-box"></div>
+
+        <form id="registerForm">
+          <div class="form-row">
+            <div class="field">
+              <label for="first_name">First name</label>
+              <input type="text" id="first_name" placeholder="Juan" autocomplete="given-name" />
+            </div>
+            <div class="field">
+              <label for="last_name">Last name</label>
+              <input type="text" id="last_name" placeholder="Dela Cruz" autocomplete="family-name" />
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="email">Email address</label>
+            <input type="email" id="email" placeholder="you@email.com" autocomplete="email" />
+          </div>
+
+          <div class="field">
+            <label for="password">Password</label>
+            <input type="password" id="password" placeholder="Minimum 6 characters" autocomplete="new-password" />
+            <div class="strength-bar"><div class="strength-fill" id="strength-fill"></div></div>
+          </div>
+
+          <button class="btn" id="btn-reg" type="submit">Create account</button>
+          <div class="terms">Use your active email so the dashboard session can be saved in this browser.</div>
+        </form>
+      </div>
+    </section>
+
+    <section class="visual-panel">
+      <div class="brand-row">
+        <div class="brand">
+          <div class="brand-mark">AI</div>
+          <div>
+            <div class="brand-name">OccupAI</div>
+            <div class="brand-meta">Parking Ops</div>
+          </div>
         </div>
-      </div>
-      <div class="field">
-        <label>Email address</label>
-        <input type="email" id="email" placeholder="you@email.com" oninput="validate()" autocomplete="email"/>
-      </div>
-      <div class="field">
-        <label>Password</label>
-        <input type="password" id="password" placeholder="min. 6 characters" oninput="onPwInput()" autocomplete="new-password"/>
-        <div class="strength-bar"><div class="strength-fill" id="strength-fill"></div></div>
+        <div class="status-chip">Setup ready</div>
       </div>
 
-      <button class="btn" id="btn-reg" onclick="doRegister()">Create Account</button>
-      <div class="terms">By registering, you agree to the OccupAI terms of use.</div>
-    </div>
-  </div>
-
-  <div class="right">
-    <div class="right-heading">Get started in<br/><em>seconds</em></div>
-    <div class="right-sub">Join OccupAI and find parking faster.</div>
-    <div class="steps">
-      <div class="step">
-        <div class="step-num">01</div>
+      <div class="visual-content">
         <div>
-          <div class="step-title">Create your account</div>
-          <div class="step-desc">Register with your name and email. It takes less than a minute.</div>
+          <div class="eyebrow">Operations access</div>
+          <h1>From camera feed to decision in seconds.</h1>
+        </div>
+        <p class="lead">Create an account to view live parking occupancy, zone status, demand forecasts, and admin recommendations.</p>
+
+        <div class="route-card" aria-hidden="true">
+          <div class="route-head">
+            <span>Dashboard flow</span>
+            <span class="mono">4 steps</span>
+          </div>
+          <div class="route-line">
+            <div class="route-step"><div class="step-dot">01</div><span>Sign up</span></div>
+            <div class="route-step"><div class="step-dot">02</div><span>Open feed</span></div>
+            <div class="route-step"><div class="step-dot">03</div><span>Read demand</span></div>
+            <div class="route-step"><div class="step-dot">04</div><span>Act faster</span></div>
+          </div>
         </div>
       </div>
-      <div class="step">
-        <div class="step-num">02</div>
-        <div>
-          <div class="step-title">Open the dashboard</div>
-          <div class="step-desc">See real-time occupancy data for the parking lot.</div>
-        </div>
+
+      <div class="ops-strip">
+        <div class="ops-metric"><strong>44</strong><span>Lot capacity</span></div>
+        <div class="ops-metric"><strong>7d</strong><span>Prediction base</span></div>
+        <div class="ops-metric"><strong>AI</strong><span>Recommendations</span></div>
       </div>
-      <div class="step">
-        <div class="step-num">03</div>
-        <div>
-          <div class="step-title">Get assigned a slot</div>
-          <div class="step-desc">The AI detects free zones and guides you to the nearest available space.</div>
-        </div>
-      </div>
-      <div class="step">
-        <div class="step-num">04</div>
-        <div>
-          <div class="step-title">Park with confidence</div>
-          <div class="step-desc">No more circling. No guesswork. Just park.</div>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
+    </section>
+  </main>
 
-<script>
-const API = 'http://localhost:8000';
+  <script>
+    const form = document.getElementById('registerForm');
+    const firstName = document.getElementById('first_name');
+    const lastName = document.getElementById('last_name');
+    const email = document.getElementById('email');
+    const password = document.getElementById('password');
 
-function validate(){
-  const f = document.getElementById('first_name').value.trim();
-  const l = document.getElementById('last_name').value.trim();
-  const e = document.getElementById('email').value.trim();
-  document.getElementById('first_name').className = f.length>=2 ? 'valid' : '';
-  document.getElementById('last_name').className  = l.length>=2 ? 'valid' : '';
-  document.getElementById('email').className      = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) ? 'valid' : '';
-}
+    form.addEventListener('submit', doRegister);
+    [firstName, lastName, email].forEach(input => input.addEventListener('input', validate));
+    password.addEventListener('input', onPwInput);
 
-function onPwInput(){
-  const pw   = document.getElementById('password').value;
-  const fill = document.getElementById('strength-fill');
-  let score  = 0;
-  if(pw.length>=6) score++;
-  if(pw.length>=10) score++;
-  if(/[A-Z]/.test(pw)) score++;
-  if(/[0-9]/.test(pw)) score++;
-  if(/[^A-Za-z0-9]/.test(pw)) score++;
-  const pct  = (score/5)*100;
-  const col  = score<=1?'#ff4d6d':score<=3?'#ffd32a':'#00e5a0';
-  fill.style.width      = pct+'%';
-  fill.style.background = col;
-  document.getElementById('password').className = pw.length>=6 ? 'valid' : pw.length>0 ? 'invalid' : '';
-}
+    function validate() {
+      const f = firstName.value.trim();
+      const l = lastName.value.trim();
+      const e = email.value.trim();
+      firstName.className = f.length >= 2 ? 'valid' : '';
+      lastName.className = l.length >= 2 ? 'valid' : '';
+      email.className = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) ? 'valid' : '';
+    }
 
-document.addEventListener('keydown', e=>{ if(e.key==='Enter') doRegister(); });
+    function onPwInput() {
+      const pw = password.value;
+      const fill = document.getElementById('strength-fill');
+      let score = 0;
+      if (pw.length >= 6) score++;
+      if (pw.length >= 10) score++;
+      if (/[A-Z]/.test(pw)) score++;
+      if (/[0-9]/.test(pw)) score++;
+      if (/[^A-Za-z0-9]/.test(pw)) score++;
+      const pct = (score / 5) * 100;
+      const color = score <= 1 ? 'var(--red)' : score <= 3 ? 'var(--orange)' : 'var(--green)';
+      fill.style.width = pct + '%';
+      fill.style.background = color;
+      password.className = pw.length >= 6 ? 'valid' : pw.length > 0 ? 'invalid' : '';
+    }
 
-async function doRegister(){
-  const first_name = document.getElementById('first_name').value.trim();
-  const last_name  = document.getElementById('last_name').value.trim();
-  const email      = document.getElementById('email').value.trim();
-  const password   = document.getElementById('password').value;
-  const errBox     = document.getElementById('error-box');
-  const sucBox     = document.getElementById('success-box');
-  const btn        = document.getElementById('btn-reg');
+    async function doRegister(event) {
+      event.preventDefault();
 
-  errBox.style.display = 'none';
-  sucBox.style.display = 'none';
+      const data = {
+        first_name: firstName.value.trim(),
+        last_name: lastName.value.trim(),
+        email: email.value.trim(),
+        password: password.value,
+      };
+      const btn = document.getElementById('btn-reg');
+      const successBox = document.getElementById('success-box');
 
-  if(!first_name||!last_name||!email||!password){ showErr('Please fill in all fields.'); return; }
-  if(first_name.length<2||last_name.length<2){ showErr('Name must be at least 2 characters.'); return; }
-  if(password.length<6){ showErr('Password must be at least 6 characters.'); return; }
+      showErr('');
+      successBox.style.display = 'none';
 
-  btn.disabled = true;
-  btn.innerHTML = '<div class="spinner"></div> Creating account...';
+      if (!data.first_name || !data.last_name || !data.email || !data.password) {
+        showErr('Please fill in all fields.');
+        return;
+      }
+      if (data.first_name.length < 2 || data.last_name.length < 2) {
+        showErr('Name must be at least 2 characters.');
+        return;
+      }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.email)) {
+        showErr('Please enter a valid email address.');
+        return;
+      }
+      if (data.password.length < 6) {
+        showErr('Password must be at least 6 characters.');
+        return;
+      }
 
-  try {
-    const res  = await fetch(`${API}/auth/register`,{
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({first_name, last_name, email, password})
-    });
-    const data = await res.json();
-    if(!res.ok) throw new Error(data.detail||'Registration failed.');
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span> Creating account...';
 
-    sucBox.textContent  = '✓ Account created! Redirecting to login...';
-    sucBox.style.display= 'block';
-    btn.innerHTML       = '✓ Done';
-    setTimeout(()=>window.location.href='/login', 1800);
-  } catch(e) {
-    showErr(e.message);
-    btn.disabled = false;
-    btn.innerHTML = 'Create Account';
-  }
-}
+      try {
+        const res = await fetch('/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+        });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || 'Registration failed.');
 
-function showErr(msg){
-  const b = document.getElementById('error-box');
-  b.textContent=msg; b.style.display='block';
-}
-</script>
+        successBox.textContent = 'Account created. Redirecting to login...';
+        successBox.style.display = 'block';
+        btn.textContent = 'Done';
+        setTimeout(() => { window.location.href = '/login'; }, 1400);
+      } catch (e) {
+        showErr(e.message);
+        btn.disabled = false;
+        btn.textContent = 'Create account';
+      }
+    }
+
+    function showErr(msg) {
+      const box = document.getElementById('error-box');
+      if (!msg) {
+        box.style.display = 'none';
+        box.textContent = '';
+        return;
+      }
+      box.textContent = msg;
+      box.style.display = 'block';
+    }
+  </script>
 </body>
 </html>

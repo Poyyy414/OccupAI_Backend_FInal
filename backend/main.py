@@ -14,7 +14,9 @@ from pathlib import Path
 from collections import deque, defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
+from typing import Optional
 from zoneinfo import ZoneInfo
+
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Header, Request
@@ -22,7 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import httpx
-
+from pydantic import BaseModel
 from backend.db     import get_db, query, execute
 from backend.models import UserRegister, UserLogin, YoloUpdate, PushFrame
 
@@ -1162,7 +1164,58 @@ def api_insights_refresh():
     threading.Thread(target=_run_insights_now, daemon=True, name="insight-force").start()
     return {"ok": True, "message": "Recalculating — results ready in a few seconds."}
 
+@app.get("/api/parking_logs_recent")
+def parking_logs_recent(limit: int = 168):
+    """
+    Returns the most recent `limit` parking_logs rows (newest first).
+    Used by the SlotAdjusterThread in detector.py to build lag features.
+    Default 168 = 7 days of hourly rows.
+    """
+    safe_limit = max(1, min(int(limit), 1000))
+    rows = query(
+        """
+        SELECT occupied, free, total, occupancy_pct, lot_full, logged_at
+        FROM parking_logs
+        ORDER BY logged_at DESC
+        LIMIT %s
+        """,
+        (safe_limit,),
+    )
+    return [dict(r) for r in rows]
 
+class SlotAdjustmentPayload(BaseModel):
+    demand:         str
+    forecast_veh:   float
+    current_occ:    float
+    n_slots:        int
+    last_adjusted:  Optional[str] = None
+    reason:         Optional[str] = None
+
+# Keep last adjustment in memory so dashboard can read it
+_last_slot_adjustment: dict = {}
+
+@app.post("/yolo/slot_adjustment")
+async def receive_slot_adjustment(
+    payload: SlotAdjustmentPayload,
+    x_cam_token: str = Header(None),
+):
+    if x_cam_token != CAM_TOKEN:
+        raise HTTPException(status_code=403, detail="Invalid cam token")
+    global _last_slot_adjustment
+    _last_slot_adjustment = payload.dict()
+    return {"status": "ok"}
+
+
+@app.get("/api/slot_adjustment")
+async def get_slot_adjustment():
+    """Dashboard polls this to show current demand level + reason."""
+    return _last_slot_adjustment or {
+        "demand":       "NORMAL",
+        "forecast_veh": 0,
+        "current_occ":  0,
+        "n_slots":      0,
+        "reason":       "No adjustment yet",
+    }
 # ══════════════════════════════════════════════════════════════════
 #  Auth
 # ══════════════════════════════════════════════════════════════════
