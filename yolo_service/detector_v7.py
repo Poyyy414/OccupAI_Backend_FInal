@@ -19,7 +19,7 @@ import os
 import sys
 import queue
 import requests
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from ultralytics import YOLO
 from dotenv import load_dotenv
 
@@ -55,6 +55,10 @@ def _es(k, d=""):
 # ══════════════════════════════════════════════════════════════════════════════
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
+LOCAL_BACKEND_URL = os.getenv("LOCAL_BACKEND_URL", "http://127.0.0.1:8000")
+DEPLOY_MODE = os.getenv("DEPLOY_MODE", "local").strip().lower()
+PUSH_LOCAL_BACKEND = _eb("PUSH_LOCAL_BACKEND", DEPLOY_MODE == "local")
+PUSH_REMOTE_BACKEND = _eb("PUSH_REMOTE_BACKEND", DEPLOY_MODE != "local")
 CAM_TOKEN   = os.getenv("CAM_TOKEN",   "occupai_cam_2027")
 WEBCAM_IDX  = _ei("WEBCAM_INDEX", 0)
 STREAM_PORT = _ei("STREAM_PORT",  8001)
@@ -73,6 +77,8 @@ JPEG_Q      = _ei("JPEG_Q",      42)
 PUSH_EVERY  = _ei("PUSH_EVERY",  60)
 CONF_THRESH = _ef("CONF_THRESH", 0.15)
 IOU_THRESH  = _ef("IOU_THRESH",  0.15)
+ASSIGN_MIN_OVERLAP = _ef("ASSIGN_MIN_OVERLAP", 0.18)
+DEDUPE_IOU_THRESH  = _ef("DEDUPE_IOU_THRESH",  0.35)
 DRAW_DETECTOR_BOXES = _eb("DRAW_DETECTOR_BOXES", False)
 
 SLOT_CORNER_RADIUS = max(0, _ei("SLOT_CORNER_RADIUS", 14))
@@ -82,6 +88,8 @@ BG_HISTORY     = _ei("BG_HISTORY",    200)
 BG_VAR_THRESH  = _ei("BG_THRESH",      30)
 BG_LEARN_RATE  = _ef("BG_LEARN_RATE", 0.002)
 OCC_DIFF_RATIO = _ef("OCC_DIFF_RATIO", 0.07)
+FG_MIN_AREA_F  = _ef("FG_MIN_AREA_FRAC", 0.0010)
+FG_MAX_AREA_F  = _ef("FG_MAX_AREA_FRAC", 0.1800)
 
 TOY_MIN_F = _ef("TOY_MIN_AREA_FRAC", 0.0008)
 TOY_MAX_F = _ef("TOY_MAX_AREA_FRAC", 0.10)
@@ -116,18 +124,41 @@ _cam_ok_lock = threading.Lock()
 slot_state = SlotState()
 
 
+def _norm_url(url):
+    return (url or "").strip().rstrip("/")
+
+def _backend_targets():
+    targets = []
+    if DEPLOY_MODE == "local":
+        candidates = (
+            LOCAL_BACKEND_URL if PUSH_LOCAL_BACKEND else "",
+            BACKEND_URL if PUSH_REMOTE_BACKEND else "",
+        )
+    else:
+        candidates = (
+            BACKEND_URL,
+            LOCAL_BACKEND_URL if PUSH_LOCAL_BACKEND else "",
+        )
+    for url in candidates:
+        url = _norm_url(url)
+        if url and url not in targets:
+            targets.append(url)
+    return targets
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #   DB CALLBACK
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _fetch_db_history():
-    try:
-        r = requests.get(f"{BACKEND_URL}/api/parking_logs_recent",
-                         headers=HEADERS, timeout=3)
-        if r.status_code == 200:
-            return r.json()
-    except Exception as e:
-        print(f"[db_fetch] {e}")
+    for target in _backend_targets():
+        try:
+            r = requests.get(f"{target}/api/parking_logs_recent",
+                             headers=HEADERS, timeout=3)
+            if r.status_code == 200:
+                return r.json()
+        except Exception as e:
+            print(f"[db_fetch] {target}: {e}")
     return []
 
 
@@ -217,6 +248,25 @@ def _iou(a, b):
     ua=(a[2]-a[0])*(a[3]-a[1])+(b[2]-b[0])*(b[3]-b[1])-inter
     return inter/ua if ua else 0.0
 
+def _area(b):
+    return max(0, b[2]-b[0]) * max(0, b[3]-b[1])
+
+def _inter_area(a, b):
+    ix1=max(a[0],b[0]); iy1=max(a[1],b[1])
+    ix2=min(a[2],b[2]); iy2=min(a[3],b[3])
+    return max(0, ix2-ix1) * max(0, iy2-iy1)
+
+def _center_in(box, zone):
+    cx=(box[0]+box[2])/2; cy=(box[1]+box[3])/2
+    return zone[0] <= cx <= zone[2] and zone[1] <= cy <= zone[3]
+
+def _assignment_score(zone, box):
+    inter = _inter_area(zone, box)
+    if inter <= 0:
+        return 0.0
+    base = inter / max(1, min(_area(zone), _area(box)))
+    return base + (0.25 if _center_in(box, zone) else 0.0)
+
 def occ_bg(zone, fg):
     x1,y1,x2,y2 = zone
     roi = fg[y1:y2, x1:x2]
@@ -230,6 +280,63 @@ def occ_yolo(zone, boxes):
         if x1<=cx<=x2 and y1<=cy<=y2: return True
         if _iou(zone,tuple(b)) > IOU_THRESH: return True
     return False
+
+def foreground_boxes(fg):
+    h,w = fg.shape[:2]
+    frame_area = h*w
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7,7))
+    mask = cv2.morphologyEx(fg, cv2.MORPH_CLOSE, k, iterations=2)
+    cnts,_ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    boxes = []
+    for cnt in cnts:
+        area = cv2.contourArea(cnt)
+        if area < frame_area*FG_MIN_AREA_F or area > frame_area*FG_MAX_AREA_F:
+            continue
+        x,y,bw,bh = cv2.boundingRect(cnt)
+        boxes.append([x,y,x+bw,y+bh])
+    return boxes
+
+def dedupe_boxes(boxes):
+    clean = []
+    for b in boxes:
+        if len(b) != 4 or _area(b) <= 0:
+            continue
+        clean.append([int(v) for v in b])
+    clean.sort(key=_area, reverse=True)
+
+    kept = []
+    for box in clean:
+        duplicate = False
+        for old in kept:
+            if _iou(box, old) >= DEDUPE_IOU_THRESH:
+                duplicate = True
+                break
+            if _center_in(box, old) and _area(box) <= _area(old)*0.75:
+                duplicate = True
+                break
+        if not duplicate:
+            kept.append(box)
+    return kept
+
+def assign_occupancy(zones, fg, boxes):
+    zone_status = {name: False for name in zones}
+    candidates = dedupe_boxes(list(boxes or []) + foreground_boxes(fg))
+
+    for box in candidates:
+        best_name = None
+        best_score = 0.0
+        for name, zone in zones.items():
+            score = _assignment_score(zone, box)
+            if score > best_score:
+                best_name = name
+                best_score = score
+        if best_name and best_score >= ASSIGN_MIN_OVERLAP:
+            zone_status[best_name] = True
+
+    if not candidates:
+        zone_status = {name: occ_bg(zone, fg) for name, zone in zones.items()}
+
+    return zone_status, candidates
 
 def find_toy_boxes(frame):
     h,w=frame.shape[:2]; fa=h*w
@@ -452,7 +559,7 @@ class MJPEGHandler(BaseHTTPRequestHandler):
             except Exception: break
 
 def start_mjpeg_server():
-    HTTPServer(('0.0.0.0',STREAM_PORT),MJPEGHandler).serve_forever()
+    ThreadingHTTPServer(('0.0.0.0',STREAM_PORT),MJPEGHandler).serve_forever()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -471,7 +578,7 @@ def push_to_backend(occupied,free,total,pct,fps,zone_status,snapshot_frame):
     try:
         fb64 = encode_frame(snapshot_frame)
         adj=slot_state.summary()
-        requests.post(f"{BACKEND_URL}/yolo/update",json={
+        payload={
             "occupied":occupied,"free":free,"total":total,
             "occupancy_pct":pct,"lot_full":total>0 and free==0,
             "fps":fps,"yolo_count":occupied,
@@ -480,7 +587,15 @@ def push_to_backend(occupied,free,total,pct,fps,zone_status,snapshot_frame):
             "demand_level":adj.get("demand","NORMAL"),
             "forecast_veh":adj.get("forecast_veh",0),
             "adjustment_reason":adj.get("reason",""),
-        },headers=HEADERS,timeout=3)
+        }
+        for target in _backend_targets():
+            try:
+                r = requests.post(f"{target}/yolo/update",json=payload,
+                                  headers=HEADERS,timeout=3)
+                if r.status_code >= 400:
+                    print(f"[push] {target}: HTTP {r.status_code} {r.text[:120]}")
+            except Exception as e:
+                print(f"[push] {target}: {e}")
     except Exception as e: print(f"[push] {e}")
     finally:
         with _push_lock: _pushing=False
@@ -656,12 +771,12 @@ def detection_loop():
         # ── Occupancy ─────────────────────────────────────────────────────────
         if cam_ok and not rescanning and not rewarming and active:
             all_b=yolo_b+toy_b
-            zone_status={name:(occ_bg(c,fg) or occ_yolo(c,all_b))
-                         for name,c in active.items()}
+            zone_status, assigned_boxes = assign_occupancy(active, fg, all_b)
         else:
             zone_status={name:False for name in active}
+            assigned_boxes=[]
 
-        occupied=sum(zone_status.values())
+        occupied=sum(1 for v in zone_status.values() if v)
         free=n_slots-occupied
         pct=round(occupied/n_slots*100,1) if n_slots else 0.0
         demand=slot_state.demand
@@ -675,8 +790,7 @@ def detection_loop():
         else:
             draw_zones(ann,active,zone_status)
             if DRAW_DETECTOR_BOXES:
-                draw_boxes(ann,yolo_b,(0,230,255))
-                draw_boxes(ann,toy_b,(0,255,128))
+                draw_boxes(ann,assigned_boxes,(0,230,255))
 
         draw_hud(ann,free,occupied,n_slots,fps_val,
                  cam_ok=cam_ok,rescanning=rescanning,

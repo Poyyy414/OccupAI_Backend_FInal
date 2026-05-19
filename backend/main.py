@@ -1191,8 +1191,36 @@ class SlotAdjustmentPayload(BaseModel):
     last_adjusted:  Optional[str] = None
     reason:         Optional[str] = None
 
+class LayoutModePayload(BaseModel):
+    mode: str
+
 # Keep last adjustment in memory so dashboard can read it
 _last_slot_adjustment: dict = {}
+_LAYOUT_MODES = {"NORMAL", "BUSY", "HIGH"}
+
+def _read_env_value(key: str, default: str = "") -> str:
+    env_path = BASE_DIR / ".env"
+    if env_path.exists():
+        try:
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                if line.strip().startswith(f"{key}="):
+                    return line.split("=", 1)[1].strip()
+        except Exception:
+            pass
+    return os.getenv(key, default)
+
+def _write_env_value(key: str, value: str) -> None:
+    env_path = BASE_DIR / ".env"
+    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+    found = False
+    for i, line in enumerate(lines):
+        if line.strip().startswith(f"{key}="):
+            lines[i] = f"{key}={value}"
+            found = True
+            break
+    if not found:
+        lines.append(f"{key}={value}")
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 @app.post("/yolo/slot_adjustment")
 async def receive_slot_adjustment(
@@ -1217,6 +1245,26 @@ async def get_slot_adjustment():
         "reason":       "No adjustment yet",
     }
 # ══════════════════════════════════════════════════════════════════
+@app.get("/api/settings/layout-mode")
+def get_layout_mode():
+    mode = _read_env_value("FORCE_DEMAND_LEVEL", "NORMAL").strip().upper()
+    if mode not in _LAYOUT_MODES:
+        mode = "NORMAL"
+    return {"mode": mode, "modes": ["NORMAL", "BUSY", "HIGH"]}
+
+@app.post("/api/settings/layout-mode")
+def set_layout_mode(payload: LayoutModePayload):
+    mode = payload.mode.strip().upper()
+    if mode not in _LAYOUT_MODES:
+        raise HTTPException(400, "mode must be NORMAL, BUSY, or HIGH")
+    _write_env_value("FORCE_DEMAND_LEVEL", mode)
+    os.environ["FORCE_DEMAND_LEVEL"] = mode
+    return {
+        "ok": True,
+        "mode": mode,
+        "message": "Layout mode saved. Detector applies it on the next adjustment cycle.",
+    }
+
 #  Auth
 # ══════════════════════════════════════════════════════════════════
 @app.post("/auth/register")

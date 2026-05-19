@@ -112,6 +112,18 @@ def _get_force_level():
 def _get_excluded():
     return _es("EXCLUDED_SLOTS")
 
+def _get_demand_excluded(demand):
+    demand_key = (demand or "").strip().upper()
+    if not demand_key:
+        return set()
+    return _es(f"{demand_key}_EXCLUDED_SLOTS")
+
+def _filter_slots(slots, excluded):
+    if not excluded:
+        return slots
+    return {name: coords for name, coords in slots.items()
+            if name.upper() not in excluded}
+
 def _get_no_park_rects():
     """
     Generic geometry-based keep-clear areas, not slot-name hardcoding.
@@ -356,7 +368,8 @@ class GridAdjuster:
     def slots_for_demand(self, demand):
         guided_counts = _get_demand_counts(demand)
         if guided_counts is not None:
-            return build_layout(self.fw, self.fh, row_counts=guided_counts)
+            slots = build_layout(self.fw, self.fh, row_counts=guided_counts)
+            return _filter_slots(slots, _get_demand_excluded(demand))
 
         pk = _get_packing()
         if demand == DemandLevel.HIGH:
@@ -364,12 +377,15 @@ class GridAdjuster:
                                  col_bonus=pk["high_col"],
                                  sub_rows_r1=1 + pk["high_row"],
                                  sub_rows_r3=1 + pk["high_row"])
+            slots = _filter_slots(slots, _get_demand_excluded(demand))
             return _limit_slot_count(slots, pk["high_target"])
         if demand == DemandLevel.BUSY:
             slots = build_layout(self.fw, self.fh,
                                  col_bonus=pk["busy_col"])
+            slots = _filter_slots(slots, _get_demand_excluded(demand))
             return _limit_slot_count(slots, pk["busy_target"])
-        return build_layout(self.fw, self.fh)
+        slots = build_layout(self.fw, self.fh)
+        return _filter_slots(slots, _get_demand_excluded(demand))
 
 
 # ══════════════════════════════════════════════════════════════════════════════

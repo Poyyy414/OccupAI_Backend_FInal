@@ -1,2 +1,11 @@
 .env
 .venv311/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local detector/debug artifacts
+yolo_service/debug_*.jpg

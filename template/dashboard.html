@@ -12,43 +12,94 @@
     * { margin: 0; padding: 0; }
 
     :root {
-      --bg: #0a0d12;
-      --shell: #0f141b;
-      --surface: #151b24;
-      --surface-2: #1a222d;
-      --surface-3: #202a36;
-      --border: #2a3544;
-      --border-soft: #202936;
+      --bg: #080b10;
+      --shell: #0d1219;
+      --surface: #131a23;
+      --surface-2: #182231;
+      --surface-3: #202c3b;
+      --border: #2d3a4d;
+      --border-soft: #1f2a38;
       --text: #f4f7fb;
-      --muted: #8b98aa;
-      --muted-2: #657286;
-      --green: #27d497;
-      --green-soft: rgba(39, 212, 151, .12);
-      --blue: #5aa9ff;
-      --blue-soft: rgba(90, 169, 255, .13);
-      --orange: #f4a261;
+      --muted: #97a5b8;
+      --muted-2: #6d7a8d;
+      --green: #32e6ad;
+      --green-soft: rgba(50, 230, 173, .12);
+      --blue: #61adff;
+      --blue-soft: rgba(97, 173, 255, .13);
+      --orange: #ffad66;
       --orange-soft: rgba(244, 162, 97, .14);
       --red: #ff5c7a;
       --red-soft: rgba(255, 92, 122, .13);
       --yellow: #f8d66d;
       --sidebar-w: 248px;
       --radius: 8px;
-      --shadow: 0 18px 55px rgba(0, 0, 0, .28);
+      --shadow: 0 18px 55px rgba(0, 0, 0, .32);
     }
 
     html { color-scheme: dark; }
+
+    body.light-ui {
+      --bg: #d8dde4;
+      --shell: #e6eaf0;
+      --surface: #eef1f5;
+      --surface-2: #dfe5ec;
+      --surface-3: #d2dae4;
+      --border: #aeb9c8;
+      --border-soft: #c3ccd8;
+      --text: #1b2431;
+      --muted: #5f6d7f;
+      --muted-2: #788596;
+      --green-soft: rgba(10, 164, 118, .12);
+      --blue-soft: rgba(41, 128, 220, .13);
+      --orange-soft: rgba(217, 126, 38, .13);
+      --red-soft: rgba(217, 65, 94, .12);
+      --shadow: 0 18px 46px rgba(49, 62, 82, .13);
+      color-scheme: light;
+    }
 
     body {
       min-height: 100vh;
       overflow: hidden;
       display: flex;
       background:
-        linear-gradient(180deg, rgba(90, 169, 255, .06), transparent 35%),
-        linear-gradient(120deg, rgba(39, 212, 151, .05), transparent 42%),
+        linear-gradient(180deg, rgba(97, 173, 255, .055), transparent 34%),
+        linear-gradient(120deg, rgba(50, 230, 173, .045), transparent 40%),
         var(--bg);
       color: var(--text);
       font-family: "DM Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       letter-spacing: 0;
+    }
+
+    body.light-ui {
+      background:
+        linear-gradient(180deg, rgba(97, 173, 255, .12), transparent 36%),
+        linear-gradient(120deg, rgba(50, 230, 173, .09), transparent 40%),
+        var(--bg);
+    }
+
+    body.light-ui .sidebar,
+    body.light-ui .topbar {
+      background: rgba(230, 234, 240, .92);
+    }
+
+    body.light-ui .nav-icon,
+    body.light-ui .user-card,
+    body.light-ui .summary-item,
+    body.light-ui .camera-metric,
+    body.light-ui .zone-stat,
+    body.light-ui .status-chip,
+    body.light-ui .ghost-btn {
+      background: rgba(23, 32, 51, .035);
+    }
+
+    body.light-ui .bar-track,
+    body.light-ui .mini-meter,
+    body.light-ui .compare-track {
+      background: #dfe7f1;
+    }
+
+    body.light-ui .stream-debug {
+      background: rgba(238, 241, 245, .72);
     }
 
     button, input { font: inherit; }
@@ -62,7 +113,7 @@
       width: var(--sidebar-w);
       display: flex;
       flex-direction: column;
-      background: rgba(15, 20, 27, .96);
+      background: rgba(13, 18, 25, .97);
       border-right: 1px solid var(--border-soft);
       box-shadow: 10px 0 35px rgba(0, 0, 0, .16);
     }
@@ -125,10 +176,12 @@
       text-align: left;
       font-size: 14px;
       font-weight: 600;
-      transition: color .16s ease, background .16s ease, border-color .16s ease;
+      outline: none;
+      transition: color .16s ease, background .16s ease, border-color .16s ease, transform .16s ease;
     }
 
-    .nav-item:hover { background: var(--surface); color: var(--text); }
+    .nav-item:hover { background: var(--surface); color: var(--text); transform: translateX(2px); }
+    .nav-item:focus-visible { box-shadow: 0 0 0 3px rgba(97, 173, 255, .2); }
     .nav-item.active {
       color: var(--green);
       background: var(--green-soft);
@@ -196,9 +249,9 @@
       align-items: flex-start;
       justify-content: space-between;
       gap: 18px;
-      padding: 24px 30px 18px;
+      padding: 24px 30px 19px;
       border-bottom: 1px solid rgba(42, 53, 68, .58);
-      background: rgba(10, 13, 18, .6);
+      background: rgba(8, 11, 16, .72);
       backdrop-filter: blur(14px);
     }
 
@@ -237,6 +290,26 @@
       box-shadow: 0 8px 22px rgba(0, 0, 0, .16);
     }
 
+    .status-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 28px;
+      padding: 5px 9px;
+      border: 1px solid var(--border-soft);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, .035);
+      color: var(--muted);
+      font-family: "Space Mono", monospace;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .status-chip.good { color: var(--green); background: var(--green-soft); border-color: rgba(50, 230, 173, .22); }
+    .status-chip.warn { color: var(--orange); background: var(--orange-soft); border-color: rgba(255, 173, 102, .24); }
+    .status-chip.bad { color: var(--red); background: var(--red-soft); border-color: rgba(255, 92, 122, .24); }
+
     .dot {
       width: 8px;
       height: 8px;
@@ -260,10 +333,38 @@
       display: none;
       flex: 1;
       overflow-y: auto;
-      padding: 22px 30px 32px;
+      padding: 24px 30px 34px;
     }
 
     .content.active { display: block; }
+
+    .summary-strip {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .summary-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 58px;
+      padding: 12px 14px;
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, .025);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .summary-item strong {
+      color: var(--text);
+      font-family: "Space Mono", monospace;
+      font-size: 13px;
+      text-align: right;
+    }
 
     .stat-grid {
       display: grid;
@@ -272,18 +373,20 @@
       margin-bottom: 16px;
     }
 
-    .stat-card, .panel-card, .zone-panel, .insight-card {
+    .stat-card, .panel-card, .zone-panel, .insight-card, .insight-summary-card {
       border: 1px solid var(--border-soft);
       border-radius: var(--radius);
-      background: linear-gradient(180deg, rgba(255, 255, 255, .035), rgba(255, 255, 255, .018));
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, .045), rgba(255, 255, 255, .016)),
+        var(--surface);
       box-shadow: 0 12px 32px rgba(0, 0, 0, .16);
     }
 
     .stat-card {
       position: relative;
-      min-height: 134px;
+      min-height: 150px;
       overflow: hidden;
-      padding: 17px;
+      padding: 18px;
     }
 
     .stat-card::after {
@@ -300,6 +403,27 @@
     .stat-card.red { color: var(--red); }
     .stat-card.blue { color: var(--blue); }
     .stat-card.orange { color: var(--orange); }
+
+    .stat-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .stat-icon {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border: 1px solid currentColor;
+      border-radius: var(--radius);
+      background: color-mix(in srgb, currentColor 15%, transparent);
+      font-family: "Space Mono", monospace;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
     .stat-label {
       color: var(--muted);
       font-size: 11px;
@@ -309,7 +433,7 @@
     }
 
     .stat-value {
-      margin-top: 13px;
+      margin-top: 15px;
       color: currentColor;
       font-family: "Space Mono", monospace;
       font-size: 36px;
@@ -319,6 +443,23 @@
 
     .stat-sub { margin-top: 9px; color: var(--muted); font-size: 12px; }
 
+    .stat-meter {
+      overflow: hidden;
+      height: 5px;
+      margin-top: 14px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, .055);
+    }
+
+    .stat-meter span {
+      display: block;
+      width: 0%;
+      height: 100%;
+      border-radius: inherit;
+      background: currentColor;
+      transition: width .45s ease;
+    }
+
     .overview-grid {
       display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(320px, .6fr);
@@ -326,7 +467,14 @@
       align-items: start;
     }
 
-    .panel-card { padding: 18px; margin-bottom: 16px; }
+    .panel-card { min-width: 0; padding: 18px; margin-bottom: 16px; }
+
+    .panel-card.feature {
+      border-color: rgba(50, 230, 173, .18);
+      background:
+        linear-gradient(135deg, rgba(50, 230, 173, .075), rgba(97, 173, 255, .035)),
+        var(--surface);
+    }
 
     .panel-header {
       display: flex;
@@ -339,6 +487,13 @@
     .panel-title { font-size: 15px; font-weight: 700; }
     .panel-note { color: var(--muted); font-size: 12px; }
     .occ-pct { color: var(--green); font-family: "Space Mono", monospace; font-size: 22px; font-weight: 700; }
+
+    .panel-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
 
     .bar-track, .mini-meter, .compare-track {
       overflow: hidden;
@@ -379,8 +534,11 @@
       padding: 12px;
       border: 1px solid var(--border-soft);
       border-radius: var(--radius);
-      background: rgba(90, 169, 255, .055);
+      background: rgba(97, 173, 255, .055);
+      transition: border-color .16s ease, transform .16s ease;
     }
+
+    .pred-card:hover { border-color: rgba(97, 173, 255, .3); transform: translateY(-1px); }
 
     .pred-time { color: var(--muted); font-family: "Space Mono", monospace; font-size: 11px; }
     .pred-val { margin-top: 7px; color: var(--blue); font-family: "Space Mono", monospace; font-size: 20px; font-weight: 700; }
@@ -434,7 +592,7 @@
     .revenue-day.is-today .revenue-day-name { color: var(--green); }
     .revenue-day-value { margin-top: 5px; color: var(--orange); font-family: "Space Mono", monospace; font-size: 11px; font-weight: 700; }
 
-    .refresh-btn, .retry-btn {
+    .refresh-btn, .retry-btn, .ghost-btn {
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -449,7 +607,7 @@
       transition: background .16s ease, border-color .16s ease, color .16s ease, transform .16s ease;
     }
 
-    .refresh-btn:hover, .retry-btn:hover {
+    .refresh-btn:hover, .retry-btn:hover, .ghost-btn:hover {
       border-color: rgba(39, 212, 151, .45);
       background: var(--green-soft);
       color: var(--green);
@@ -457,6 +615,13 @@
     }
 
     .refresh-btn:disabled { cursor: wait; opacity: .65; transform: none; }
+
+    .ghost-btn {
+      min-height: 30px;
+      padding: 6px 10px;
+      background: rgba(255, 255, 255, .035);
+      color: var(--muted);
+    }
 
     .activity-list { display: flex; flex-direction: column; }
     .activity-row {
@@ -486,7 +651,7 @@
 
     .empty-state {
       width: 100%;
-      padding: 28px 12px;
+      padding: 32px 12px;
       color: var(--muted);
       text-align: center;
       font-size: 13px;
@@ -495,19 +660,53 @@
 
     .feed-grid {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 330px;
+      grid-template-columns: minmax(0, 1fr) 340px;
       gap: 16px;
       align-items: start;
+    }
+
+    .stream-shell {
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: #05080c;
+      box-shadow: var(--shadow);
+    }
+
+    .stream-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 50px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border-soft);
+      background: rgba(255, 255, 255, .025);
+    }
+
+    .stream-title {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .stream-title strong { font-size: 13px; }
+    .stream-title span { color: var(--muted); font-family: "Space Mono", monospace; font-size: 11px; }
+
+    .stream-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
     }
 
     .stream-wrap {
       position: relative;
       overflow: hidden;
       aspect-ratio: 16 / 9;
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
       background: #030507;
-      box-shadow: var(--shadow);
     }
 
     .stream-wrap img.mjpeg, .stream-wrap img {
@@ -580,6 +779,120 @@
       font-size: 12px;
     }
 
+    .stream-debug strong {
+      color: var(--text);
+      font-family: "Space Mono", monospace;
+      font-size: 11px;
+    }
+
+    .settings-panel {
+      display: grid;
+      gap: 12px;
+    }
+
+    .setting-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 12px;
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, .025);
+    }
+
+    .setting-copy {
+      min-width: 0;
+    }
+
+    .setting-copy strong {
+      display: block;
+      color: var(--text);
+      font-size: 13px;
+    }
+
+    .setting-copy span {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .toggle-switch {
+      position: relative;
+      width: 48px;
+      height: 28px;
+      flex: 0 0 auto;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--surface-3);
+      transition: background .18s ease, border-color .18s ease;
+    }
+
+    .toggle-switch::after {
+      content: "";
+      position: absolute;
+      top: 4px;
+      left: 4px;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: var(--muted);
+      transition: transform .18s ease, background .18s ease;
+    }
+
+    .toggle-switch.active {
+      border-color: rgba(50, 230, 173, .48);
+      background: var(--green-soft);
+    }
+
+    .toggle-switch.active::after {
+      transform: translateX(20px);
+      background: var(--green);
+    }
+
+    .layout-picker {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 6px;
+      padding: 4px;
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius);
+      background: rgba(0, 0, 0, .16);
+    }
+
+    body.light-ui .layout-picker {
+      background: rgba(23, 32, 51, .045);
+    }
+
+    .layout-btn {
+      min-height: 34px;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--muted);
+      font-family: "Space Mono", monospace;
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      transition: background .16s ease, color .16s ease;
+    }
+
+    .layout-btn:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, .055);
+    }
+
+    .layout-btn.active {
+      color: #06110d;
+      background: linear-gradient(135deg, var(--green), #8ff1cb);
+    }
+
+    .layout-btn:disabled,
+    .toggle-switch:disabled {
+      cursor: wait;
+      opacity: .7;
+    }
+
     .metric-row {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -595,8 +908,22 @@
     .camera-metric span { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .09em; }
     .camera-metric strong { display: block; margin-top: 7px; color: var(--text); font-family: "Space Mono", monospace; font-size: 13px; }
 
-    .zone-panel { padding: 16px; }
+    .zone-panel { position: sticky; top: 18px; padding: 16px; }
     .zone-title { margin-bottom: 12px; font-size: 15px; font-weight: 700; }
+    .zone-summary {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .zone-stat {
+      padding: 10px;
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, .025);
+    }
+    .zone-stat span { display: block; color: var(--muted); font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .1em; }
+    .zone-stat strong { display: block; margin-top: 5px; font-family: "Space Mono", monospace; font-size: 16px; }
     .zone-row {
       display: flex;
       align-items: center;
@@ -618,6 +945,7 @@
     }
     .zone-badge.occ { color: var(--red); background: var(--red-soft); }
     .zone-badge.free { color: var(--green); background: var(--green-soft); }
+    .zone-badge.unknown { color: var(--muted); background: rgba(255, 255, 255, .055); }
 
     .insight-tools {
       display: flex;
@@ -625,6 +953,44 @@
       align-items: center;
       gap: 14px;
       margin-bottom: 16px;
+    }
+
+    .insight-overview {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+
+    .insight-summary-card {
+      padding: 15px;
+      min-height: 106px;
+    }
+
+    .insight-summary-card span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: .1em;
+    }
+
+    .insight-summary-card strong {
+      display: block;
+      margin-top: 10px;
+      color: var(--text);
+      font-family: "Space Mono", monospace;
+      font-size: 24px;
+      line-height: 1.1;
+    }
+
+    .insight-summary-card small {
+      display: block;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
     }
 
     .insight-grid {
@@ -637,6 +1003,7 @@
       position: relative;
       overflow: hidden;
       padding: 18px;
+      min-height: 188px;
     }
 
     .insight-card.action {
@@ -773,7 +1140,8 @@
     @media (max-width: 1120px) {
       .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .overview-grid, .feed-grid { grid-template-columns: 1fr; }
-      .zone-panel { order: -1; }
+      .zone-panel { order: -1; position: static; }
+      .summary-strip, .insight-overview { grid-template-columns: 1fr; }
     }
 
     @media (max-width: 840px) {
@@ -794,6 +1162,8 @@
       .content { padding: 18px; }
       .insight-grid, .metric-row { grid-template-columns: 1fr; }
       .weekday-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .stream-toolbar { align-items: flex-start; flex-direction: column; }
+      .stream-actions { justify-content: flex-start; }
     }
 
     @media (max-width: 560px) {
@@ -802,6 +1172,7 @@
       .page-title { font-size: 22px; }
       .stat-value { font-size: 32px; }
       .insight-tools { align-items: flex-start; flex-direction: column; }
+      .zone-summary { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -860,32 +1231,63 @@
   </header>
 
   <section class="content active" id="content-overview">
+    <div class="summary-strip" aria-label="Operations summary">
+      <div class="summary-item">
+        <span>Camera state</span>
+        <strong id="overviewCameraState">Connecting</strong>
+      </div>
+      <div class="summary-item">
+        <span>Lot pressure</span>
+        <strong id="overviewPressure">Waiting</strong>
+      </div>
+      <div class="summary-item">
+        <span>Last detector update</span>
+        <strong id="overviewLastUpdate">--</strong>
+      </div>
+    </div>
+
     <div class="stat-grid">
       <article class="stat-card green">
-        <div class="stat-label">Free Slots</div>
+        <div class="stat-top">
+          <div class="stat-label">Free Slots</div>
+          <div class="stat-icon" aria-hidden="true">FR</div>
+        </div>
         <div class="stat-value" id="statFree">--</div>
-        <div class="stat-sub">Available right now</div>
+        <div class="stat-sub" id="statFreeSub">Available right now</div>
+        <div class="stat-meter" aria-hidden="true"><span id="freeMeter"></span></div>
       </article>
       <article class="stat-card red">
-        <div class="stat-label">Occupied</div>
+        <div class="stat-top">
+          <div class="stat-label">Occupied</div>
+          <div class="stat-icon" aria-hidden="true">OC</div>
+        </div>
         <div class="stat-value" id="statOcc">--</div>
-        <div class="stat-sub">Cars detected</div>
+        <div class="stat-sub" id="statOccSub">Cars detected</div>
+        <div class="stat-meter" aria-hidden="true"><span id="occMeter"></span></div>
       </article>
       <article class="stat-card blue">
-        <div class="stat-label">Capacity</div>
+        <div class="stat-top">
+          <div class="stat-label">Capacity</div>
+          <div class="stat-icon" aria-hidden="true">CP</div>
+        </div>
         <div class="stat-value" id="statTotal">--</div>
-        <div class="stat-sub">Tracked parking zones</div>
+        <div class="stat-sub" id="statTotalSub">Tracked parking zones</div>
+        <div class="stat-meter" aria-hidden="true"><span id="totalMeter"></span></div>
       </article>
       <article class="stat-card orange">
-        <div class="stat-label">Occupancy Rate</div>
+        <div class="stat-top">
+          <div class="stat-label">Occupancy Rate</div>
+          <div class="stat-icon" aria-hidden="true">%</div>
+        </div>
         <div class="stat-value" id="statRate">--%</div>
-        <div class="stat-sub">Share of total capacity</div>
+        <div class="stat-sub" id="statRateSub">Share of total capacity</div>
+        <div class="stat-meter" aria-hidden="true"><span id="rateMeter"></span></div>
       </article>
     </div>
 
     <div class="overview-grid">
       <div>
-        <section class="panel-card">
+        <section class="panel-card feature">
           <div class="panel-header">
             <span class="panel-title">Live Occupancy</span>
             <span class="occ-pct" id="occPct">0%</span>
@@ -923,7 +1325,10 @@
       <section class="panel-card">
         <div class="panel-header">
           <span class="panel-title">Recent Activity</span>
-          <button class="refresh-btn" onclick="fetchHistory()">Refresh</button>
+          <div class="panel-actions">
+            <span class="status-chip" id="activityCount">0 events</span>
+            <button class="refresh-btn" onclick="fetchHistory()" aria-label="Refresh recent activity">Refresh</button>
+          </div>
         </div>
         <div class="activity-list" id="activityList">
           <div class="empty-state">
@@ -938,29 +1343,43 @@
   <section class="content" id="content-livefeed">
     <div class="feed-grid">
       <div>
-        <div class="stream-wrap">
-          <img
-            id="streamImg"
-            class="mjpeg"
-            src="/api/stream"
-            alt="Live parking feed"
-            onerror="onStreamError(this)"
-            onload="onStreamLoad(this)"
-          />
-          <div class="stream-placeholder" id="streamPlaceholder" style="display:none">
-            <div class="camera-mark">CAM</div>
-            <div id="streamStatusMsg">Connecting to /api/stream...</div>
-            <div class="mono" style="font-size:11px;color:var(--muted)">Start detector.py if the feed is offline.</div>
+        <div class="stream-shell">
+          <div class="stream-toolbar">
+            <div class="stream-title">
+              <strong>Primary detection camera</strong>
+              <span id="streamEndpointLabel">/api/stream</span>
+            </div>
+            <div class="stream-actions">
+              <span class="status-chip warn" id="streamInlineStatus">Connecting</span>
+              <button class="ghost-btn" onclick="openFullscreen()" aria-label="Open camera feed fullscreen">Fullscreen</button>
+              <button class="retry-btn" onclick="retryStream()" aria-label="Retry camera stream">Retry</button>
+            </div>
           </div>
-          <div class="stream-badge" id="streamBadge" style="display:none">
-            <div class="bdot"></div> LIVE
+
+          <div class="stream-wrap" id="streamWrap">
+            <img
+              id="streamImg"
+              class="mjpeg"
+              src="/api/stream"
+              alt="Live parking feed"
+              onerror="onStreamError(this)"
+              onload="onStreamLoad(this)"
+            />
+            <div class="stream-placeholder" id="streamPlaceholder" style="display:none">
+              <div class="camera-mark">CAM</div>
+              <div id="streamStatusMsg">Connecting to /api/stream...</div>
+              <div class="mono" style="font-size:11px;color:var(--muted)">Start detector.py if the feed is offline.</div>
+            </div>
+            <div class="stream-badge" id="streamBadge" style="display:none">
+              <div class="bdot"></div> LIVE
+            </div>
           </div>
         </div>
 
         <div class="stream-debug">
-          <span>Source: <code style="color:var(--blue)">/api/stream</code></span>
+          <span>Source: <strong>/api/stream</strong></span>
           <span id="snapStatus" style="color:var(--muted)">connecting...</span>
-          <button class="retry-btn" onclick="retryStream()">Retry</button>
+          <span id="streamLastSeen" class="mono">Last seen --</span>
         </div>
 
         <section class="panel-card" style="margin-top:14px">
@@ -975,10 +1394,47 @@
             <div class="camera-metric"><span>Status</span><strong id="camStatus" style="color:var(--green)">--</strong></div>
           </div>
         </section>
+
+        <section class="panel-card settings-panel" style="margin-top:14px">
+          <div class="panel-header">
+            <span class="panel-title">Settings</span>
+            <span class="status-chip" id="layoutStatus">Layout --</span>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-copy">
+              <strong>Gray UI</strong>
+              <span id="themeModeLabel">Off</span>
+            </div>
+            <button class="toggle-switch" id="themeToggle" onclick="toggleTheme()" aria-label="Toggle gray UI" aria-pressed="false"></button>
+          </div>
+
+          <div class="setting-row" style="align-items:stretch;flex-direction:column">
+            <div class="setting-copy">
+              <strong>Parking Layout</strong>
+              <span id="layoutModeHint">Detector applies changes on the next cycle.</span>
+            </div>
+            <div class="layout-picker" id="layoutPicker" aria-label="Parking layout">
+              <button class="layout-btn" data-mode="NORMAL" onclick="setLayoutMode('NORMAL')">Normal</button>
+              <button class="layout-btn" data-mode="BUSY" onclick="setLayoutMode('BUSY')">Busy</button>
+              <button class="layout-btn" data-mode="HIGH" onclick="setLayoutMode('HIGH')">High</button>
+            </div>
+          </div>
+        </section>
       </div>
 
       <aside class="zone-panel">
         <div class="zone-title">Zone Status</div>
+        <div class="zone-summary">
+          <div class="zone-stat">
+            <span>Free</span>
+            <strong id="zoneFreeCount">--</strong>
+          </div>
+          <div class="zone-stat">
+            <span>Occupied</span>
+            <strong id="zoneOccCount">--</strong>
+          </div>
+        </div>
         <div id="zoneList">
           <div class="empty-state">
             <strong>No zones yet</strong>
@@ -996,9 +1452,27 @@
         <div class="page-sub">Plain-English predictions from your trained models</div>
       </div>
       <div>
-        <button class="refresh-btn" onclick="forceRefreshInsights()">Refresh</button>
+        <button class="refresh-btn" onclick="forceRefreshInsights()" aria-label="Refresh AI insights">Refresh</button>
         <div class="insight-ts" id="insightTs">--</div>
       </div>
+    </div>
+
+    <div class="insight-overview" aria-label="AI insight summary">
+      <article class="insight-summary-card">
+        <span>Current load</span>
+        <strong id="insSummaryLoad">--</strong>
+        <small id="insSummaryLoadSub">Waiting for detector state.</small>
+      </article>
+      <article class="insight-summary-card">
+        <span>Forecast peak</span>
+        <strong id="insSummaryPeak">--</strong>
+        <small id="insSummaryPeakSub">Next 6-hour prediction window.</small>
+      </article>
+      <article class="insight-summary-card">
+        <span>AI rate</span>
+        <strong id="insSummaryPrice">--</strong>
+        <small id="insSummaryPriceSub">Compared with PHP 25 flat rate.</small>
+      </article>
     </div>
 
     <section class="insight-card action" id="ins-action-card">
@@ -1149,6 +1623,83 @@ const PANEL_META = {
   }
 };
 
+const THEME_KEY = 'occupai_theme';
+const LAYOUT_MODES = ['NORMAL', 'BUSY', 'HIGH'];
+
+function applyTheme(mode) {
+  const light = mode === 'light';
+  document.body.classList.toggle('light-ui', light);
+  document.documentElement.style.colorScheme = light ? 'light' : 'dark';
+  const toggle = document.getElementById('themeToggle');
+  const label = document.getElementById('themeModeLabel');
+  if (toggle) {
+    toggle.classList.toggle('active', light);
+    toggle.setAttribute('aria-pressed', String(light));
+  }
+  if (label) label.textContent = light ? 'On' : 'Off';
+}
+
+function initTheme() {
+  applyTheme(localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark');
+}
+
+function toggleTheme() {
+  const next = document.body.classList.contains('light-ui') ? 'dark' : 'light';
+  localStorage.setItem(THEME_KEY, next);
+  applyTheme(next);
+}
+
+function setLayoutUi(mode, pending) {
+  const normalized = LAYOUT_MODES.includes(String(mode).toUpperCase()) ? String(mode).toUpperCase() : 'NORMAL';
+  document.querySelectorAll('.layout-btn').forEach(btn => {
+    const active = btn.dataset.mode === normalized;
+    btn.classList.toggle('active', active);
+    btn.disabled = Boolean(pending);
+  });
+  const status = document.getElementById('layoutStatus');
+  if (status) {
+    status.textContent = pending ? 'Saving...' : `Layout ${normalized}`;
+    status.className = 'status-chip ' + (normalized === 'HIGH' ? 'bad' : normalized === 'BUSY' ? 'warn' : 'good');
+  }
+}
+
+async function fetchLayoutMode() {
+  try {
+    const r = await fetch('/api/settings/layout-mode');
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    setLayoutUi(d.mode || 'NORMAL', false);
+  } catch (e) {
+    const status = document.getElementById('layoutStatus');
+    if (status) {
+      status.textContent = 'Layout error';
+      status.className = 'status-chip bad';
+    }
+  }
+}
+
+async function setLayoutMode(mode) {
+  const normalized = String(mode).toUpperCase();
+  if (!LAYOUT_MODES.includes(normalized)) return;
+  setLayoutUi(normalized, true);
+  try {
+    const r = await fetch('/api/settings/layout-mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: normalized })
+    });
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    setLayoutUi(d.mode || normalized, false);
+    const hint = document.getElementById('layoutModeHint');
+    if (hint) hint.textContent = 'Saved. Detector updates within about 30 seconds.';
+  } catch (e) {
+    setLayoutUi(normalized, false);
+    const hint = document.getElementById('layoutModeHint');
+    if (hint) hint.textContent = 'Could not save layout mode.';
+  }
+}
+
 function switchPanel(name, btn) {
   document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
@@ -1171,9 +1722,15 @@ function cleanText(value) {
     .trim() || '--';
 }
 
+function setText(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = value;
+}
+
 function setConnected(ok) {
   document.getElementById('connDot').className = 'dot ' + (ok ? 'live' : 'error');
   document.getElementById('connLabel').textContent = ok ? 'Live' : 'Disconnected';
+  setText('overviewCameraState', ok ? 'Live' : 'Offline');
 }
 
 async function fetchStats() {
@@ -1191,6 +1748,19 @@ async function fetchStats() {
     document.getElementById('statOcc').textContent = occupied;
     document.getElementById('statFree').textContent = free;
     document.getElementById('statRate').textContent = Math.round(pct) + '%';
+    setText('statFreeSub', total ? `${free} of ${total} spaces available` : 'Waiting for detector data');
+    setText('statOccSub', total ? `${occupied} cars in tracked spaces` : 'No cars detected yet');
+    setText('statTotalSub', total ? `${Object.keys(d.zones || {}).length || total} tracked zones` : 'Camera has not reported capacity');
+    setText('statRateSub', pct >= 90 ? 'Lot is near full' : pct >= 70 ? 'Demand is rising' : 'Share of total capacity');
+
+    const freeMeter = document.getElementById('freeMeter');
+    const occMeter = document.getElementById('occMeter');
+    const totalMeter = document.getElementById('totalMeter');
+    const rateMeter = document.getElementById('rateMeter');
+    if (freeMeter) freeMeter.style.width = total && free > 0 ? `${Math.max(2, free / total * 100)}%` : '0%';
+    if (occMeter) occMeter.style.width = total && occupied > 0 ? `${Math.max(2, occupied / total * 100)}%` : '0%';
+    if (totalMeter) totalMeter.style.width = total ? '100%' : '0%';
+    if (rateMeter) rateMeter.style.width = `${Math.min(100, Math.max(0, pct))}%`;
 
     const bar = document.getElementById('occBar');
     bar.style.width = Math.min(pct, 100) + '%';
@@ -1203,15 +1773,21 @@ async function fetchStats() {
     }
     document.getElementById('camZones').textContent = total;
     document.getElementById('camOcc').textContent = occupied + ' / ' + total;
-    document.getElementById('camStatus').textContent = d.lot_full ? 'FULL' : 'OK';
-    document.getElementById('camStatus').style.color = d.lot_full ? 'var(--red)' : 'var(--green)';
+    const detectorOnline = Boolean(d.timestamp) || Number(d.fps) > 0 || total > 0;
+    document.getElementById('camStatus').textContent = !detectorOnline ? 'WAITING' : d.lot_full ? 'FULL' : 'OK';
+    document.getElementById('camStatus').style.color = !detectorOnline ? 'var(--orange)' : d.lot_full ? 'var(--red)' : 'var(--green)';
 
     renderZones(d.zones || {}, total, occupied);
 
-    document.getElementById('updatedAt').textContent = 'Updated ' + new Date().toLocaleTimeString();
+    const updateLabel = d.timestamp ? cleanText(d.timestamp).replace(/^\d{4}-\d{2}-\d{2}\s*/, '') : new Date().toLocaleTimeString();
+    document.getElementById('updatedAt').textContent = 'Updated ' + updateLabel;
+    setText('overviewLastUpdate', updateLabel);
+    setText('overviewPressure', total === 0 ? 'Waiting' : pct >= 90 ? 'Critical' : pct >= 70 ? 'Busy' : pct >= 35 ? 'Moderate' : 'Open');
     setConnected(true);
+    setText('overviewCameraState', detectorOnline ? 'Detector live' : 'Waiting');
   } catch (e) {
     setConnected(false);
+    setText('overviewPressure', 'Unknown');
   }
 }
 
@@ -1222,11 +1798,14 @@ async function fetchHistory() {
     const data = await r.json();
     const items = Array.isArray(data) ? data : (data.history || []);
     renderHistory(items);
-  } catch (e) {}
+  } catch (e) {
+    setText('activityCount', 'Error');
+  }
 }
 
 function renderHistory(items) {
   const list = document.getElementById('activityList');
+  setText('activityCount', `${items && items.length ? items.length : 0} events`);
   if (!items || items.length === 0) {
     list.innerHTML = '<div class="empty-state"><strong>No activity recorded yet</strong>Detection updates will show here.</div>';
     return;
@@ -1310,8 +1889,12 @@ const ZONE_COLORS = ['#27d497', '#5aa9ff', '#f4a261', '#f8d66d', '#a78bfa', '#ff
 function renderZones(zones, total, occupied) {
   const list = document.getElementById('zoneList');
   const entries = Object.entries(zones);
+  const freeCountEl = document.getElementById('zoneFreeCount');
+  const occCountEl = document.getElementById('zoneOccCount');
 
   if (entries.length === 0) {
+    if (freeCountEl) freeCountEl.textContent = total > 0 ? Math.max(0, total - occupied) : '--';
+    if (occCountEl) occCountEl.textContent = total > 0 ? occupied : '--';
     if (total > 0) {
       list.innerHTML = `
         <div class="zone-row">
@@ -1325,12 +1908,22 @@ function renderZones(zones, total, occupied) {
     return;
   }
 
-  list.innerHTML = entries.map(([name, isOccupied], i) => `
-    <div class="zone-row">
-      <div class="zone-dot" style="background:${ZONE_COLORS[i % ZONE_COLORS.length]}"></div>
-      <span class="zone-name">${name}</span>
-      <span class="zone-badge ${isOccupied ? 'occ' : 'free'}">${isOccupied ? 'Occupied' : 'Free'}</span>
-    </div>`).join('');
+  const occZones = entries.filter(([, value]) => value === true).length;
+  const freeZones = entries.filter(([, value]) => value === false).length;
+  if (freeCountEl) freeCountEl.textContent = freeZones;
+  if (occCountEl) occCountEl.textContent = occZones;
+
+  list.innerHTML = entries.map(([name, isOccupied], i) => {
+    const known = typeof isOccupied === 'boolean';
+    const cls = known ? (isOccupied ? 'occ' : 'free') : 'unknown';
+    const label = known ? (isOccupied ? 'Occupied' : 'Free') : 'Unknown';
+    return `
+      <div class="zone-row">
+        <div class="zone-dot" style="background:${ZONE_COLORS[i % ZONE_COLORS.length]}"></div>
+        <span class="zone-name">${name}</span>
+        <span class="zone-badge ${cls}">${label}</span>
+      </div>`;
+  }).join('');
 }
 
 function clampPct(v) {
@@ -1386,6 +1979,8 @@ function renderStatusVisual(stats) {
   const occKpi = document.getElementById('insOccKpi');
   if (freeKpi) freeKpi.textContent = total ? `${free}/${total}` : '--';
   if (occKpi) occKpi.textContent = total ? `${occupied}/${total}` : '--';
+  setText('insSummaryLoad', total ? `${Math.round(pct)}%` : '--');
+  setText('insSummaryLoadSub', total ? `${free} free, ${occupied} occupied` : 'Waiting for detector state.');
 }
 
 function renderTrendVisual(historyItems) {
@@ -1414,6 +2009,8 @@ function renderForecastVisual(predictions) {
   const peak = next.reduce((a, b) => b.pct > a.pct ? b : a, next[0] || { hour: nowH, pct: 0 });
   const label = document.getElementById('insForecastPeak');
   if (label) label.textContent = `${hourLabel24(peak.hour)} ${Math.round(peak.pct)}%`;
+  setText('insSummaryPeak', `${hourLabel24(peak.hour)}`);
+  setText('insSummaryPeakSub', `${Math.round(peak.pct)}% expected occupancy in the next 6 hours.`);
 }
 
 function extractRecommendedPrice(text) {
@@ -1437,6 +2034,8 @@ function renderPricingVisual(pricingText) {
     priceBar.style.background = ai > flat ? 'var(--red)' : ai < flat ? 'var(--green)' : 'var(--orange)';
   }
   if (priceValue) priceValue.textContent = `PHP ${Math.round(ai)}`;
+  setText('insSummaryPrice', `PHP ${Math.round(ai)}`);
+  setText('insSummaryPriceSub', ai > flat ? `PHP ${Math.round(ai - flat)} above flat rate.` : ai < flat ? `PHP ${Math.round(flat - ai)} below flat rate.` : 'Matches the flat rate.');
 }
 
 function renderPeakVisual(hourlyByDay) {
@@ -1530,6 +2129,12 @@ function onStreamLoad(img) {
   document.getElementById('streamBadge').style.display = 'flex';
   document.getElementById('snapStatus').textContent = 'Live';
   document.getElementById('snapStatus').style.color = 'var(--green)';
+  const inline = document.getElementById('streamInlineStatus');
+  if (inline) {
+    inline.textContent = 'Live';
+    inline.className = 'status-chip good';
+  }
+  setText('streamLastSeen', 'Last seen ' + new Date().toLocaleTimeString());
 }
 
 function onStreamError(img) {
@@ -1537,6 +2142,11 @@ function onStreamError(img) {
   document.getElementById('streamBadge').style.display = 'none';
   document.getElementById('snapStatus').textContent = 'Stream offline';
   document.getElementById('snapStatus').style.color = 'var(--red)';
+  const inline = document.getElementById('streamInlineStatus');
+  if (inline) {
+    inline.textContent = 'Offline';
+    inline.className = 'status-chip bad';
+  }
   _streamRetries++;
   if (!_streamTimer) {
     _streamTimer = setTimeout(() => {
@@ -1554,8 +2164,20 @@ function retryStream() {
   img.src = '/api/stream?t=' + Date.now();
   document.getElementById('snapStatus').textContent = 'Retrying...';
   document.getElementById('snapStatus').style.color = 'var(--muted)';
+  const inline = document.getElementById('streamInlineStatus');
+  if (inline) {
+    inline.textContent = 'Retrying';
+    inline.className = 'status-chip warn';
+  }
 }
 
+function openFullscreen() {
+  const wrap = document.getElementById('streamWrap');
+  if (wrap && wrap.requestFullscreen) wrap.requestFullscreen().catch(() => {});
+}
+
+initTheme();
+fetchLayoutMode();
 fetchStats();
 fetchHistory();
 fetchPredictions();
@@ -1563,6 +2185,7 @@ fetchPredictions();
 setInterval(fetchStats, 3000);
 setInterval(fetchHistory, 5000);
 setInterval(fetchPredictions, 30000);
+setInterval(fetchLayoutMode, 30000);
 </script>
 </body>
 </html>
