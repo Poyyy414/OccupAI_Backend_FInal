@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OccupAI - Driver View</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    * { margin: 0; padding: 0; }
+
+    :root {
+      --bg: #07100d;
+      --surface: rgba(241, 245, 249, .92);
+      --surface-2: rgba(255, 255, 255, .72);
+      --ink: #14202c;
+      --muted: #607086;
+      --muted-2: #8794a6;
+      --line: rgba(150, 165, 185, .48);
+      --green: #22c996;
+      --green-dark: #0f9f73;
+      --green-soft: rgba(34, 201, 150, .14);
+      --blue: #4f8fe8;
+      --orange: #f4a261;
+      --red: #ff5c7a;
+      --shadow: 0 24px 80px rgba(23, 32, 45, .22);
+      --radius: 8px;
+    }
+
+    body {
+      min-height: 100vh;
+      color: var(--ink);
+      font-family: "DM Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+      background:
+        linear-gradient(115deg, rgba(5, 12, 9, .60), rgba(5, 12, 9, .08) 46%, rgba(5, 12, 9, .68)),
+        linear-gradient(180deg, rgba(255,255,255,.62), rgba(210,218,228,.88)),
+        url("https://images.unsplash.com/photo-1506521781263-d8422e82f27a?auto=format&fit=crop&w=2000&q=80");
+      background-size: cover;
+      background-position: center;
+      background-attachment: fixed;
+    }
+
+    button { font: inherit; border: 0; cursor: pointer; }
+    .mono { font-family: "Space Mono", ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .icon { width: 18px; height: 18px; stroke: currentColor; stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; flex: 0 0 auto; }
+
+    .page {
+      width: min(1160px, calc(100% - 32px));
+      min-height: 100vh;
+      margin: 0 auto;
+      padding: 22px 0 34px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    .topbar {
+      min-height: 72px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 16px;
+      border: 1px solid rgba(255,255,255,.55);
+      border-radius: var(--radius);
+      background: rgba(241, 245, 249, .78);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 42px;
+      height: 42px;
+      border-radius: var(--radius);
+      background: linear-gradient(135deg, #45e3af, #98f4d3);
+      color: #06110d;
+      font-family: "Space Mono", monospace;
+      font-weight: 800;
+      box-shadow: 0 14px 32px rgba(32, 201, 151, .26);
+    }
+
+    .brand-name { font-size: 19px; font-weight: 800; }
+    .brand-meta { margin-top: 2px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .13em; }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .chip, .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 36px;
+      padding: 8px 12px;
+      border: 1px solid rgba(150, 165, 185, .58);
+      border-radius: var(--radius);
+      background: rgba(255,255,255,.58);
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 800;
+      text-decoration: none;
+      box-shadow: 0 8px 20px rgba(23,32,45,.08);
+    }
+
+    .btn {
+      color: var(--ink);
+      transition: transform .16s ease, border-color .16s ease, background .16s ease;
+    }
+
+    .btn:hover { transform: translateY(-1px); border-color: rgba(34,201,150,.55); background: white; }
+    .admin-link { display: none; }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--muted-2);
+      box-shadow: 0 0 0 5px rgba(131, 144, 162, .12);
+    }
+
+    .dot.online { background: var(--green); box-shadow: 0 0 0 5px rgba(32, 201, 151, .16); }
+    .dot.full { background: var(--red); box-shadow: 0 0 0 5px rgba(255, 92, 122, .14); }
+
+    .driver-hero {
+      position: relative;
+      overflow: hidden;
+      min-height: 178px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: end;
+      gap: 18px;
+      padding: 24px;
+      border: 1px solid rgba(255,255,255,.48);
+      border-radius: var(--radius);
+      background:
+        linear-gradient(110deg, rgba(241,245,249,.92), rgba(241,245,249,.54) 52%, rgba(34,201,150,.18)),
+        rgba(241,245,249,.72);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+    }
+
+    .driver-hero::after {
+      content: "";
+      position: absolute;
+      right: -80px;
+      top: -70px;
+      width: 250px;
+      height: 250px;
+      border-radius: 50%;
+      background: rgba(34, 201, 150, .16);
+      pointer-events: none;
+    }
+
+    .hero-copy { position: relative; z-index: 1; }
+    .eyebrow {
+      color: var(--green-dark);
+      font-family: "Space Mono", monospace;
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: .16em;
+    }
+
+    h1 {
+      max-width: 700px;
+      margin-top: 9px;
+      font-size: clamp(34px, 5vw, 64px);
+      line-height: .95;
+      font-weight: 800;
+    }
+
+    .hero-copy p {
+      margin-top: 12px;
+      max-width: 610px;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.55;
+    }
+
+    .hero-badge {
+      position: relative;
+      z-index: 1;
+      min-width: 190px;
+      padding: 14px;
+      border: 1px solid rgba(150, 165, 185, .42);
+      border-radius: var(--radius);
+      background: rgba(255,255,255,.58);
+    }
+
+    .hero-badge span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: .1em;
+    }
+
+    .hero-badge strong {
+      display: block;
+      margin-top: 7px;
+      font-size: 17px;
+      line-height: 1.2;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(320px, .75fr);
+      gap: 16px;
+      align-items: stretch;
+    }
+
+    .card {
+      border: 1px solid rgba(255,255,255,.52);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      backdrop-filter: blur(18px);
+    }
+
+    .card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    .card-body { padding: 22px; }
+
+    .availability {
+      min-height: 430px;
+      display: flex;
+      flex-direction: column;
+      background:
+        linear-gradient(135deg, rgba(34, 201, 150, .18), transparent 48%),
+        var(--surface);
+    }
+
+    .label {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .availability-main {
+      display: grid;
+      grid-template-columns: minmax(0, .82fr) minmax(260px, .7fr);
+      gap: 20px;
+      align-items: end;
+    }
+
+    .big-number {
+      margin-top: 10px;
+      font-family: "Space Mono", ui-monospace, monospace;
+      font-size: clamp(82px, 12vw, 160px);
+      line-height: .86;
+      font-weight: 800;
+      color: var(--green-dark);
+      letter-spacing: 0;
+      text-shadow: 0 18px 42px rgba(34, 201, 150, .22);
+    }
+
+    .big-sub {
+      margin-top: 14px;
+      color: var(--ink);
+      font-size: clamp(24px, 3vw, 36px);
+      line-height: 1.05;
+      font-weight: 800;
+    }
+
+    .detail-line {
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.55;
+    }
+
+    .space-map {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      padding: 14px;
+      border: 1px solid rgba(150, 165, 185, .42);
+      border-radius: var(--radius);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.7), rgba(255,255,255,.28)),
+        rgba(255,255,255,.42);
+    }
+
+    .space-cell {
+      display: grid;
+      place-items: center;
+      aspect-ratio: 1.55 / 1;
+      border: 1px solid rgba(34, 201, 150, .48);
+      border-radius: 6px;
+      color: var(--green-dark);
+      background: rgba(34, 201, 150, .13);
+      font-family: "Space Mono", monospace;
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .space-cell.busy {
+      border-color: rgba(255, 92, 122, .55);
+      color: #c63350;
+      background: rgba(255, 92, 122, .12);
+    }
+
+    .space-cell.extra {
+      border-style: dashed;
+      opacity: .5;
+    }
+
+    .meters {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 22px;
+    }
+
+    .metric {
+      min-height: 82px;
+      padding: 12px;
+      border: 1px solid rgba(150, 165, 185, .45);
+      border-radius: var(--radius);
+      background: rgba(255,255,255,.48);
+    }
+
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: .1em;
+    }
+
+    .metric strong {
+      display: block;
+      margin-top: 10px;
+      font-family: "Space Mono", monospace;
+      font-size: 20px;
+      color: var(--ink);
+    }
+
+    .side-stack {
+      display: grid;
+      gap: 16px;
+    }
+
+    .price-value {
+      margin-top: 10px;
+      font-family: "Space Mono", ui-monospace, monospace;
+      font-size: clamp(48px, 7vw, 84px);
+      line-height: 1;
+      font-weight: 800;
+      color: var(--ink);
+    }
+
+    .price-unit {
+      color: var(--muted);
+      font-size: 19px;
+      font-weight: 800;
+    }
+
+    .discount-box {
+      margin-top: 14px;
+      padding: 12px;
+      border: 1px solid rgba(34, 201, 150, .34);
+      border-radius: var(--radius);
+      background: rgba(34, 201, 150, .10);
+    }
+
+    .discount-label {
+      color: var(--green-dark);
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: .1em;
+    }
+
+    .discount-price {
+      margin-top: 5px;
+      color: var(--ink);
+      font-family: "Space Mono", ui-monospace, monospace;
+      font-size: 22px;
+      font-weight: 800;
+    }
+
+    .discount-note {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .gcash-section {
+      margin-top: 18px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+    }
+    .gcash-section label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .gcash-select {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      font: inherit;
+      font-size: 14px;
+      background: #fff;
+      margin-bottom: 10px;
+    }
+    .gcash-btn {
+      width: 100%;
+      padding: 14px;
+      border-radius: var(--radius);
+      font-weight: 700;
+      font-size: 15px;
+      color: #fff;
+      background: #007dfe;
+      transition: background .15s;
+    }
+    .gcash-btn:hover { background: #0066d4; }
+    .gcash-btn:disabled { opacity: .5; cursor: not-allowed; }
+    .gcash-status {
+      margin-top: 8px;
+      font-size: 12px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    .bar {
+      position: relative;
+      height: 12px;
+      margin-top: 18px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #cbd3dd;
+      box-shadow: inset 0 0 0 1px rgba(23, 32, 45, .05);
+    }
+
+    .bar-fill {
+      width: 0%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--green), #73e8c2);
+      transition: width .3s ease, background .3s ease;
+    }
+
+    .lot-status {
+      margin-top: 18px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .quick-card {
+      padding: 18px;
+    }
+
+    .quick-card h2 {
+      font-size: 16px;
+      line-height: 1.2;
+      margin-bottom: 12px;
+    }
+
+    .quick-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .quick-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 11px;
+      border: 1px solid rgba(150, 165, 185, .42);
+      border-radius: var(--radius);
+      background: rgba(255,255,255,.46);
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .quick-item strong {
+      display: block;
+      color: var(--ink);
+      font-size: 13px;
+      line-height: 1.25;
+    }
+
+    .footer-strip {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .error {
+      display: none;
+      padding: 12px 14px;
+      border: 1px solid rgba(255, 92, 122, .3);
+      border-radius: var(--radius);
+      background: rgba(255, 92, 122, .12);
+      color: #a82e46;
+      font-size: 14px;
+      font-weight: 800;
+      backdrop-filter: blur(16px);
+    }
+
+    @media (max-width: 900px) {
+      .page { width: min(100% - 20px, 1160px); padding-top: 10px; }
+      .topbar, .driver-hero { align-items: flex-start; grid-template-columns: 1fr; flex-direction: column; }
+      .actions { width: 100%; justify-content: space-between; }
+      .hero { grid-template-columns: 1fr; }
+      .availability { min-height: 330px; }
+      .availability-main { grid-template-columns: 1fr; }
+      .space-map { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .meters { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 520px) {
+      .card-body, .driver-hero { padding: 18px; }
+      .big-number { font-size: 82px; }
+      .price-value { font-size: 54px; }
+      .chip, .btn { width: 100%; justify-content: center; }
+      .actions { gap: 8px; }
+      .space-map { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <svg width="0" height="0" aria-hidden="true" focusable="false" style="position:absolute">
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+    <symbol id="i-car" viewBox="0 0 24 24"><path d="M6 17h12"/><path d="M6 17v2"/><path d="M18 17v2"/><path d="M4 13l2-5a3 3 0 0 1 2.8-2h6.4A3 3 0 0 1 18 8l2 5"/><path d="M5 13h14a2 2 0 0 1 2 2v2H3v-2a2 2 0 0 1 2-2Z"/><path d="M7 15h.01"/><path d="M17 15h.01"/></symbol>
+    <symbol id="i-wallet" viewBox="0 0 24 24"><path d="M4 7h16a2 2 0 0 1 2 2v10H4a2 2 0 0 1-2-2V5a2 2 0 0 0 2 2Z"/><path d="M18 13h4"/><path d="M18 13a1 1 0 1 0 0 .01"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-log-out" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></symbol>
+    <symbol id="i-map" viewBox="0 0 24 24"><path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3V6Z"/><path d="M9 3v15"/><path d="M15 6v15"/></symbol>
+    <symbol id="i-route" viewBox="0 0 24 24"><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M8 19h3a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h7"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 20 6v6c0 5-3.4 8.4-8 9-4.6-.6-8-4-8-9V6l8-3Z"/><path d="m9 12 2 2 4-5"/></symbol>
+  </svg>
+
+  <main class="page">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">AI</div>
+        <div>
+          <div class="brand-name">OccupAI</div>
+          <div class="brand-meta">Driver parking view</div>
+        </div>
+      </div>
+      <div class="actions">
+        <div class="chip" id="liveChip"><span class="dot" id="statusDot"></span><span id="statusText">Checking...</span></div>
+        <a class="btn admin-link" id="adminLink" href="/dashboard"><svg class="icon" aria-hidden="true"><use href="#i-grid"></use></svg>Admin</a>
+        <button class="btn" type="button" onclick="signOut()"><svg class="icon" aria-hidden="true"><use href="#i-log-out"></use></svg>Sign out</button>
+      </div>
+    </header>
+
+    <div class="driver-hero">
+      <div class="hero-copy">
+        <div class="eyebrow">105 Penafrancia Ave</div>
+        <h1 id="driverHeroTitle">Find a parking space before you arrive.</h1>
+        <p id="routeAdvice">OccupAI checks the live parking camera and shows the current availability and rate for drivers.</p>
+      </div>
+      <div class="hero-badge">
+        <span>Driver</span>
+        <strong id="driverName">Driver</strong>
+      </div>
+    </div>
+
+    <div class="error" id="errorBox"></div>
+
+    <section class="hero">
+      <article class="card availability">
+        <div class="card-head">
+          <span><svg class="icon" aria-hidden="true"><use href="#i-car"></use></svg> Availability now</span>
+          <span id="lastUpdate">--</span>
+        </div>
+        <div class="card-body">
+          <div class="availability-main">
+            <div>
+              <div class="label">Open parking spaces</div>
+              <div class="big-number" id="availableNumber">--</div>
+              <div class="big-sub" id="availableSub">Checking parking area</div>
+              <p class="detail-line" id="availabilityDetail">Waiting for live occupancy.</p>
+            </div>
+
+            <div>
+              <div class="label" style="margin-bottom:10px">Parking layout</div>
+              <div class="space-map" id="spaceMap" aria-label="Parking space preview"></div>
+            </div>
+          </div>
+
+          <div class="meters">
+            <div class="metric"><span>Total spaces</span><strong id="totalSpaces">--</strong></div>
+            <div class="metric"><span>Occupied</span><strong id="occupiedSpaces">--</strong></div>
+            <div class="metric"><span>Occupancy</span><strong id="occupancyPct">--</strong></div>
+          </div>
+        </div>
+      </article>
+
+      <div class="side-stack">
+        <article class="card">
+          <div class="card-head">
+            <span><svg class="icon" aria-hidden="true"><use href="#i-wallet"></use></svg> Parking rate</span>
+            <span>Live price</span>
+          </div>
+          <div class="card-body">
+            <div class="label">Current price</div>
+            <div class="price-value">PHP <span id="priceValue">--</span></div>
+            <div class="price-unit">per hour</div>
+            <div class="discount-box">
+              <div class="discount-label">PWD / Senior discount</div>
+              <div class="discount-price">PHP <span id="discountPriceValue">--</span> / hr</div>
+              <div class="discount-note" id="discountNote">20% off the active parking rate.</div>
+            </div>
+            <p class="detail-line" id="priceNote">Checking current rate.</p>
+
+            <div class="gcash-section" id="gcashSection" style="display:none">
+              <label>Discount</label>
+              <select class="gcash-select" id="gcashDiscount">
+                <option value="none">None</option>
+                <option value="pwd">PWD (20% off)</option>
+                <option value="senior">Senior (20% off)</option>
+              </select>
+              <button class="gcash-btn" id="gcashBtn" onclick="payWithGcash()">
+                Pay with GCash
+              </button>
+              <div class="gcash-status" id="gcashStatus"></div>
+            </div>
+
+            <div class="bar"><div class="bar-fill" id="occupancyBar"></div></div>
+            <div class="lot-status">
+              <svg class="icon" aria-hidden="true"><use href="#i-clock"></use></svg>
+              <span id="generatedAt">--</span>
+            </div>
+          </div>
+          <div class="footer-strip">
+            <span class="mono">105 Penafrancia Ave</span>
+            <span class="mono">Open daily</span>
+          </div>
+        </article>
+
+        <article class="card quick-card">
+          <h2>Before you go</h2>
+          <div class="quick-list">
+            <div class="quick-item">
+              <svg class="icon" aria-hidden="true"><use href="#i-route"></use></svg>
+              <div><strong>Check availability first</strong><span id="quickAvailability">Waiting for live data.</span></div>
+            </div>
+            <div class="quick-item">
+              <svg class="icon" aria-hidden="true"><use href="#i-map"></use></svg>
+              <div><strong>Location</strong><span>105 Penafrancia Ave, Naga City</span></div>
+            </div>
+            <div class="quick-item">
+              <svg class="icon" aria-hidden="true"><use href="#i-shield"></use></svg>
+              <div><strong>Driver view only</strong><span>Only availability and rate are shown here.</span></div>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const ADMIN_ROLES = ['admin'];
+    const user = getUser();
+    if (!user) {
+      window.location.href = '/login';
+    } else {
+      hydrateUser(user);
+      renderSpaceMap(0, null, null);
+      fetchSummary();
+      setInterval(fetchSummary, 3000);
+    }
+
+    function getUser() {
+      try {
+        const raw = localStorage.getItem('occupai_user');
+        if (!raw || raw === 'undefined' || raw === 'null') return null;
+        const parsed = JSON.parse(raw);
+        return parsed && parsed.user_id ? parsed : null;
+      } catch (e) {
+        localStorage.removeItem('occupai_user');
+        return null;
+      }
+    }
+
+    function hydrateUser(u) {
+      const displayName = u.full_name || ((u.first_name || '') + ' ' + (u.last_name || '')).trim() || u.email || 'Driver';
+      document.getElementById('driverName').textContent = displayName;
+      if (ADMIN_ROLES.includes(String(u.role || '').toLowerCase())) {
+        document.getElementById('adminLink').style.display = 'inline-flex';
+      }
+    }
+
+    async function fetchSummary() {
+      try {
+        const res = await fetch('/api/driver/summary', { cache: 'no-store' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || data.error || 'Could not load parking status.');
+        updateSummary(data);
+        showError('');
+      } catch (e) {
+        showError(e.message);
+        setLiveState(false, false, 'Offline');
+      }
+    }
+
+    function updateSummary(data) {
+      const total = Number(data.total || 0);
+      const available = data.available;
+      const occupied = data.occupied;
+      const pct = data.occupancy_pct === null || data.occupancy_pct === undefined ? null : Number(data.occupancy_pct);
+
+      document.getElementById('availableNumber').textContent = available === null || available === undefined ? '--' : available;
+      document.getElementById('totalSpaces').textContent = total || '--';
+      document.getElementById('occupiedSpaces').textContent = occupied === null || occupied === undefined ? '--' : occupied;
+      document.getElementById('occupancyPct').textContent = pct === null ? '--' : Math.round(pct) + '%';
+      document.getElementById('priceValue').textContent = formatPrice(data.price_php);
+      document.getElementById('discountPriceValue').textContent = formatPrice(data.pwd_senior_price_php);
+      document.getElementById('discountNote').textContent = data.pwd_senior_note || 'PWD and senior citizens get 20% off the active parking rate.';
+      document.getElementById('priceNote').textContent = data.price_note || 'Current parking rate.';
+      document.getElementById('generatedAt').textContent = data.generated_at_ph ? 'Updated ' + data.generated_at_ph.slice(11, 16) : '--';
+      document.getElementById('lastUpdate').textContent = data.last_update ? 'Live ' + data.last_update.slice(11, 16) : 'No live update';
+
+      const online = !!data.camera_online;
+      const full = !!data.lot_full || (online && available === 0);
+      setLiveState(online, full, full ? 'Full' : (online ? 'Live' : 'Waiting'));
+
+      const bar = document.getElementById('occupancyBar');
+      const width = pct === null ? 0 : Math.max(0, Math.min(100, pct));
+      bar.style.width = width + '%';
+      bar.style.background = full ? 'linear-gradient(90deg, #ff5c7a, #ff8ba0)' : (width >= 70 ? 'linear-gradient(90deg, #f4a261, #ffd19d)' : 'linear-gradient(90deg, #20c997, #73e8c2)');
+
+      renderSpaceMap(total, available, occupied);
+
+      if (!online) {
+        document.getElementById('driverHeroTitle').textContent = 'Waiting for live parking data.';
+        document.getElementById('availableSub').textContent = 'Waiting for live update';
+        document.getElementById('availabilityDetail').textContent = 'Parking availability will show once the camera sends data.';
+        document.getElementById('routeAdvice').textContent = 'Keep this page open. It refreshes automatically when the camera updates.';
+        document.getElementById('quickAvailability').textContent = 'Availability will appear once the camera connects.';
+      } else if (full) {
+        document.getElementById('driverHeroTitle').textContent = 'Parking is full right now.';
+        document.getElementById('availableSub').textContent = 'No spaces available';
+        document.getElementById('availabilityDetail').textContent = '0 available out of ' + total + ' spaces.';
+        document.getElementById('routeAdvice').textContent = 'Consider waiting before entering the parking area.';
+        document.getElementById('quickAvailability').textContent = 'The lot is currently full.';
+      } else {
+        document.getElementById('driverHeroTitle').textContent = 'There are spaces available.';
+        document.getElementById('availableSub').textContent = 'Spaces available';
+        document.getElementById('availabilityDetail').textContent = available + ' available out of ' + total + ' spaces.';
+        document.getElementById('routeAdvice').textContent = 'You can head to the lot. This page refreshes every few seconds.';
+        document.getElementById('quickAvailability').textContent = available + ' space' + (available === 1 ? ' is' : 's are') + ' currently open.';
+      }
+    }
+
+    function renderSpaceMap(total, available, occupied) {
+      const map = document.getElementById('spaceMap');
+      if (!map) return;
+      const count = total > 0 ? Math.min(total, 24) : 12;
+      const busyCount = Number.isFinite(Number(occupied)) ? Math.min(Number(occupied), count) : 0;
+      let html = '';
+      for (let i = 0; i < count; i++) {
+        const busy = i < busyCount;
+        html += '<div class="space-cell ' + (busy ? 'busy' : '') + '">S' + (i + 1) + '</div>';
+      }
+      if (total > count) {
+        html += '<div class="space-cell extra">+' + (total - count) + '</div>';
+      }
+      map.innerHTML = html;
+    }
+
+    function formatPrice(value) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return '--';
+      return n.toLocaleString('en-PH', { maximumFractionDigits: n % 1 ? 2 : 0 });
+    }
+
+    function setLiveState(online, full, text) {
+      const dot = document.getElementById('statusDot');
+      dot.className = 'dot' + (full ? ' full' : online ? ' online' : '');
+      document.getElementById('statusText').textContent = text;
+    }
+
+    function showError(message) {
+      const box = document.getElementById('errorBox');
+      if (!message) {
+        box.style.display = 'none';
+        box.textContent = '';
+        return;
+      }
+      box.textContent = message;
+      box.style.display = 'block';
+    }
+
+    function signOut() {
+      localStorage.removeItem('occupai_user');
+      fetch('/auth/logout', { method: 'POST' }).catch(() => {});
+      window.location.href = '/login';
+    }
+
+    (async function checkGcash() {
+      try {
+        const r = await fetch('/api/gcash/status');
+        const d = await r.json();
+        if (d.enabled) {
+          document.getElementById('gcashSection').style.display = '';
+        }
+      } catch (e) {}
+    })();
+
+    async function payWithGcash() {
+      const btn = document.getElementById('gcashBtn');
+      const status = document.getElementById('gcashStatus');
+      const priceText = document.getElementById('priceValue')?.textContent;
+      const price = Number(String(priceText).replace(/,/g, ''));
+      if (!Number.isFinite(price) || price < 1) {
+        status.textContent = 'Waiting for price to load.';
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = 'Redirecting to GCash...';
+      status.textContent = '';
+
+      try {
+        const r = await fetch('/api/gcash/create-checkout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            amount_php: price,
+            discount_type: document.getElementById('gcashDiscount')?.value || 'none',
+            description: 'OccupAI Parking - ' + (document.getElementById('driverName')?.textContent || 'Driver'),
+          })
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || 'Could not create checkout');
+        window.location.href = d.checkout_url;
+      } catch (e) {
+        status.textContent = e.message || 'Payment failed. Try again.';
+        btn.disabled = false;
+        btn.textContent = 'Pay with GCash';
+      }
+    }
+  </script>
+</body>
+</html>

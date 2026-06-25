@@ -75,11 +75,18 @@ YOLO_ASYNC  = _eb("YOLO_ASYNC", True)
 YOLO_INTERVAL = max(0.05, _ef("YOLO_INTERVAL", 0.35))
 JPEG_Q      = _ei("JPEG_Q",      42)
 PUSH_EVERY  = _ei("PUSH_EVERY",  60)
+PUSH_MIN_INTERVAL = max(0.2, _ef("PUSH_MIN_INTERVAL", 0.75))
 CONF_THRESH = _ef("CONF_THRESH", 0.15)
 IOU_THRESH  = _ef("IOU_THRESH",  0.15)
 ASSIGN_MIN_OVERLAP = _ef("ASSIGN_MIN_OVERLAP", 0.18)
 DEDUPE_IOU_THRESH  = _ef("DEDUPE_IOU_THRESH",  0.35)
 DRAW_DETECTOR_BOXES = _eb("DRAW_DETECTOR_BOXES", False)
+TOY_ONLY_DETECTION = _eb("TOY_ONLY_DETECTION", True)
+USE_BG_OCCUPANCY = _eb("USE_BG_OCCUPANCY", False)
+YOLO_VEHICLE_CLASS_IDS = {
+    int(v.strip()) for v in os.getenv("YOLO_VEHICLE_CLASS_IDS", "2,3,5,7").split(",")
+    if v.strip().isdigit()
+}
 
 SLOT_CORNER_RADIUS = max(0, _ei("SLOT_CORNER_RADIUS", 14))
 EXCLUDED_SLOTS     = _es("EXCLUDED_SLOTS")
@@ -93,6 +100,9 @@ FG_MAX_AREA_F  = _ef("FG_MAX_AREA_FRAC", 0.1800)
 
 TOY_MIN_F = _ef("TOY_MIN_AREA_FRAC", 0.0008)
 TOY_MAX_F = _ef("TOY_MAX_AREA_FRAC", 0.10)
+TOY_MIN_FILL_RATIO = _ef("TOY_MIN_FILL_RATIO", 0.22)
+TOY_MIN_W = _ei("TOY_MIN_W", 12)
+TOY_MIN_H = _ei("TOY_MIN_H", 12)
 TOY_COLOR_RANGES = [
     (np.array([35,  100,  80]), np.array([85,  255, 255])),
     (np.array([90,  100,  80]), np.array([130, 255, 255])),
@@ -318,9 +328,12 @@ def dedupe_boxes(boxes):
             kept.append(box)
     return kept
 
-def assign_occupancy(zones, fg, boxes):
+def assign_occupancy(zones, fg, boxes, use_bg=False):
     zone_status = {name: False for name in zones}
-    candidates = dedupe_boxes(list(boxes or []) + foreground_boxes(fg))
+    raw_boxes = list(boxes or [])
+    if use_bg:
+        raw_boxes += foreground_boxes(fg)
+    candidates = dedupe_boxes(raw_boxes)
 
     for box in candidates:
         best_name = None
@@ -333,7 +346,7 @@ def assign_occupancy(zones, fg, boxes):
         if best_name and best_score >= ASSIGN_MIN_OVERLAP:
             zone_status[best_name] = True
 
-    if not candidates:
+    if use_bg and not candidates:
         zone_status = {name: occ_bg(zone, fg) for name, zone in zones.items()}
 
     return zone_status, candidates
@@ -353,6 +366,11 @@ def find_toy_boxes(frame):
         ca=cv2.contourArea(cnt)
         if not(fa*TOY_MIN_F<ca<fa*TOY_MAX_F): continue
         x,y,bw,bh=cv2.boundingRect(cnt)
+        if bw<TOY_MIN_W or bh<TOY_MIN_H:
+            continue
+        fill=np.count_nonzero(mask[y:y+bh,x:x+bw])/max(1,bw*bh)
+        if fill<TOY_MIN_FILL_RATIO:
+            continue
         if 0.20<bw/max(bh,1)<5.0:
             boxes.append([x,y,x+bw,y+bh])
     return boxes
@@ -362,9 +380,16 @@ def yolo_boxes(model, frame):
     out=[]
     if res.boxes is not None:
         for r in res.boxes:
-            if float(r.conf[0])>CONF_THRESH:
-                x1,y1,x2,y2=map(int,r.xyxy[0])
-                out.append([x1,y1,x2,y2])
+            if float(r.conf[0]) <= CONF_THRESH:
+                continue
+            try:
+                cls_id = int(r.cls[0])
+                if YOLO_VEHICLE_CLASS_IDS and cls_id not in YOLO_VEHICLE_CLASS_IDS:
+                    continue
+            except Exception:
+                pass
+            x1,y1,x2,y2=map(int,r.xyxy[0])
+            out.append([x1,y1,x2,y2])
     return out
 
 
@@ -519,7 +544,7 @@ def detector_worker(model, in_q, result, stop_event):
         except queue.Empty:
             continue
         try:
-            yolo_b = yolo_boxes(model, frame)
+            yolo_b = [] if TOY_ONLY_DETECTION else yolo_boxes(model, frame)
             toy_b = find_toy_boxes(frame)
             with result["lock"]:
                 result["yolo"] = yolo_b
@@ -608,10 +633,14 @@ def push_to_backend(occupied,free,total,pct,fps,zone_status,snapshot_frame):
 def detection_loop():
     global _stream_frame, _cam_ok
 
-    print("[yolo] Loading YOLOv8n...")
-    model=YOLO("yolov8n.pt")
-    model(np.zeros((FEED_H,FEED_W,3),dtype=np.uint8),imgsz=IMGSZ,verbose=False)
-    print(f"[yolo] Ready  imgsz={IMGSZ}  conf≥{CONF_THRESH}  async={YOLO_ASYNC}")
+    model=None
+    if TOY_ONLY_DETECTION:
+        print("[detector] Toy-only mode enabled; YOLO object detection is skipped.")
+    else:
+        print("[yolo] Loading YOLOv8n...")
+        model=YOLO("yolov8n.pt")
+        model(np.zeros((FEED_H,FEED_W,3),dtype=np.uint8),imgsz=IMGSZ,verbose=False)
+        print(f"[yolo] Ready  imgsz={IMGSZ}  conf≥{CONF_THRESH}  async={YOLO_ASYNC}")
 
     cap=cv2.VideoCapture(WEBCAM_IDX,cv2.CAP_DSHOW)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, FEED_W)
@@ -677,6 +706,9 @@ def detection_loop():
     fps_t=time.time(); fps_n=0; fps_val=0.0
     prev_gray=None; rescanning=False; rewarming=False
     last_check_t=time.time(); last_n_slots=len(slot_state.active_slots)
+    last_push_t=0.0
+    last_sent_total=None
+    last_sent_zones={}
 
     while True:
         try: frame=_cam_q.get(timeout=0.1)
@@ -757,7 +789,7 @@ def detection_loop():
                 yolo_b = list(det_result["yolo"])
                 toy_b = list(det_result["toy"])
         elif frame_idx%YOLO_SKIP==0 and cam_ok and not rescanning and not rewarming:
-            yolo_b=yolo_boxes(model,frame)
+            yolo_b=[] if TOY_ONLY_DETECTION else yolo_boxes(model,frame)
             toy_b=find_toy_boxes(frame)
 
         # ── Active slots (AI may have updated) ────────────────────────────────
@@ -770,8 +802,10 @@ def detection_loop():
 
         # ── Occupancy ─────────────────────────────────────────────────────────
         if cam_ok and not rescanning and not rewarming and active:
-            all_b=yolo_b+toy_b
-            zone_status, assigned_boxes = assign_occupancy(active, fg, all_b)
+            all_b = toy_b if TOY_ONLY_DETECTION else (yolo_b + toy_b)
+            zone_status, assigned_boxes = assign_occupancy(
+                active, fg, all_b, use_bg=USE_BG_OCCUPANCY
+            )
         else:
             zone_status={name:False for name in active}
             assigned_boxes=[]
@@ -798,7 +832,16 @@ def detection_loop():
 
         with _stream_lock: _stream_frame=ann
 
-        if frame_idx%PUSH_EVERY==0:
+        zones_changed = (
+            n_slots != last_sent_total or
+            dict(zone_status) != last_sent_zones
+        )
+        periodic_due = frame_idx%PUSH_EVERY==0
+        quick_due = zones_changed and (now-last_push_t)>=PUSH_MIN_INTERVAL
+        if periodic_due or quick_due:
+            last_push_t=now
+            last_sent_total=n_slots
+            last_sent_zones=dict(zone_status)
             threading.Thread(target=push_to_backend,
                 args=(occupied,free,n_slots,pct,round(fps_val,1),zone_status,ann.copy()),
                 daemon=True).start()

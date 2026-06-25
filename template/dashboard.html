@@ -12,13 +12,13 @@
     * { margin: 0; padding: 0; }
 
     :root {
-      --bg: #080b10;
-      --shell: #0d1219;
-      --surface: #131a23;
-      --surface-2: #182231;
-      --surface-3: #202c3b;
-      --border: #2d3a4d;
-      --border-soft: #1f2a38;
+      --bg: #06100c;
+      --shell: #07130f;
+      --surface: #101b17;
+      --surface-2: #14231d;
+      --surface-3: #1b2d25;
+      --border: #2b443a;
+      --border-soft: #1d332b;
       --text: #f4f7fb;
       --muted: #97a5b8;
       --muted-2: #6d7a8d;
@@ -33,7 +33,8 @@
       --yellow: #f8d66d;
       --sidebar-w: 248px;
       --radius: 8px;
-      --shadow: 0 18px 55px rgba(0, 0, 0, .32);
+      --shadow: 0 22px 65px rgba(0, 0, 0, .38);
+      --glass: rgba(16, 27, 23, .72);
     }
 
     html { color-scheme: dark; }
@@ -54,6 +55,7 @@
       --orange-soft: rgba(217, 126, 38, .13);
       --red-soft: rgba(217, 65, 94, .12);
       --shadow: 0 18px 46px rgba(49, 62, 82, .13);
+      --glass: rgba(238, 241, 245, .84);
       color-scheme: light;
     }
 
@@ -62,8 +64,10 @@
       overflow: hidden;
       display: flex;
       background:
-        linear-gradient(180deg, rgba(97, 173, 255, .055), transparent 34%),
-        linear-gradient(120deg, rgba(50, 230, 173, .045), transparent 40%),
+        radial-gradient(800px 420px at 72% -12%, rgba(50, 230, 173, .16), transparent 58%),
+        radial-gradient(680px 540px at 3% 12%, rgba(50, 230, 173, .10), transparent 58%),
+        linear-gradient(180deg, rgba(97, 173, 255, .045), transparent 34%),
+        linear-gradient(120deg, rgba(50, 230, 173, .06), transparent 40%),
         var(--bg);
       color: var(--text);
       font-family: "DM Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -106,6 +110,20 @@
     button { border: 0; cursor: pointer; }
     code, .mono { font-family: "Space Mono", ui-monospace, SFMono-Regular, Consolas, monospace; }
 
+    .icon {
+      width: 16px;
+      height: 16px;
+      flex: 0 0 auto;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      fill: none;
+    }
+
+    .icon-sm { width: 14px; height: 14px; }
+    .icon-lg { width: 18px; height: 18px; }
+
     .sidebar {
       position: fixed;
       inset: 0 auto 0 0;
@@ -113,9 +131,12 @@
       width: var(--sidebar-w);
       display: flex;
       flex-direction: column;
-      background: rgba(13, 18, 25, .97);
+      background:
+        linear-gradient(180deg, rgba(50, 230, 173, .08), transparent 22%),
+        rgba(7, 19, 15, .96);
       border-right: 1px solid var(--border-soft);
       box-shadow: 10px 0 35px rgba(0, 0, 0, .16);
+      backdrop-filter: blur(18px);
     }
 
     .logo {
@@ -184,8 +205,10 @@
     .nav-item:focus-visible { box-shadow: 0 0 0 3px rgba(97, 173, 255, .2); }
     .nav-item.active {
       color: var(--green);
-      background: var(--green-soft);
-      box-shadow: inset 0 0 0 1px rgba(39, 212, 151, .18);
+      background:
+        linear-gradient(90deg, rgba(50, 230, 173, .18), rgba(255, 255, 255, .04)),
+        var(--green-soft);
+      box-shadow: inset 0 0 0 1px rgba(39, 212, 151, .26), 0 12px 28px rgba(0, 0, 0, .16);
     }
 
     .nav-icon {
@@ -196,9 +219,6 @@
       border-radius: 6px;
       background: rgba(255, 255, 255, .04);
       color: currentColor;
-      font-family: "Space Mono", monospace;
-      font-size: 11px;
-      font-weight: 700;
     }
 
     .sidebar-footer {
@@ -250,9 +270,11 @@
       justify-content: space-between;
       gap: 18px;
       padding: 24px 30px 19px;
-      border-bottom: 1px solid rgba(42, 53, 68, .58);
-      background: rgba(8, 11, 16, .72);
-      backdrop-filter: blur(14px);
+      border-bottom: 1px solid rgba(50, 230, 173, .13);
+      background:
+        linear-gradient(90deg, rgba(50, 230, 173, .08), transparent 56%),
+        rgba(6, 16, 12, .78);
+      backdrop-filter: blur(18px);
     }
 
     .eyebrow {
@@ -281,13 +303,14 @@
       gap: 8px;
       min-height: 34px;
       padding: 7px 12px;
-      border: 1px solid var(--border);
+      border: 1px solid rgba(50, 230, 173, .18);
       border-radius: 999px;
-      background: var(--surface);
+      background: rgba(16, 27, 23, .78);
       color: var(--text);
       font-family: "Space Mono", monospace;
       font-size: 12px;
       box-shadow: 0 8px 22px rgba(0, 0, 0, .16);
+      backdrop-filter: blur(12px);
     }
 
     .status-chip {
@@ -352,11 +375,21 @@
       gap: 12px;
       min-height: 58px;
       padding: 12px 14px;
-      border: 1px solid var(--border-soft);
+      border: 1px solid rgba(50, 230, 173, .13);
       border-radius: var(--radius);
-      background: rgba(255, 255, 255, .025);
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, .055), rgba(255, 255, 255, .018)),
+        rgba(16, 27, 23, .7);
       color: var(--muted);
       font-size: 12px;
+      box-shadow: 0 12px 34px rgba(0, 0, 0, .16);
+    }
+
+    .summary-item > span {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
     }
 
     .summary-item strong {
@@ -368,18 +401,19 @@
 
     .stat-grid {
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(5, minmax(0, 1fr));
       gap: 14px;
       margin-bottom: 16px;
     }
 
     .stat-card, .panel-card, .zone-panel, .insight-card, .insight-summary-card {
-      border: 1px solid var(--border-soft);
+      border: 1px solid rgba(50, 230, 173, .12);
       border-radius: var(--radius);
       background:
-        linear-gradient(180deg, rgba(255, 255, 255, .045), rgba(255, 255, 255, .016)),
-        var(--surface);
-      box-shadow: 0 12px 32px rgba(0, 0, 0, .16);
+        linear-gradient(180deg, rgba(255, 255, 255, .06), rgba(255, 255, 255, .018)),
+        var(--glass);
+      box-shadow: 0 16px 44px rgba(0, 0, 0, .20);
+      backdrop-filter: blur(14px);
     }
 
     .stat-card {
@@ -387,6 +421,18 @@
       min-height: 150px;
       overflow: hidden;
       padding: 18px;
+    }
+
+    .stat-card::before {
+      content: "";
+      position: absolute;
+      inset: -40% -40% auto auto;
+      width: 140px;
+      height: 140px;
+      border-radius: 50%;
+      background: currentColor;
+      opacity: .10;
+      filter: blur(2px);
     }
 
     .stat-card::after {
@@ -404,6 +450,30 @@
     .stat-card.blue { color: var(--blue); }
     .stat-card.orange { color: var(--orange); }
 
+    .stat-card.green {
+      background:
+        linear-gradient(145deg, rgba(50, 230, 173, .14), rgba(16, 27, 23, .74) 55%),
+        var(--glass);
+    }
+
+    .stat-card.red {
+      background:
+        linear-gradient(145deg, rgba(255, 92, 122, .12), rgba(16, 27, 23, .74) 55%),
+        var(--glass);
+    }
+
+    .stat-card.blue {
+      background:
+        linear-gradient(145deg, rgba(97, 173, 255, .13), rgba(16, 27, 23, .74) 55%),
+        var(--glass);
+    }
+
+    .stat-card.orange {
+      background:
+        linear-gradient(145deg, rgba(255, 173, 102, .13), rgba(16, 27, 23, .74) 55%),
+        var(--glass);
+    }
+
     .stat-top {
       display: flex;
       align-items: flex-start;
@@ -419,9 +489,7 @@
       border: 1px solid currentColor;
       border-radius: var(--radius);
       background: color-mix(in srgb, currentColor 15%, transparent);
-      font-family: "Space Mono", monospace;
-      font-size: 12px;
-      font-weight: 800;
+      box-shadow: inset 0 0 16px color-mix(in srgb, currentColor 10%, transparent);
     }
 
     .stat-label {
@@ -436,9 +504,10 @@
       margin-top: 15px;
       color: currentColor;
       font-family: "Space Mono", monospace;
-      font-size: 36px;
+      font-size: 38px;
       font-weight: 700;
       line-height: .95;
+      text-shadow: 0 0 18px color-mix(in srgb, currentColor 30%, transparent);
     }
 
     .stat-sub { margin-top: 9px; color: var(--muted); font-size: 12px; }
@@ -470,10 +539,10 @@
     .panel-card { min-width: 0; padding: 18px; margin-bottom: 16px; }
 
     .panel-card.feature {
-      border-color: rgba(50, 230, 173, .18);
+      border-color: rgba(50, 230, 173, .28);
       background:
-        linear-gradient(135deg, rgba(50, 230, 173, .075), rgba(97, 173, 255, .035)),
-        var(--surface);
+        linear-gradient(135deg, rgba(50, 230, 173, .12), rgba(97, 173, 255, .04)),
+        var(--glass);
     }
 
     .panel-header {
@@ -592,10 +661,200 @@
     .revenue-day.is-today .revenue-day-name { color: var(--green); }
     .revenue-day-value { margin-top: 5px; color: var(--orange); font-family: "Space Mono", monospace; font-size: 11px; font-weight: 700; }
 
+    .revenue-dashboard {
+      margin-top: 18px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border-soft);
+    }
+
+    .revenue-page .revenue-dashboard {
+      margin-top: 0;
+      padding-top: 0;
+      border-top: 0;
+    }
+
+    .revenue-kpis {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .revenue-kpi {
+      min-width: 0;
+      padding: 12px;
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, .025);
+    }
+
+    .revenue-kpi span {
+      display: block;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: .1em;
+    }
+
+    .revenue-kpi strong {
+      display: block;
+      margin-top: 7px;
+      color: var(--orange);
+      font-family: "Space Mono", monospace;
+      font-size: 18px;
+    }
+
+    .revenue-kpi small {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .revenue-bars {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      align-items: end;
+      gap: 8px;
+      min-height: 130px;
+      padding: 12px;
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius);
+      background: rgba(0, 0, 0, .14);
+    }
+
+    .revenue-bar-item {
+      display: grid;
+      grid-template-rows: 1fr auto auto;
+      align-items: end;
+      gap: 6px;
+      min-width: 0;
+      height: 106px;
+      text-align: center;
+    }
+
+    .revenue-bar-track {
+      position: relative;
+      align-self: stretch;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, .065);
+    }
+
+    .revenue-bar-fill {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: var(--bar-pct, 0%);
+      width: 100%;
+      min-height: 4px;
+      border-radius: inherit;
+      background: linear-gradient(180deg, var(--orange), var(--green));
+    }
+
+    .revenue-bar-label,
+    .revenue-bar-value {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .revenue-bar-label { color: var(--muted); font-size: 10px; font-weight: 800; }
+    .revenue-bar-value { color: var(--text); font-family: "Space Mono", monospace; font-size: 10px; }
+
+    .monthly-revenue-grid {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .payment-form {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr)) auto;
+      gap: 8px;
+      margin-bottom: 14px;
+      padding: 12px;
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, .025);
+    }
+
+    .payment-form label {
+      display: grid;
+      gap: 5px;
+      min-width: 0;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+
+    .payment-input {
+      min-height: 34px;
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius);
+      outline: 0;
+      background: rgba(0, 0, 0, .18);
+      color: var(--text);
+      font: inherit;
+      font-size: 12px;
+    }
+
+    .payment-status {
+      grid-column: 1 / -1;
+      min-height: 16px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .payment-list {
+      display: grid;
+      gap: 6px;
+      margin-top: 10px;
+    }
+
+    .payment-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 9px 10px;
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, .025);
+    }
+
+    .payment-row strong {
+      color: var(--text);
+      font-size: 12px;
+    }
+
+    .payment-row span {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .payment-amount {
+      color: var(--green);
+      font-family: "Space Mono", monospace;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
     .refresh-btn, .retry-btn, .ghost-btn {
       display: inline-flex;
       align-items: center;
       justify-content: center;
+      gap: 7px;
       min-height: 34px;
       padding: 8px 12px;
       border: 1px solid var(--border);
@@ -693,6 +952,16 @@
 
     .stream-title strong { font-size: 13px; }
     .stream-title span { color: var(--muted); font-family: "Space Mono", monospace; font-size: 11px; }
+
+    .title-with-icon,
+    .panel-title,
+    .zone-title,
+    .insight-label,
+    .revenue-title {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
 
     .stream-actions {
       display: flex;
@@ -801,12 +1070,37 @@
       background: rgba(255, 255, 255, .025);
     }
 
+    .layout-head-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+    }
+
+    .layout-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      flex: 0 0 auto;
+    }
+
+    .layout-toggle-label {
+      color: var(--muted);
+      font-family: "Space Mono", monospace;
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+
     .setting-copy {
       min-width: 0;
     }
 
     .setting-copy strong {
-      display: block;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
       color: var(--text);
       font-size: 13px;
     }
@@ -859,6 +1153,12 @@
       border: 1px solid var(--border-soft);
       border-radius: var(--radius);
       background: rgba(0, 0, 0, .16);
+      transition: opacity .18s ease, filter .18s ease;
+    }
+
+    .layout-picker.disabled {
+      opacity: .48;
+      filter: grayscale(.35);
     }
 
     body.light-ui .layout-picker {
@@ -891,6 +1191,70 @@
     .toggle-switch:disabled {
       cursor: wait;
       opacity: .7;
+    }
+
+    .layout-picker.disabled .layout-btn {
+      cursor: not-allowed;
+    }
+
+    .price-setting-controls {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .price-input-wrap {
+      display: inline-flex;
+      align-items: center;
+      min-height: 36px;
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius);
+      background: rgba(0, 0, 0, .16);
+      overflow: hidden;
+    }
+
+    body.light-ui .price-input-wrap {
+      background: rgba(23, 32, 51, .045);
+    }
+
+    .price-input-wrap span {
+      padding: 0 10px;
+      color: var(--muted);
+      font-family: "Space Mono", monospace;
+      font-size: 11px;
+      font-weight: 800;
+      border-right: 1px solid var(--border-soft);
+    }
+
+    .price-input {
+      width: 96px;
+      min-height: 36px;
+      padding: 8px 10px;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--text);
+      font-family: "Space Mono", monospace;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .setting-save-btn {
+      min-height: 36px;
+      padding: 8px 12px;
+      border-radius: var(--radius);
+      background: linear-gradient(135deg, var(--green), #8ff1cb);
+      color: #06110d;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .setting-save-btn:disabled,
+    .price-input:disabled {
+      cursor: wait;
+      opacity: .68;
     }
 
     .metric-row {
@@ -968,7 +1332,9 @@
     }
 
     .insight-summary-card span {
-      display: block;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
       color: var(--muted);
       font-size: 11px;
       font-weight: 800;
@@ -1142,6 +1508,7 @@
       .overview-grid, .feed-grid { grid-template-columns: 1fr; }
       .zone-panel { order: -1; position: static; }
       .summary-strip, .insight-overview { grid-template-columns: 1fr; }
+      .payment-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
 
     @media (max-width: 840px) {
@@ -1160,23 +1527,46 @@
       .topbar { position: relative; flex-direction: column; padding: 20px 18px 16px; }
       .topbar-status { align-items: flex-start; min-width: 0; }
       .content { padding: 18px; }
-      .insight-grid, .metric-row { grid-template-columns: 1fr; }
-      .weekday-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .insight-grid, .metric-row, .revenue-kpis { grid-template-columns: 1fr; }
+      .weekday-grid, .monthly-revenue-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .payment-form { grid-template-columns: 1fr; }
       .stream-toolbar { align-items: flex-start; flex-direction: column; }
       .stream-actions { justify-content: flex-start; }
     }
 
     @media (max-width: 560px) {
-      .stat-grid, .pred-grid { grid-template-columns: 1fr; }
+      .stat-grid, .pred-grid, .revenue-bars { grid-template-columns: 1fr; }
+      .revenue-bar-item { grid-template-columns: 56px 1fr 76px; grid-template-rows: none; height: auto; text-align: left; align-items: center; }
+      .revenue-bar-track { height: 10px; }
+      .revenue-bar-fill { top: 0; right: auto; height: 100%; width: var(--bar-pct, 0%); min-height: 0; }
       .activity-row { grid-template-columns: 1fr; gap: 5px; }
       .page-title { font-size: 22px; }
       .stat-value { font-size: 32px; }
       .insight-tools { align-items: flex-start; flex-direction: column; }
       .zone-summary { grid-template-columns: 1fr; }
     }
-  </style>
+</style>
 </head>
 <body>
+<svg aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden">
+  <symbol id="i-dashboard" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="8" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="15" width="7" height="6" rx="1.5"/></symbol>
+  <symbol id="i-video" viewBox="0 0 24 24"><path d="M15 10.5 21 7v10l-6-3.5"/><rect x="3" y="6" width="12" height="12" rx="2"/></symbol>
+  <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="m12 3 1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8L12 3Z"/><path d="m19 14 .9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9L19 14Z"/><path d="m5 13 .7 1.6L7 15l-1.3.4L5 17l-.7-1.6L3 15l1.3-.4L5 13Z"/></symbol>
+  <symbol id="i-parking" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="M9 17V7h4.2a3.2 3.2 0 1 1 0 6.4H9"/><path d="M9 13.4h4.2"/></symbol>
+  <symbol id="i-car" viewBox="0 0 24 24"><path d="m5 12 2-5h10l2 5"/><path d="M5 12h14v6H5z"/><circle cx="8" cy="18" r="1.5"/><circle cx="16" cy="18" r="1.5"/><path d="M7 12V9h10v3"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+  <symbol id="i-gauge" viewBox="0 0 24 24"><path d="M4 14a8 8 0 0 1 16 0"/><path d="M12 14l4-4"/><path d="M6 18h12"/><path d="M8 14h.01"/><path d="M16 14h.01"/></symbol>
+  <symbol id="i-activity" viewBox="0 0 24 24"><path d="M3 12h4l2-7 4 14 2-7h6"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 16v-5"/><path d="M12 16V8"/><path d="M16 16v-9"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 1-13.7 5.6"/><path d="M4 12A8 8 0 0 1 17.7 6.4"/><path d="M17 2v5h5"/><path d="M7 22v-5H2"/></symbol>
+  <symbol id="i-maximize" viewBox="0 0 24 24"><path d="M8 3H3v5"/><path d="M16 3h5v5"/><path d="M21 16v5h-5"/><path d="M3 16v5h5"/></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 7h3l2-2h6l2 2h3v12H4z"/><circle cx="12" cy="13" r="3.5"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z"/><path d="M19.4 15a8 8 0 0 0 .1-1l2-1.5-2-3.5-2.4 1a7.8 7.8 0 0 0-1.7-1L15 6.5h-4L10.6 9a7.8 7.8 0 0 0-1.7 1l-2.4-1-2 3.5L6.5 14a8 8 0 0 0 .1 1l-2.1 1.5 2 3.5 2.4-1a7.8 7.8 0 0 0 1.7 1l.4 2.5h4l.4-2.5a7.8 7.8 0 0 0 1.7-1l2.4 1 2-3.5L19.4 15Z"/></symbol>
+  <symbol id="i-palette" viewBox="0 0 24 24"><path d="M12 3a9 9 0 0 0 0 18h1.5a2 2 0 0 0 0-4H12a1.5 1.5 0 0 1 0-3h2a7 7 0 0 0 0-14h-2Z"/><circle cx="7.5" cy="10" r=".8"/><circle cx="10" cy="7" r=".8"/><circle cx="14" cy="7" r=".8"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-dollar" viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M17 7.5c-1-1-2.5-1.5-4.2-1.5-2.5 0-4.3 1.1-4.3 2.8 0 4 9 2.1 9 6.4 0 1.7-1.8 2.8-4.6 2.8-2 0-3.8-.6-5-1.8"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2.8 20h18.4L12 3Z"/><path d="M12 9v5"/><path d="M12 17h.01"/></symbol>
+</svg>
 <aside class="sidebar">
   <div class="logo">
     <div class="logo-icon">AI</div>
@@ -1188,15 +1578,19 @@
 
   <nav class="nav" aria-label="Dashboard sections">
     <button class="nav-item active" onclick="switchPanel('overview', this)">
-      <span class="nav-icon">OV</span>
+      <span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-dashboard"></use></svg></span>
       <span>Overview</span>
     </button>
+    <button class="nav-item" onclick="switchPanel('revenue', this)">
+      <span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-dollar"></use></svg></span>
+      <span>Revenue</span>
+    </button>
     <button class="nav-item" onclick="switchPanel('livefeed', this)">
-      <span class="nav-icon">LV</span>
+      <span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-video"></use></svg></span>
       <span>Live Feed</span>
     </button>
     <button class="nav-item" onclick="switchPanel('insights', this)">
-      <span class="nav-icon">AI</span>
+      <span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-sparkles"></use></svg></span>
       <span>AI Insights</span>
     </button>
   </nav>
@@ -1233,15 +1627,15 @@
   <section class="content active" id="content-overview">
     <div class="summary-strip" aria-label="Operations summary">
       <div class="summary-item">
-        <span>Camera state</span>
+        <span><svg class="icon icon-sm" aria-hidden="true"><use href="#i-camera"></use></svg>Camera state</span>
         <strong id="overviewCameraState">Connecting</strong>
       </div>
       <div class="summary-item">
-        <span>Lot pressure</span>
+        <span><svg class="icon icon-sm" aria-hidden="true"><use href="#i-gauge"></use></svg>Lot pressure</span>
         <strong id="overviewPressure">Waiting</strong>
       </div>
       <div class="summary-item">
-        <span>Last detector update</span>
+        <span><svg class="icon icon-sm" aria-hidden="true"><use href="#i-clock"></use></svg>Last detector update</span>
         <strong id="overviewLastUpdate">--</strong>
       </div>
     </div>
@@ -1250,7 +1644,7 @@
       <article class="stat-card green">
         <div class="stat-top">
           <div class="stat-label">Free Slots</div>
-          <div class="stat-icon" aria-hidden="true">FR</div>
+          <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-parking"></use></svg></div>
         </div>
         <div class="stat-value" id="statFree">--</div>
         <div class="stat-sub" id="statFreeSub">Available right now</div>
@@ -1259,7 +1653,7 @@
       <article class="stat-card red">
         <div class="stat-top">
           <div class="stat-label">Occupied</div>
-          <div class="stat-icon" aria-hidden="true">OC</div>
+          <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-car"></use></svg></div>
         </div>
         <div class="stat-value" id="statOcc">--</div>
         <div class="stat-sub" id="statOccSub">Cars detected</div>
@@ -1268,16 +1662,25 @@
       <article class="stat-card blue">
         <div class="stat-top">
           <div class="stat-label">Capacity</div>
-          <div class="stat-icon" aria-hidden="true">CP</div>
+          <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-grid"></use></svg></div>
         </div>
         <div class="stat-value" id="statTotal">--</div>
         <div class="stat-sub" id="statTotalSub">Tracked parking zones</div>
         <div class="stat-meter" aria-hidden="true"><span id="totalMeter"></span></div>
       </article>
+      <article class="stat-card blue">
+        <div class="stat-top">
+          <div class="stat-label">Max Count</div>
+          <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-chart"></use></svg></div>
+        </div>
+        <div class="stat-value" id="statMaxCount">--</div>
+        <div class="stat-sub" id="statMaxCountSub">Maximum tracked capacity</div>
+        <div class="stat-meter" aria-hidden="true"><span id="maxCountMeter"></span></div>
+      </article>
       <article class="stat-card orange">
         <div class="stat-top">
           <div class="stat-label">Occupancy Rate</div>
-          <div class="stat-icon" aria-hidden="true">%</div>
+          <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-gauge"></use></svg></div>
         </div>
         <div class="stat-value" id="statRate">--%</div>
         <div class="stat-sub" id="statRateSub">Share of total capacity</div>
@@ -1289,7 +1692,7 @@
       <div>
         <section class="panel-card feature">
           <div class="panel-header">
-            <span class="panel-title">Live Occupancy</span>
+            <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-activity"></use></svg>Live Occupancy</span>
             <span class="occ-pct" id="occPct">0%</span>
           </div>
           <div class="bar-track">
@@ -1302,7 +1705,7 @@
 
         <section class="panel-card">
           <div class="panel-header">
-            <span class="panel-title">Predictions</span>
+            <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-chart"></use></svg>Predictions</span>
             <span class="panel-note" id="predNote">Based on last 7 days</span>
           </div>
           <div class="pred-grid" id="predGrid">
@@ -1314,7 +1717,7 @@
 
           <div class="revenue-panel">
             <div class="revenue-head">
-              <span class="revenue-title">Revenue forecast</span>
+              <span class="revenue-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-dollar"></use></svg>Revenue forecast</span>
               <span class="revenue-total" id="todayRevenueForecast">--</span>
             </div>
             <div class="weekday-grid" id="weekdayRevenueGrid"></div>
@@ -1324,10 +1727,10 @@
 
       <section class="panel-card">
         <div class="panel-header">
-          <span class="panel-title">Recent Activity</span>
+          <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-clock"></use></svg>Recent Activity</span>
           <div class="panel-actions">
             <span class="status-chip" id="activityCount">0 events</span>
-            <button class="refresh-btn" onclick="fetchHistory()" aria-label="Refresh recent activity">Refresh</button>
+            <button class="refresh-btn" onclick="fetchHistory()" aria-label="Refresh recent activity"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"></use></svg>Refresh</button>
           </div>
         </div>
         <div class="activity-list" id="activityList">
@@ -1338,6 +1741,71 @@
         </div>
       </section>
     </div>
+  </section>
+
+  <section class="content" id="content-revenue">
+    <section class="panel-card revenue-page">
+      <div class="revenue-dashboard">
+        <div class="revenue-head">
+          <span class="revenue-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-dollar"></use></svg>Parking revenue dashboard</span>
+          <span class="revenue-total" id="revenueUpdatedAt">--</span>
+        </div>
+        <div class="revenue-kpis">
+          <div class="revenue-kpi">
+            <span>Today</span>
+            <strong id="dailyRevenueValue">PHP --</strong>
+            <small id="dailyRevenueMeta">0 recorded payments</small>
+          </div>
+          <div class="revenue-kpi">
+            <span>This week</span>
+            <strong id="weeklyRevenueValue">PHP --</strong>
+            <small id="weeklyRevenueMeta">0 recorded payments</small>
+          </div>
+          <div class="revenue-kpi">
+            <span>This month</span>
+            <strong id="monthlyRevenueValue">PHP --</strong>
+            <small id="monthlyRevenueMeta">0 recorded payments</small>
+          </div>
+          <div class="revenue-kpi">
+            <span>Revenue basis</span>
+            <strong id="revenueLogCount">-- payments</strong>
+            <small id="revenueBasis">Actual recorded parking payments.</small>
+          </div>
+        </div>
+        <div class="payment-form" aria-label="Record parking payment">
+          <label>
+            Regular PHP
+            <input class="payment-input" id="paymentAmount" type="number" min="1" max="10000" step="1" value="25" />
+          </label>
+          <label>
+            Discount
+            <select class="payment-input" id="paymentDiscount">
+              <option value="none">None</option>
+              <option value="pwd">PWD 20%</option>
+              <option value="senior">Senior 20%</option>
+            </select>
+          </label>
+          <label>
+            Method
+            <select class="payment-input" id="paymentMethod">
+              <option value="cash">Cash</option>
+              <option value="gcash">GCash</option>
+              <option value="card">Card</option>
+              <option value="other">Other</option>
+            </select>
+          </label>
+          <label>
+            Note
+            <input class="payment-input" id="paymentNote" type="text" placeholder="Optional" maxlength="120" />
+          </label>
+          <button class="setting-save-btn" id="paymentRecordBtn" onclick="recordPayment()">Record</button>
+          <div class="payment-status" id="paymentStatus">Records actual paid parking money for daily, weekly, and monthly profit.</div>
+        </div>
+        <div class="revenue-bars" id="dailyRevenueBars" aria-label="Daily parking revenue"></div>
+        <div class="monthly-revenue-grid" id="monthlyRevenueGrid"></div>
+        <div class="payment-list" id="recentPaymentsList"></div>
+      </div>
+    </section>
   </section>
 
   <section class="content" id="content-livefeed">
@@ -1351,8 +1819,8 @@
             </div>
             <div class="stream-actions">
               <span class="status-chip warn" id="streamInlineStatus">Connecting</span>
-              <button class="ghost-btn" onclick="openFullscreen()" aria-label="Open camera feed fullscreen">Fullscreen</button>
-              <button class="retry-btn" onclick="retryStream()" aria-label="Retry camera stream">Retry</button>
+              <button class="ghost-btn" onclick="openFullscreen()" aria-label="Open camera feed fullscreen"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-maximize"></use></svg>Fullscreen</button>
+              <button class="retry-btn" onclick="retryStream()" aria-label="Retry camera stream"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"></use></svg>Retry</button>
             </div>
           </div>
 
@@ -1384,7 +1852,7 @@
 
         <section class="panel-card" style="margin-top:14px">
           <div class="panel-header">
-            <span class="panel-title">Camera Info</span>
+            <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-camera"></use></svg>Camera Info</span>
             <span class="panel-note mono" id="streamPortInfo"></span>
           </div>
           <div class="metric-row">
@@ -1397,22 +1865,46 @@
 
         <section class="panel-card settings-panel" style="margin-top:14px">
           <div class="panel-header">
-            <span class="panel-title">Settings</span>
+            <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-settings"></use></svg>Settings</span>
             <span class="status-chip" id="layoutStatus">Layout --</span>
           </div>
 
           <div class="setting-row">
             <div class="setting-copy">
-              <strong>Gray UI</strong>
+              <strong><svg class="icon icon-sm" aria-hidden="true"><use href="#i-palette"></use></svg>Gray UI</strong>
               <span id="themeModeLabel">Off</span>
             </div>
             <button class="toggle-switch" id="themeToggle" onclick="toggleTheme()" aria-label="Toggle gray UI" aria-pressed="false"></button>
           </div>
 
-          <div class="setting-row" style="align-items:stretch;flex-direction:column">
+          <div class="setting-row">
             <div class="setting-copy">
-              <strong>Parking Layout</strong>
-              <span id="layoutModeHint">Detector applies changes on the next cycle.</span>
+              <strong><svg class="icon icon-sm" aria-hidden="true"><use href="#i-dollar"></use></svg>Parking Price</strong>
+              <span id="pricingModeHint">Dynamic pricing is active.</span>
+            </div>
+            <div class="price-setting-controls">
+              <label class="price-input-wrap" aria-label="Manual parking price">
+                <span>PHP</span>
+                <input class="price-input" id="priceInput" type="number" min="1" max="10000" step="1" value="25" />
+              </label>
+              <button class="setting-save-btn" id="priceSaveBtn" onclick="savePricingSettings()">Save</button>
+              <div class="layout-toggle">
+                <span class="layout-toggle-label" id="pricingOverrideLabel">Auto</span>
+                <button class="toggle-switch" id="pricingOverrideToggle" onclick="togglePricingOverride()" aria-label="Toggle manual pricing" aria-pressed="false"></button>
+              </div>
+            </div>
+          </div>
+
+          <div class="setting-row" style="align-items:stretch;flex-direction:column">
+            <div class="layout-head-row">
+              <div class="setting-copy">
+                <strong><svg class="icon icon-sm" aria-hidden="true"><use href="#i-grid"></use></svg>Parking Layout</strong>
+                <span id="layoutModeHint">Automatic mode lets the detector choose the layout.</span>
+              </div>
+              <div class="layout-toggle">
+                <span class="layout-toggle-label" id="layoutOverrideLabel">Auto</span>
+                <button class="toggle-switch" id="layoutOverrideToggle" onclick="toggleLayoutOverride()" aria-label="Toggle manual parking layout" aria-pressed="false"></button>
+              </div>
             </div>
             <div class="layout-picker" id="layoutPicker" aria-label="Parking layout">
               <button class="layout-btn" data-mode="NORMAL" onclick="setLayoutMode('NORMAL')">Normal</button>
@@ -1424,7 +1916,7 @@
       </div>
 
       <aside class="zone-panel">
-        <div class="zone-title">Zone Status</div>
+        <div class="zone-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-grid"></use></svg>Zone Status</div>
         <div class="zone-summary">
           <div class="zone-stat">
             <span>Free</span>
@@ -1452,31 +1944,31 @@
         <div class="page-sub">Plain-English predictions from your trained models</div>
       </div>
       <div>
-        <button class="refresh-btn" onclick="forceRefreshInsights()" aria-label="Refresh AI insights">Refresh</button>
+        <button class="refresh-btn" onclick="forceRefreshInsights()" aria-label="Refresh AI insights"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"></use></svg>Refresh</button>
         <div class="insight-ts" id="insightTs">--</div>
       </div>
     </div>
 
     <div class="insight-overview" aria-label="AI insight summary">
       <article class="insight-summary-card">
-        <span>Current load</span>
+        <span><svg class="icon icon-sm" aria-hidden="true"><use href="#i-gauge"></use></svg>Current load</span>
         <strong id="insSummaryLoad">--</strong>
         <small id="insSummaryLoadSub">Waiting for detector state.</small>
       </article>
       <article class="insight-summary-card">
-        <span>Forecast peak</span>
+        <span><svg class="icon icon-sm" aria-hidden="true"><use href="#i-chart"></use></svg>Forecast peak</span>
         <strong id="insSummaryPeak">--</strong>
         <small id="insSummaryPeakSub">Next 6-hour prediction window.</small>
       </article>
       <article class="insight-summary-card">
-        <span>AI rate</span>
+        <span><svg class="icon icon-sm" aria-hidden="true"><use href="#i-dollar"></use></svg>AI rate</span>
         <strong id="insSummaryPrice">--</strong>
-        <small id="insSummaryPriceSub">Compared with PHP 25 flat rate.</small>
+        <small id="insSummaryPriceSub">Compared with the configured flat rate.</small>
       </article>
     </div>
 
     <section class="insight-card action" id="ins-action-card">
-      <div class="insight-label">Admin Recommendation</div>
+      <div class="insight-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-alert"></use></svg>Admin Recommendation</div>
       <div class="insight-text action-text" id="ins-action">
         <span class="insight-loading">Analyzing...</span>
       </div>
@@ -1484,7 +1976,7 @@
 
     <div class="insight-grid">
       <article class="insight-card">
-        <div class="insight-label">Current Status</div>
+        <div class="insight-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-gauge"></use></svg>Current Status</div>
         <div class="insight-gauge-wrap">
           <div class="insight-gauge" id="insOccGauge">
             <span class="insight-gauge-value" id="insOccGaugeValue">0%</span>
@@ -1500,7 +1992,7 @@
       </article>
 
       <article class="insight-card">
-        <div class="insight-label">Recent Trend</div>
+        <div class="insight-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-activity"></use></svg>Recent Trend</div>
         <div class="insight-visual">
           <div class="mini-bars" id="insTrendBars"></div>
           <div class="mini-caption"><span>Recent updates</span><span id="insTrendDelta">--</span></div>
@@ -1511,7 +2003,7 @@
       </article>
 
       <article class="insight-card">
-        <div class="insight-label">Vehicle Forecast</div>
+        <div class="insight-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-car"></use></svg>Vehicle Forecast</div>
         <div class="insight-visual">
           <div class="mini-bars" id="insForecastBars"></div>
           <div class="mini-caption"><span>Next 6 hours</span><span id="insForecastPeak">--</span></div>
@@ -1522,7 +2014,7 @@
       </article>
 
       <article class="insight-card">
-        <div class="insight-label">Occupancy Forecast</div>
+        <div class="insight-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-parking"></use></svg>Occupancy Forecast</div>
         <div class="insight-visual">
           <div class="mini-meter"><div class="mini-meter-fill" id="insOccMeter"></div></div>
           <div class="mini-caption"><span id="insOccMeterLabel">Current load</span><span id="insOccMeterValue">0%</span></div>
@@ -1533,9 +2025,9 @@
       </article>
 
       <article class="insight-card">
-        <div class="insight-label">Dynamic Pricing</div>
+        <div class="insight-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-dollar"></use></svg>Dynamic Pricing</div>
         <div class="compare-bars">
-          <span>Flat</span><div class="compare-track"><div class="compare-fill" id="insFlatBar"></div></div><span>PHP 25</span>
+          <span>Flat</span><div class="compare-track"><div class="compare-fill" id="insFlatBar"></div></div><span id="insFlatRateLabel">PHP 25</span>
           <span>AI</span><div class="compare-track"><div class="compare-fill" id="insPriceBar"></div></div><span id="insPriceValue">--</span>
         </div>
         <div class="insight-text" id="ins-pricing">
@@ -1544,7 +2036,7 @@
       </article>
 
       <article class="insight-card">
-        <div class="insight-label">Peak Hours</div>
+        <div class="insight-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-chart"></use></svg>Peak Hours</div>
         <div class="insight-visual">
           <div class="hour-bars" id="insHourBars"></div>
           <div class="mini-caption"><span>24-hour pattern</span><span id="insPeakLabel">--</span></div>
@@ -1570,6 +2062,10 @@
     if (!u || typeof u !== 'object' || !u.user_id) {
       localStorage.removeItem('occupai_user');
       window.location.href = '/login';
+      return;
+    }
+    if (String(u.role || 'driver').toLowerCase() !== 'admin') {
+      window.location.href = '/driver';
     }
   } catch(e) {
     localStorage.removeItem('occupai_user');
@@ -1616,6 +2112,11 @@ const PANEL_META = {
     title: 'Live Feed',
     sub: 'YOLO detection stream, camera health, and zone states'
   },
+  revenue: {
+    eyebrow: 'Parking money',
+    title: 'Revenue Dashboard',
+    sub: 'Actual paid parking records, discounts, and gross profit by day, week, and month'
+  },
   insights: {
     eyebrow: 'AI insights',
     title: 'Prediction Center',
@@ -1625,6 +2126,27 @@ const PANEL_META = {
 
 const THEME_KEY = 'occupai_theme';
 const LAYOUT_MODES = ['NORMAL', 'BUSY', 'HIGH'];
+let layoutSelectedMode = 'NORMAL';
+let layoutOverrideEnabled = false;
+let pricingSettings = { enabled: false, price_php: 25, flat_rate_php: 25, mode: 'dynamic' };
+
+function formatPhp(value, options = {}) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 'PHP --';
+  const digits = options.forceCents ? 2 : (n % 1 ? 2 : 0);
+  return 'PHP ' + n.toLocaleString('en-PH', {
+    minimumFractionDigits: options.forceCents ? 2 : 0,
+    maximumFractionDigits: digits
+  });
+}
+
+function formatCompactPhp(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 'PHP --';
+  if (Math.abs(n) >= 1000000) return `PHP ${(n / 1000000).toFixed(1)}M`;
+  if (Math.abs(n) >= 1000) return `PHP ${(n / 1000).toFixed(1)}K`;
+  return formatPhp(n);
+}
 
 function applyTheme(mode) {
   const light = mode === 'light';
@@ -1649,17 +2171,35 @@ function toggleTheme() {
   applyTheme(next);
 }
 
-function setLayoutUi(mode, pending) {
+function setLayoutUi(mode, pending, enabled) {
   const normalized = LAYOUT_MODES.includes(String(mode).toUpperCase()) ? String(mode).toUpperCase() : 'NORMAL';
+  if (typeof enabled === 'boolean') layoutOverrideEnabled = enabled;
+  layoutSelectedMode = normalized;
   document.querySelectorAll('.layout-btn').forEach(btn => {
     const active = btn.dataset.mode === normalized;
     btn.classList.toggle('active', active);
-    btn.disabled = Boolean(pending);
+    btn.disabled = Boolean(pending) || !layoutOverrideEnabled;
   });
+  const picker = document.getElementById('layoutPicker');
+  if (picker) picker.classList.toggle('disabled', !layoutOverrideEnabled);
+  const toggle = document.getElementById('layoutOverrideToggle');
+  if (toggle) {
+    toggle.classList.toggle('active', layoutOverrideEnabled);
+    toggle.disabled = Boolean(pending);
+    toggle.setAttribute('aria-pressed', String(layoutOverrideEnabled));
+  }
+  const label = document.getElementById('layoutOverrideLabel');
+  if (label) label.textContent = layoutOverrideEnabled ? 'On' : 'Auto';
   const status = document.getElementById('layoutStatus');
   if (status) {
-    status.textContent = pending ? 'Saving...' : `Layout ${normalized}`;
-    status.className = 'status-chip ' + (normalized === 'HIGH' ? 'bad' : normalized === 'BUSY' ? 'warn' : 'good');
+    status.textContent = pending ? 'Saving...' : (layoutOverrideEnabled ? `Layout ${normalized}` : 'Layout Auto');
+    status.className = 'status-chip ' + (!layoutOverrideEnabled ? 'good' : normalized === 'HIGH' ? 'bad' : normalized === 'BUSY' ? 'warn' : 'good');
+  }
+  const hint = document.getElementById('layoutModeHint');
+  if (hint && !pending) {
+    hint.textContent = layoutOverrideEnabled
+      ? 'Manual layout override is on. Detector applies changes on the next cycle.'
+      : 'Automatic mode lets the detector choose the layout.';
   }
 }
 
@@ -1668,7 +2208,7 @@ async function fetchLayoutMode() {
     const r = await fetch('/api/settings/layout-mode');
     if (!r.ok) throw new Error(r.status);
     const d = await r.json();
-    setLayoutUi(d.mode || 'NORMAL', false);
+    setLayoutUi(d.mode || 'NORMAL', false, Boolean(d.enabled));
   } catch (e) {
     const status = document.getElementById('layoutStatus');
     if (status) {
@@ -1681,22 +2221,153 @@ async function fetchLayoutMode() {
 async function setLayoutMode(mode) {
   const normalized = String(mode).toUpperCase();
   if (!LAYOUT_MODES.includes(normalized)) return;
-  setLayoutUi(normalized, true);
+  if (!layoutOverrideEnabled) return;
+  setLayoutUi(normalized, true, true);
   try {
     const r = await fetch('/api/settings/layout-mode', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode: normalized })
+      body: JSON.stringify({ mode: normalized, enabled: true })
     });
     if (!r.ok) throw new Error(r.status);
     const d = await r.json();
-    setLayoutUi(d.mode || normalized, false);
+    setLayoutUi(d.mode || normalized, false, Boolean(d.enabled));
     const hint = document.getElementById('layoutModeHint');
     if (hint) hint.textContent = 'Saved. Detector updates within about 30 seconds.';
   } catch (e) {
-    setLayoutUi(normalized, false);
+    setLayoutUi(normalized, false, true);
     const hint = document.getElementById('layoutModeHint');
     if (hint) hint.textContent = 'Could not save layout mode.';
+  }
+}
+
+async function toggleLayoutOverride() {
+  const nextEnabled = !layoutOverrideEnabled;
+  setLayoutUi(layoutSelectedMode, true, nextEnabled);
+  try {
+    const r = await fetch('/api/settings/layout-mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: layoutSelectedMode, enabled: nextEnabled })
+    });
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    setLayoutUi(d.mode || layoutSelectedMode, false, Boolean(d.enabled));
+    const hint = document.getElementById('layoutModeHint');
+    if (hint) {
+      hint.textContent = d.enabled
+        ? 'Manual override is on. Pick Normal, Busy, or High.'
+        : 'Automatic mode restored. Detector will choose the layout.';
+    }
+  } catch (e) {
+    setLayoutUi(layoutSelectedMode, false, !nextEnabled);
+    const hint = document.getElementById('layoutModeHint');
+    if (hint) hint.textContent = 'Could not update layout override.';
+  }
+}
+
+function setPricingUi(settings, pending) {
+  pricingSettings = {
+    enabled: Boolean(settings?.enabled),
+    price_php: Number(settings?.price_php ?? settings?.manual_price_php ?? pricingSettings.price_php ?? 25),
+    flat_rate_php: Number(settings?.flat_rate_php ?? pricingSettings.flat_rate_php ?? 25),
+    mode: settings?.mode || (settings?.enabled ? 'manual' : 'dynamic')
+  };
+
+  const input = document.getElementById('priceInput');
+  if (input && document.activeElement !== input) {
+    input.value = Number(pricingSettings.price_php || 0).toFixed(pricingSettings.price_php % 1 ? 2 : 0);
+  }
+  if (input) input.disabled = Boolean(pending);
+
+  const saveBtn = document.getElementById('priceSaveBtn');
+  if (saveBtn) {
+    saveBtn.disabled = Boolean(pending);
+    saveBtn.textContent = pending ? 'Saving...' : 'Save';
+  }
+
+  const toggle = document.getElementById('pricingOverrideToggle');
+  if (toggle) {
+    toggle.classList.toggle('active', pricingSettings.enabled);
+    toggle.disabled = Boolean(pending);
+    toggle.setAttribute('aria-pressed', String(pricingSettings.enabled));
+  }
+
+  const label = document.getElementById('pricingOverrideLabel');
+  if (label) label.textContent = pricingSettings.enabled ? 'Manual' : 'Auto';
+
+  const hint = document.getElementById('pricingModeHint');
+  if (hint && !pending) {
+    hint.textContent = pricingSettings.enabled
+      ? `Manual rate is active at ${formatPhp(pricingSettings.price_php)}/hr.`
+      : `Auto dynamic pricing is active. Base rate ${formatPhp(pricingSettings.flat_rate_php)}/hr.`;
+  }
+
+  const flatLabel = document.getElementById('insFlatRateLabel');
+  if (flatLabel) flatLabel.textContent = formatPhp(pricingSettings.flat_rate_php);
+  renderPricingVisual(document.getElementById('ins-pricing')?.textContent || '');
+}
+
+async function fetchPricingSettings() {
+  try {
+    const r = await fetch('/api/settings/pricing');
+    if (!r.ok) throw new Error(r.status);
+    setPricingUi(await r.json(), false);
+  } catch (e) {
+    const hint = document.getElementById('pricingModeHint');
+    if (hint) hint.textContent = 'Could not load pricing settings.';
+  }
+}
+
+async function savePricingSettings(forceEnabled = true) {
+  const input = document.getElementById('priceInput');
+  const price = Number(input?.value);
+  if (!Number.isFinite(price) || price < 1 || price > 10000) {
+    const hint = document.getElementById('pricingModeHint');
+    if (hint) hint.textContent = 'Enter a price from PHP 1 to PHP 10,000.';
+    return;
+  }
+
+  const enabled = forceEnabled ? true : pricingSettings.enabled;
+  const previous = { ...pricingSettings };
+  setPricingUi({ ...pricingSettings, price_php: price, enabled }, true);
+  try {
+    const r = await fetch('/api/settings/pricing', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ price_php: price, enabled })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || d.error || r.status);
+    setPricingUi(d, false);
+    await Promise.all([fetchPredictions(), fetchRevenueDashboard(), fetchInsights().catch(() => {})]);
+  } catch (e) {
+    setPricingUi(previous, false);
+    const hint = document.getElementById('pricingModeHint');
+    if (hint) hint.textContent = cleanText(e.message || 'Could not save pricing.');
+  }
+}
+
+async function togglePricingOverride() {
+  const input = document.getElementById('priceInput');
+  const price = Number(input?.value || pricingSettings.price_php);
+  const enabled = !pricingSettings.enabled;
+  const previous = { ...pricingSettings };
+  setPricingUi({ ...pricingSettings, price_php: price, enabled }, true);
+  try {
+    const r = await fetch('/api/settings/pricing', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ price_php: price, enabled })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || d.error || r.status);
+    setPricingUi(d, false);
+    await Promise.all([fetchPredictions(), fetchRevenueDashboard(), fetchInsights().catch(() => {})]);
+  } catch (e) {
+    setPricingUi(previous, false);
+    const hint = document.getElementById('pricingModeHint');
+    if (hint) hint.textContent = cleanText(e.message || 'Could not update pricing mode.');
   }
 }
 
@@ -1712,6 +2383,7 @@ function switchPanel(name, btn) {
   document.getElementById('pageSub').textContent = meta.sub;
 
   if (name === 'insights') fetchInsights();
+  if (name === 'revenue') fetchRevenueDashboard();
 }
 
 function cleanText(value) {
@@ -1731,6 +2403,21 @@ function setConnected(ok) {
   document.getElementById('connDot').className = 'dot ' + (ok ? 'live' : 'error');
   document.getElementById('connLabel').textContent = ok ? 'Live' : 'Disconnected';
   setText('overviewCameraState', ok ? 'Live' : 'Offline');
+}
+
+function isPanelActive(name) {
+  const panel = document.getElementById('content-' + name);
+  return Boolean(panel && panel.classList.contains('active'));
+}
+
+function liveStatusText(stats) {
+  const total = Number(stats?.total ?? stats?.total_slots ?? 0);
+  const occupied = Number(stats?.occupied ?? stats?.occupied_slots ?? 0);
+  const free = Number(stats?.free ?? stats?.free_slots ?? Math.max(0, total - occupied));
+  const pct = clampPct(stats?.occupancy_pct ?? (total > 0 ? occupied / total * 100 : 0));
+  if (!total) return 'Waiting for the camera detector to connect.';
+  const load = pct >= 90 ? 'almost completely full' : pct >= 70 ? 'very busy' : pct >= 50 ? 'moderately busy' : pct >= 25 ? 'lightly used' : 'mostly empty';
+  return `The parking lot is currently ${load}. ${free} space${free === 1 ? ' is' : 's are'} available out of ${total} total. ${occupied} vehicle${occupied === 1 ? ' is' : 's are'} parked right now.`;
 }
 
 async function fetchStats() {
@@ -1778,6 +2465,10 @@ async function fetchStats() {
     document.getElementById('camStatus').style.color = !detectorOnline ? 'var(--orange)' : d.lot_full ? 'var(--red)' : 'var(--green)';
 
     renderZones(d.zones || {}, total, occupied);
+    if (isPanelActive('insights')) {
+      renderStatusVisual(d);
+      setText('ins-live', liveStatusText(d));
+    }
 
     const updateLabel = d.timestamp ? cleanText(d.timestamp).replace(/^\d{4}-\d{2}-\d{2}\s*/, '') : new Date().toLocaleTimeString();
     document.getElementById('updatedAt').textContent = 'Updated ' + updateLabel;
@@ -1882,6 +2573,131 @@ async function fetchPredictions() {
     }
   } catch (e) {
     console.error('fetchPredictions error:', e);
+  }
+}
+
+async function fetchRevenueDashboard() {
+  try {
+    const r = await fetch('/api/revenue/dashboard', { cache: 'no-store' });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || d.error || r.status);
+
+    setText('statMaxCount', d.max_total_count ?? '--');
+    setText('statMaxCountSub', `Peak cars ${d.max_occupied_count ?? 0}; ${d.log_count ?? 0} logs`);
+    const maxMeter = document.getElementById('maxCountMeter');
+    if (maxMeter) {
+      const maxTotal = Number(d.max_total_count || 0);
+      const peakOcc = Number(d.max_occupied_count || 0);
+      maxMeter.style.width = `${maxTotal ? Math.min(100, peakOcc / maxTotal * 100) : 0}%`;
+    }
+
+    setText('dailyRevenueValue', formatPhp(d.today_revenue_php, { forceCents: true }));
+    setText('weeklyRevenueValue', formatPhp(d.week_revenue_php, { forceCents: true }));
+    setText('monthlyRevenueValue', formatPhp(d.month_revenue_php, { forceCents: true }));
+    setText('dailyRevenueMeta', `${d.today_transaction_count || d.today_entry_count || 0} payments / discount ${formatCompactPhp(d.today_discount_php || 0)}`);
+    setText('weeklyRevenueMeta', `${d.week_transaction_count || 0} payments / discount ${formatCompactPhp(d.week_discount_php || 0)}`);
+    setText('monthlyRevenueMeta', `${d.month_transaction_count || d.month_entry_count || 0} payments / discount ${formatCompactPhp(d.month_discount_php || 0)}`);
+    setText('revenueLogCount', `${d.log_count || 0} payments`);
+    setText('revenueBasis', cleanText(d.revenue_basis || 'Actual recorded parking payments.'));
+    setText('revenueUpdatedAt', d.generated_at_ph ? `Updated ${String(d.generated_at_ph).slice(11, 16)}` : '--');
+
+    const paymentAmount = document.getElementById('paymentAmount');
+    const suggested = Number(d.suggested_regular_price_php);
+    if (paymentAmount && document.activeElement !== paymentAmount && Number.isFinite(suggested) && suggested > 0) {
+      paymentAmount.value = suggested.toFixed(suggested % 1 ? 2 : 0);
+    }
+
+    const daily = Array.isArray(d.daily_revenue) ? d.daily_revenue : [];
+    const maxDaily = Math.max(1, ...daily.map(item => Number(item.revenue_php || 0)));
+    const dailyBars = document.getElementById('dailyRevenueBars');
+    if (dailyBars) {
+      dailyBars.innerHTML = daily.length ? daily.map(item => {
+        const value = Number(item.revenue_php || 0);
+        const pct = Math.max(4, value / maxDaily * 100);
+        return `
+          <div class="revenue-bar-item" title="${cleanText(item.date || item.label)} ${formatPhp(value, { forceCents: true })}">
+            <div class="revenue-bar-track"><div class="revenue-bar-fill" style="--bar-pct:${pct}%"></div></div>
+            <div class="revenue-bar-label">${cleanText(item.label || '--')}</div>
+            <div class="revenue-bar-value">${formatCompactPhp(value)}</div>
+          </div>`;
+      }).join('') : '<div class="empty-state" style="grid-column:1/-1"><strong>No revenue logs yet</strong>Daily revenue will appear after parking logs are saved.</div>';
+    }
+
+    const monthly = Array.isArray(d.monthly_revenue) ? d.monthly_revenue : [];
+    const monthGrid = document.getElementById('monthlyRevenueGrid');
+    if (monthGrid) {
+      monthGrid.innerHTML = monthly.length ? monthly.map(item => `
+        <div class="revenue-day">
+          <div class="revenue-day-name">${cleanText(item.label || item.month || '--')}</div>
+          <div class="revenue-day-value">${formatCompactPhp(item.revenue_php || 0)}</div>
+        </div>`).join('') : '';
+    }
+
+    const recent = Array.isArray(d.recent_payments) ? d.recent_payments : [];
+    const recentList = document.getElementById('recentPaymentsList');
+    if (recentList) {
+      recentList.innerHTML = recent.length ? recent.map(item => {
+        const discount = item.discount_type && item.discount_type !== 'none' ? ` / ${String(item.discount_type).toUpperCase()}` : '';
+        return `
+          <div class="payment-row">
+            <div>
+              <strong>${cleanText(item.payment_method || 'cash').toUpperCase()}${discount}</strong>
+              <span>${cleanText(item.paid_at_ph || '')}</span>
+            </div>
+            <div class="payment-amount">${formatPhp(item.final_amount_php, { forceCents: true })}</div>
+          </div>`;
+      }).join('') : '<div class="empty-state"><strong>No payments recorded yet</strong>Use the form above to record paid parking.</div>';
+    }
+  } catch (e) {
+    console.error('fetchRevenueDashboard error:', e);
+    setText('dailyRevenueValue', 'PHP --');
+    setText('weeklyRevenueValue', 'PHP --');
+    setText('monthlyRevenueValue', 'PHP --');
+    setText('revenueBasis', 'Revenue dashboard unavailable.');
+  }
+}
+
+async function recordPayment() {
+  const btn = document.getElementById('paymentRecordBtn');
+  const status = document.getElementById('paymentStatus');
+  const amount = Number(document.getElementById('paymentAmount')?.value);
+  if (!Number.isFinite(amount) || amount < 1 || amount > 10000) {
+    if (status) status.textContent = 'Enter a valid regular price from PHP 1 to PHP 10,000.';
+    return;
+  }
+
+  const payload = {
+    regular_price_php: amount,
+    discount_type: document.getElementById('paymentDiscount')?.value || 'none',
+    payment_method: document.getElementById('paymentMethod')?.value || 'cash',
+    notes: document.getElementById('paymentNote')?.value || ''
+  };
+
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+  }
+  if (status) status.textContent = 'Recording payment...';
+
+  try {
+    const r = await fetch('/api/payments', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || d.error || r.status);
+    if (status) status.textContent = `Recorded ${formatPhp(d.final_amount_php, { forceCents: true })} payment.`;
+    const note = document.getElementById('paymentNote');
+    if (note) note.value = '';
+    await fetchRevenueDashboard();
+  } catch (e) {
+    if (status) status.textContent = cleanText(e.message || 'Could not record payment.');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Record';
+    }
   }
 }
 
@@ -2018,24 +2834,31 @@ function extractRecommendedPrice(text) {
   const explicit = normalized.match(/(?:PHP|P)\s*(\d+(?:\.\d+)?)/i);
   if (explicit) return Number(explicit[1]);
   const nums = normalized.match(/\d+(?:\.\d+)?/g);
-  return nums ? Number(nums[nums.length - 1]) : 25;
+  return nums ? Number(nums[nums.length - 1]) : Number(pricingSettings.price_php || pricingSettings.flat_rate_php || 25);
 }
 
-function renderPricingVisual(pricingText) {
-  const flat = 25;
-  const ai = Math.max(0, extractRecommendedPrice(pricingText));
+function renderPricingVisual(pricingText, pricingDetails = null) {
+  const flat = Math.max(1, Number(pricingDetails?.flat_rate_php ?? pricingSettings.flat_rate_php ?? 25));
+  const ai = Math.max(0, Number(pricingDetails?.recommended_price_php ?? extractRecommendedPrice(pricingText)));
   const maxVal = Math.max(50, flat, ai);
   const flatBar = document.getElementById('insFlatBar');
   const priceBar = document.getElementById('insPriceBar');
   const priceValue = document.getElementById('insPriceValue');
+  const flatLabel = document.getElementById('insFlatRateLabel');
   if (flatBar) flatBar.style.width = `${flat / maxVal * 100}%`;
   if (priceBar) {
     priceBar.style.width = `${ai / maxVal * 100}%`;
     priceBar.style.background = ai > flat ? 'var(--red)' : ai < flat ? 'var(--green)' : 'var(--orange)';
   }
-  if (priceValue) priceValue.textContent = `PHP ${Math.round(ai)}`;
-  setText('insSummaryPrice', `PHP ${Math.round(ai)}`);
-  setText('insSummaryPriceSub', ai > flat ? `PHP ${Math.round(ai - flat)} above flat rate.` : ai < flat ? `PHP ${Math.round(flat - ai)} below flat rate.` : 'Matches the flat rate.');
+  if (flatLabel) flatLabel.textContent = formatPhp(flat);
+  if (priceValue) priceValue.textContent = formatPhp(ai);
+  setText('insSummaryPrice', formatPhp(ai));
+  const discounted = Number(pricingDetails?.pwd_senior_price_php);
+  if (Number.isFinite(discounted)) {
+    setText('insSummaryPriceSub', `PWD/Senior: ${formatPhp(discounted)} after 20% discount.`);
+  } else {
+    setText('insSummaryPriceSub', ai > flat ? `PHP ${Math.round(ai - flat)} above flat rate.` : ai < flat ? `PHP ${Math.round(flat - ai)} below flat rate.` : 'Matches the flat rate.');
+  }
 }
 
 function renderPeakVisual(hourlyByDay) {
@@ -2069,6 +2892,7 @@ async function fetchInsights() {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
     const stats = statsReq && statsReq.ok ? await statsReq.json() : {};
+    const liveStats = Object.keys(stats).length ? stats : (d.live || {});
     const preds = predReq && predReq.ok ? await predReq.json() : {};
     const hourly = hourlyReq && hourlyReq.ok ? await hourlyReq.json() : {};
     const histRaw = histReq && histReq.ok ? await histReq.json() : [];
@@ -2077,17 +2901,17 @@ async function fetchInsights() {
       const el = document.getElementById(id);
       if (el) el.textContent = cleanText(val || '--');
     };
-    set('ins-live', d.live_status);
+    set('ins-live', liveStatusText(liveStats) || d.live_status);
     set('ins-trend', d.trend);
     set('ins-vehicles', d.vehicle_forecast);
     set('ins-occupancy', d.occupancy_forecast);
     set('ins-pricing', d.pricing);
     set('ins-peak', d.peak_hours);
     set('ins-action', d.admin_action);
-    renderStatusVisual(stats);
+    renderStatusVisual(liveStats);
     renderTrendVisual(hist);
     renderForecastVisual(preds);
-    renderPricingVisual(d.pricing);
+    renderPricingVisual(d.pricing, d.pricing_details);
     renderPeakVisual(hourly);
 
     const card = document.getElementById('ins-action-card');
@@ -2178,14 +3002,21 @@ function openFullscreen() {
 
 initTheme();
 fetchLayoutMode();
+fetchPricingSettings();
 fetchStats();
 fetchHistory();
 fetchPredictions();
+fetchRevenueDashboard();
 
 setInterval(fetchStats, 3000);
 setInterval(fetchHistory, 5000);
 setInterval(fetchPredictions, 30000);
+setInterval(fetchRevenueDashboard, 30000);
 setInterval(fetchLayoutMode, 30000);
+setInterval(fetchPricingSettings, 30000);
+setInterval(() => {
+  if (isPanelActive('insights')) fetchInsights();
+}, 10000);
 </script>
 </body>
 </html>

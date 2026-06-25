@@ -1,0 +1,54 @@
+{
+  "spatio_temporal": {
+    "display_name": "Spatio-Temporal",
+    "model_file": "spatio_temporal.keras",
+    "task": "Vehicle count forecasting",
+    "accuracy_pct": 94.79,
+    "r2": 0.8809,
+    "baseline_r2": 0.5795,
+    "improvement_pct": 73.9,
+    "metric_note": "Best deep learning forecasting model. Accuracy is the reported training confidence; R2 and improvement are from the baseline comparison chart."
+  },
+  "lstm_forecast": {
+    "display_name": "LSTM Forecasting",
+    "model_file": "lstm_forecast.keras",
+    "task": "Vehicle count forecasting",
+    "accuracy_pct": 90.25,
+    "r2": 0.8126
+  },
+  "cnn_gru_attention": {
+    "display_name": "CNN-GRU + Attention",
+    "model_file": "cnn_gru_attention.keras",
+    "task": "Vehicle count forecasting",
+    "accuracy_pct": 89.32,
+    "r2": 0.7722
+  },
+  "occupancy_bilstm": {
+    "display_name": "Occupancy BiLSTM",
+    "model_file": "occupancy_model.keras",
+    "task": "Occupancy prediction",
+    "accuracy_pct": 91.53,
+    "r2": 0.909,
+    "tolerance_pct": 10
+  },
+  "pricing_rf": {
+    "display_name": "Pricing Random Forest",
+    "model_file": "pricing_model.pkl",
+    "task": "Dynamic pricing recommendation",
+    "accuracy_pct": 80.34,
+    "tolerance_pct": 10
+  },
+  "revenue_gbr": {
+    "display_name": "Revenue Gradient Boosting Regressor",
+    "model_file": "revenue_model.pkl",
+    "task": "Revenue forecasting",
+    "accuracy_pct": 83.02,
+    "r2": 0.232,
+    "tolerance_pct": 20
+  },
+  "linear_regression_baseline": {
+    "display_name": "Linear Regression Baseline",
+    "task": "Vehicle count forecasting baseline",
+    "r2": 0.5795
+  }
+}
