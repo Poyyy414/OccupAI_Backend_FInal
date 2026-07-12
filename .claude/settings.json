@@ -9,7 +9,8 @@
       "Bash(curl -s http://127.0.0.1:9333/json/list)",
       "Bash(node -e ' *)",
       "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\);process.stdin.on\\('end',async\\(\\)=>{const tabs=JSON.parse\\(d\\);for\\(const t of tabs\\){await fetch\\('http://127.0.0.1:9333/json/close/'+t.id\\);}console.log\\('closed',tabs.length\\)}\\)\")",
-      "Bash(./.venv311/Scripts/python.exe -c ' *)"
+      "Bash(./.venv311/Scripts/python.exe -c ' *)",
+      "Bash(./.venv311/Scripts/python.exe -m pip install --dry-run -r requirements.txt)"
     ]
   }
 }
