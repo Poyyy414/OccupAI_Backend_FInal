@@ -1593,6 +1593,10 @@
       <span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-sparkles"></use></svg></span>
       <span>AI Insights</span>
     </button>
+    <button class="nav-item" onclick="switchPanel('predictions', this)">
+      <span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-chart"></use></svg></span>
+      <span>Predictions</span>
+    </button>
   </nav>
 
   <div class="sidebar-footer">
@@ -2047,6 +2051,75 @@
       </article>
     </div>
   </section>
+
+  <section class="content" id="content-predictions">
+    <div class="insight-tools">
+      <div>
+        <div class="eyebrow">Model readout</div>
+        <div class="page-sub">Raw forecast data from /api/predictions</div>
+      </div>
+      <div>
+        <button class="refresh-btn" onclick="fetchFullPredictions()" aria-label="Refresh predictions"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"></use></svg>Refresh</button>
+        <div class="insight-ts" id="predFullTs">--</div>
+      </div>
+    </div>
+
+    <div class="insight-overview" aria-label="Prediction summary">
+      <article class="insight-summary-card">
+        <span><svg class="icon icon-sm" aria-hidden="true"><use href="#i-chart"></use></svg>Peak hour</span>
+        <strong id="predFullPeak">--</strong>
+        <small id="predFullPeakSub">Highest expected occupancy hour.</small>
+      </article>
+      <article class="insight-summary-card">
+        <span><svg class="icon icon-sm" aria-hidden="true"><use href="#i-grid"></use></svg>Active capacity</span>
+        <strong id="predFullCapacity">--</strong>
+        <small>Slots currently counted by the model.</small>
+      </article>
+      <article class="insight-summary-card">
+        <span><svg class="icon icon-sm" aria-hidden="true"><use href="#i-dollar"></use></svg>Today's forecast</span>
+        <strong id="predFullTodayRevenue">--</strong>
+        <small>Projected revenue for today.</small>
+      </article>
+    </div>
+
+    <section class="panel-card">
+      <div class="panel-header">
+        <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-chart"></use></svg>24-hour occupancy forecast</span>
+        <span class="panel-note" id="predFullHourNote">--</span>
+      </div>
+      <div class="hour-bars" id="predFullHourBars" style="height:110px"></div>
+      <div class="pred-grid" id="predFullGrid" style="grid-template-columns:repeat(6, minmax(0, 1fr)); margin-top:14px">
+        <div class="empty-state" style="grid-column:1/-1">
+          <strong>Waiting for prediction data</strong>
+          Forecasts will appear when the API responds.
+        </div>
+      </div>
+    </section>
+
+    <div class="insight-grid" style="grid-template-columns:repeat(2, minmax(0, 1fr))">
+      <article class="insight-card">
+        <div class="insight-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-activity"></use></svg>Busy days</div>
+        <div class="insight-text" id="predFullBusyDays">
+          <span class="insight-loading">Loading...</span>
+        </div>
+      </article>
+      <article class="insight-card">
+        <div class="insight-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-clock"></use></svg>Quiet days</div>
+        <div class="insight-text" id="predFullQuietDays">
+          <span class="insight-loading">Loading...</span>
+        </div>
+      </article>
+    </div>
+
+    <section class="panel-card" style="margin-top:14px">
+      <div class="revenue-panel" style="margin-top:0; padding-top:0; border-top:none">
+        <div class="revenue-head">
+          <span class="revenue-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-dollar"></use></svg>Weekday revenue forecast</span>
+        </div>
+        <div class="weekday-grid" id="predFullWeekdayGrid"></div>
+      </div>
+    </section>
+  </section>
 </main>
 
 <script>
@@ -2121,6 +2194,11 @@ const PANEL_META = {
     eyebrow: 'AI insights',
     title: 'Prediction Center',
     sub: 'Operational recommendations from occupancy, revenue, and pricing models'
+  },
+  predictions: {
+    eyebrow: 'Forecast data',
+    title: 'Predictions',
+    sub: 'Full 24-hour occupancy forecast, peak hour, busy/quiet days, and weekday revenue'
   }
 };
 
@@ -2384,6 +2462,7 @@ function switchPanel(name, btn) {
 
   if (name === 'insights') fetchInsights();
   if (name === 'revenue') fetchRevenueDashboard();
+  if (name === 'predictions') fetchFullPredictions();
 }
 
 function cleanText(value) {
@@ -2573,6 +2652,84 @@ async function fetchPredictions() {
     }
   } catch (e) {
     console.error('fetchPredictions error:', e);
+  }
+}
+
+async function fetchFullPredictions() {
+  try {
+    const r = await fetch('/api/predictions');
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    const hourly = d.hourly_est || {};
+    const hours = Array.from({ length: 24 }, (_, h) => Number(hourly[String(h)] ?? 0));
+
+    setText('predFullPeak', d.peak_label ? cleanText(d.peak_label) : '--');
+    setText('predFullCapacity', d.active_slot_capacity != null ? `${d.active_slot_capacity} slots` : '--');
+    setText('predFullTodayRevenue', d.today_revenue_forecast != null
+      ? formatPhp(d.today_revenue_forecast) : '--');
+    setText('predFullTs', d.generated_at_ph ? `Generated ${cleanText(d.generated_at_ph)}` : '--');
+
+    const bars = document.getElementById('predFullHourBars');
+    const note = document.getElementById('predFullHourNote');
+    if (bars) {
+      const max = Math.max(1, ...hours);
+      const nowH = new Date().getHours();
+      bars.innerHTML = hours.map((v, h) => {
+        const height = Math.max(4, v / max * 100);
+        return `<div class="hour-bar ${h === nowH ? 'now' : ''}" title="${String(h).padStart(2, '0')}:00 - ${v}%" style="height:${height}%"></div>`;
+      }).join('');
+    }
+    if (note) note.textContent = d.peak_label ? 'Peak: ' + cleanText(d.peak_label) : 'Full 24-hour pattern';
+
+    const grid = document.getElementById('predFullGrid');
+    if (grid) {
+      if (hours.every(v => v === 0)) {
+        grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><strong>Not enough data yet</strong>Predictions need more logged activity.</div>';
+      } else {
+        grid.innerHTML = hours.map((v, h) => `
+          <div class="pred-card">
+            <div class="pred-time">${String(h).padStart(2, '0')}:00</div>
+            <div class="pred-val">${v}%</div>
+            <div class="pred-label">avg occupancy</div>
+          </div>`).join('');
+      }
+    }
+
+    const busyEl = document.getElementById('predFullBusyDays');
+    if (busyEl) {
+      const busy = Array.isArray(d.busy_days) ? d.busy_days : [];
+      busyEl.innerHTML = busy.length
+        ? busy.map(day => `<span class="status-chip warn" style="margin:0 6px 6px 0">${cleanText(day)}</span>`).join('')
+        : '<span class="insight-loading">No busy-day data yet.</span>';
+    }
+    const quietEl = document.getElementById('predFullQuietDays');
+    if (quietEl) {
+      const quiet = Array.isArray(d.quiet_days) ? d.quiet_days : [];
+      quietEl.innerHTML = quiet.length
+        ? quiet.map(day => `<span class="status-chip good" style="margin:0 6px 6px 0">${cleanText(day)}</span>`).join('')
+        : '<span class="insight-loading">No quiet-day data yet.</span>';
+    }
+
+    const revenueGrid = document.getElementById('predFullWeekdayGrid');
+    if (revenueGrid) {
+      const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      const phDay = new Date().toLocaleDateString('en-PH', { timeZone: 'Asia/Manila', weekday: 'short' });
+      if (d.weekday_revenue && Object.keys(d.weekday_revenue).length > 0) {
+        revenueGrid.innerHTML = days.map(day => {
+          const rev = d.weekday_revenue[day] ?? 0;
+          const isToday = day === phDay;
+          return `
+            <div class="revenue-day ${isToday ? 'is-today' : ''}">
+              <div class="revenue-day-name">${day}</div>
+              <div class="revenue-day-value">${formatPhp(rev)}</div>
+            </div>`;
+        }).join('');
+      } else {
+        revenueGrid.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><strong>No revenue data yet</strong>Weekday forecast will appear here.</div>';
+      }
+    }
+  } catch (e) {
+    console.error('fetchFullPredictions error:', e);
   }
 }
 

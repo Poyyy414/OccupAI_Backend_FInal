@@ -2477,15 +2477,25 @@ class PricingSettingsPayload(BaseModel):
 _last_slot_adjustment: dict = {}
 _LAYOUT_MODES = {"NORMAL", "BUSY", "HIGH"}
 
+_env_file_cache = {"mtime": None, "values": {}}
+
 def _read_env_value(key: str, default: str = "") -> str:
     env_path = BASE_DIR / ".env"
-    if env_path.exists():
-        try:
+    try:
+        mtime = env_path.stat().st_mtime
+        if mtime != _env_file_cache["mtime"]:
+            values = {}
             for line in env_path.read_text(encoding="utf-8").splitlines():
-                if line.strip().startswith(f"{key}="):
-                    return line.split("=", 1)[1].strip()
-        except Exception:
-            pass
+                stripped = line.strip()
+                if stripped and not stripped.startswith("#") and "=" in stripped:
+                    k, v = stripped.split("=", 1)
+                    values[k.strip()] = v.strip()
+            _env_file_cache["values"] = values
+            _env_file_cache["mtime"] = mtime
+        if key in _env_file_cache["values"]:
+            return _env_file_cache["values"][key]
+    except (FileNotFoundError, OSError):
+        pass
     return os.getenv(key, default)
 
 def _write_env_value(key: str, value: str) -> None:

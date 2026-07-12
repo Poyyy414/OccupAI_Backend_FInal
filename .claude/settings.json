@@ -1,7 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "Bash(curl -s http://localhost:8000/api/predictions/hourly-by-day)"
+      "Bash(curl -s http://localhost:8000/api/predictions/hourly-by-day)",
+      "Bash(node cdp_check.js screenshot.png)",
+      "Bash(node cdp_debug.js)",
+      "Bash(node cdp_check.js screenshot2.png)",
+      "Bash(node cdp_debug2.js)",
+      "Bash(curl -s http://127.0.0.1:9333/json/list)",
+      "Bash(node -e ' *)",
+      "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\);process.stdin.on\\('end',async\\(\\)=>{const tabs=JSON.parse\\(d\\);for\\(const t of tabs\\){await fetch\\('http://127.0.0.1:9333/json/close/'+t.id\\);}console.log\\('closed',tabs.length\\)}\\)\")",
+      "Bash(./.venv311/Scripts/python.exe -c ' *)"
     ]
   }
 }
