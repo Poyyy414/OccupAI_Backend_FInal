@@ -10,7 +10,13 @@
       "Bash(node -e ' *)",
       "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\);process.stdin.on\\('end',async\\(\\)=>{const tabs=JSON.parse\\(d\\);for\\(const t of tabs\\){await fetch\\('http://127.0.0.1:9333/json/close/'+t.id\\);}console.log\\('closed',tabs.length\\)}\\)\")",
       "Bash(./.venv311/Scripts/python.exe -c ' *)",
-      "Bash(./.venv311/Scripts/python.exe -m pip install --dry-run -r requirements.txt)"
+      "Bash(./.venv311/Scripts/python.exe -m pip install --dry-run -r requirements.txt)",
+      "Bash(curl -s \"https://occupai-backend-final-2.onrender.com/api/parking_logs_recent?limit=5\")",
+      "Bash(git -C \"c:\\\\Users\\\\arias\\\\Documents\\\\OccupAI_Backend_FInal\" check-ignore -v .env)",
+      "Bash(git -C \"c:\\\\Users\\\\arias\\\\Documents\\\\OccupAI_Backend_FInal\" log --all --oneline -- .env)",
+      "Bash(\"./.venv311/Scripts/uvicorn.exe\" backend.main:app --port 8000)",
+      "Bash(curl -s http://127.0.0.1:8000/api/gcash/status)",
+      "Bash(curl -s -X POST http://127.0.0.1:8000/api/gcash/create-checkout -H \"Content-Type: application/json\" -d '{\"amount_php\": 25}')"
     ]
   }
 }
