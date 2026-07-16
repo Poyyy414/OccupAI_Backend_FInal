@@ -50,18 +50,22 @@ def get_db():
 def query(sql, params=None, fetch="all"):
     """Run a SELECT and return all rows."""
     conn = get_db()
-    cur  = conn.cursor()
-    cur.execute(sql, params or ())
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return rows
+    try:
+        cur = conn.cursor()
+        cur.execute(sql, params or ())
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+    finally:
+        conn.close()
 
 def execute(sql, params=None):
     """Run an INSERT/UPDATE/DELETE and commit."""
     conn = get_db()
-    cur  = conn.cursor()
-    cur.execute(sql, params or ())
-    conn.commit()
-    cur.close()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute(sql, params or ())
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()

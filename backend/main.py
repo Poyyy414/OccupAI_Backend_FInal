@@ -7,7 +7,7 @@ CHANGES in v2.2:
   - /api/predictions now includes weekday_revenue and today_revenue_forecast
   - Revenue forecast added to predictions endpoint
 """
-import os, math, bcrypt, uvicorn, joblib, threading, warnings, time, json, base64
+import os, math, bcrypt, uvicorn, joblib, threading, warnings, time, json, base64, secrets
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -834,6 +834,24 @@ def _ensure_payment_table():
         print(f"[DB] payment table setup warning: {e}")
 
 
+def _ensure_gcash_checkout_table():
+    try:
+        execute("""
+            CREATE TABLE IF NOT EXISTS gcash_checkouts (
+                ref TEXT PRIMARY KEY,
+                checkout_id TEXT,
+                user_id INTEGER,
+                regular_price_php NUMERIC(10,2) NOT NULL,
+                discount_type TEXT NOT NULL DEFAULT 'none',
+                final_amount_php NUMERIC(10,2) NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+    except Exception as e:
+        print(f"[DB] gcash checkout table setup warning: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
@@ -843,6 +861,7 @@ async def lifespan(app: FastAPI):
         print(f"[auth] Default admin setup warning: {e}")
     _ensure_parking_log_indexes()
     _ensure_payment_table()
+    _ensure_gcash_checkout_table()
     print("[OccupAI] Loading ML models...")
     try:
         ml.load()
@@ -2254,6 +2273,7 @@ class GcashCheckoutPayload(BaseModel):
     amount_php: float
     discount_type: Optional[str] = "none"
     description: Optional[str] = "OccupAI Parking Payment"
+    user_id: Optional[int] = None
 
 
 def _paymongo_headers():
@@ -2280,6 +2300,15 @@ def gcash_create_checkout(payload: GcashCheckoutPayload, request: Request):
     import urllib.request
     import urllib.error
 
+    ref = secrets.token_urlsafe(24)
+    execute(
+        """
+        INSERT INTO gcash_checkouts (ref, user_id, regular_price_php, discount_type, final_amount_php)
+        VALUES (%s,%s,%s,%s,%s)
+        """,
+        (ref, payload.user_id, payload.amount_php, discount_type, final_amount),
+    )
+
     body = json.dumps({
         "data": {
             "attributes": {
@@ -2291,7 +2320,7 @@ def gcash_create_checkout(payload: GcashCheckoutPayload, request: Request):
                     "description": payload.description or "OccupAI Parking Payment",
                 }],
                 "payment_method_types": ["gcash"],
-                "success_url": f"{base_url}/api/gcash/success?amount={final_amount}&discount_type={discount_type}",
+                "success_url": f"{base_url}/api/gcash/success?ref={ref}",
                 "cancel_url": f"{base_url}/driver",
                 "description": payload.description or "OccupAI Parking Payment",
             }
@@ -2314,6 +2343,7 @@ def gcash_create_checkout(payload: GcashCheckoutPayload, request: Request):
 
     checkout_url = result["data"]["attributes"]["checkout_url"]
     checkout_id = result["data"]["id"]
+    execute("UPDATE gcash_checkouts SET checkout_id=%s WHERE ref=%s", (checkout_id, ref))
 
     return {
         "checkout_url": checkout_url,
@@ -2324,40 +2354,83 @@ def gcash_create_checkout(payload: GcashCheckoutPayload, request: Request):
     }
 
 
-@app.get("/api/gcash/success")
-def gcash_success(amount: float = 0, discount_type: str = "none"):
-    try:
-        _, discount_rate = _discount_rate_for_type(discount_type)
-        regular_price = round(amount / (1 - discount_rate), 2) if discount_rate < 1 else amount
-        payment_payload = PaymentRecordPayload(
-            regular_price_php=regular_price,
-            discount_type=discount_type,
-            payment_method="gcash",
-            notes="Paid via GCash (PayMongo)",
-        )
-        _record_parking_payment(payment_payload)
-    except Exception as e:
-        print(f"[GCash] Could not auto-record payment: {e}")
-
+def _gcash_result_page(ok: bool, message: str):
+    color = "#22c996" if ok else "#ef4444"
+    icon = "&#10003;" if ok else "&#10007;"
+    title = "Payment Successful!" if ok else "Payment Not Confirmed"
     html = """<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Payment Successful</title>
+<title>""" + title + """</title>
 <style>
 body{font-family:"DM Sans",system-ui,sans-serif;background:#07100d;color:#f1f5f9;
 display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
 .box{background:rgba(241,245,249,.08);border-radius:16px;padding:48px 36px;text-align:center;max-width:420px}
-.check{font-size:64px;margin-bottom:16px}
-h1{font-size:24px;margin-bottom:8px;color:#22c996}
+.check{font-size:64px;margin-bottom:16px;color:""" + color + """}
+h1{font-size:24px;margin-bottom:8px;color:""" + color + """}
 p{color:#8794a6;margin-bottom:24px}
 a{display:inline-block;background:#22c996;color:#07100d;padding:12px 32px;border-radius:8px;
 text-decoration:none;font-weight:600}
 </style></head><body><div class="box">
-<div class="check">&#10003;</div>
-<h1>Payment Successful!</h1>
-<p>Your GCash payment of PHP """ + f"{amount:,.2f}" + """ has been recorded.</p>
+<div class="check">""" + icon + """</div>
+<h1>""" + title + """</h1>
+<p>""" + message + """</p>
 <a href="/driver">Back to Driver View</a>
 </div></body></html>"""
     return HTMLResponse(content=html)
+
+
+@app.get("/api/gcash/success")
+def gcash_success(ref: str):
+    rows = query("SELECT * FROM gcash_checkouts WHERE ref = %s", (ref,))
+    if not rows:
+        return _gcash_result_page(False, "We couldn't find this checkout session.")
+    checkout = rows[0]
+
+    if checkout["status"] == "paid":
+        return _gcash_result_page(
+            True, f"Your GCash payment of PHP {float(checkout['final_amount_php']):,.2f} has been recorded."
+        )
+
+    checkout_id = checkout["checkout_id"]
+    if not checkout_id:
+        return _gcash_result_page(False, "This checkout session was never started with PayMongo.")
+
+    import urllib.request
+    import urllib.error
+
+    try:
+        req = urllib.request.Request(
+            f"https://api.paymongo.com/v1/checkout_sessions/{checkout_id}",
+            headers=_paymongo_headers(),
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            result = json.loads(resp.read().decode())
+    except Exception as e:
+        print(f"[GCash] Could not verify checkout {checkout_id}: {e}")
+        return _gcash_result_page(False, "We couldn't verify your payment with PayMongo. Please contact support.")
+
+    payment_status = result.get("data", {}).get("attributes", {}).get("payment_status")
+    if payment_status != "paid":
+        return _gcash_result_page(False, "PayMongo has not confirmed this payment yet.")
+
+    try:
+        payment_payload = PaymentRecordPayload(
+            regular_price_php=float(checkout["regular_price_php"]),
+            discount_type=checkout["discount_type"],
+            payment_method="gcash",
+            notes="Paid via GCash (PayMongo)",
+            user_id=checkout["user_id"],
+        )
+        _record_parking_payment(payment_payload)
+        execute("UPDATE gcash_checkouts SET status='paid' WHERE ref=%s", (ref,))
+    except Exception as e:
+        print(f"[GCash] Could not auto-record payment: {e}")
+        return _gcash_result_page(False, "Payment was confirmed by PayMongo, but we couldn't save the record. Please contact support.")
+
+    return _gcash_result_page(
+        True, f"Your GCash payment of PHP {float(checkout['final_amount_php']):,.2f} has been recorded."
+    )
 
 
 @app.get("/api/gcash/status")

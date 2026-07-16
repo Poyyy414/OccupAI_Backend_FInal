@@ -870,6 +870,7 @@
             amount_php: price,
             discount_type: document.getElementById('gcashDiscount')?.value || 'none',
             description: 'OccupAI Parking - ' + (document.getElementById('driverName')?.textContent || 'Driver'),
+            user_id: getUser()?.user_id ?? null,
           })
         });
         const d = await r.json();
