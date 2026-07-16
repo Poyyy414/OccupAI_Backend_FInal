@@ -829,6 +829,7 @@ def _ensure_payment_table():
             "CREATE INDEX IF NOT EXISTS idx_parking_payments_paid_at_desc "
             "ON parking_payments (paid_at DESC)"
         )
+        execute("ALTER TABLE parking_payments ADD COLUMN IF NOT EXISTS user_id INTEGER")
     except Exception as e:
         print(f"[DB] payment table setup warning: {e}")
 
@@ -1891,9 +1892,9 @@ def _record_parking_payment(payload):
             """
             INSERT INTO parking_payments (
                 regular_price_php, discount_type, discount_rate,
-                discount_amount_php, final_amount_php, payment_method, notes, paid_at
+                discount_amount_php, final_amount_php, payment_method, notes, paid_at, user_id
             )
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
             RETURNING payment_id, regular_price_php, discount_type,
                       discount_rate, discount_amount_php, final_amount_php,
                       payment_method, notes, paid_at
@@ -1901,6 +1902,7 @@ def _record_parking_payment(payload):
             (
                 regular_price, discount_type, discount_rate,
                 discount_amount, final_amount, payment_method, notes, paid_at,
+                payload.user_id,
             ),
         )
         row = cur.fetchone()
