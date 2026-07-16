@@ -813,6 +813,7 @@ def _ensure_payment_table():
         execute("""
             CREATE TABLE IF NOT EXISTS parking_payments (
                 payment_id BIGSERIAL PRIMARY KEY,
+                user_id INTEGER,
                 regular_price_php NUMERIC(10,2) NOT NULL,
                 discount_type TEXT NOT NULL DEFAULT 'none',
                 discount_rate NUMERIC(6,4) NOT NULL DEFAULT 0,
@@ -2180,6 +2181,7 @@ class PaymentRecordPayload(BaseModel):
     payment_method: Optional[str] = "cash"
     notes: Optional[str] = None
     paid_at: Optional[str] = None
+    user_id: Optional[int] = None
 
 
 @app.post("/api/payments")
@@ -2188,6 +2190,62 @@ def api_record_payment(payload: PaymentRecordPayload):
 
 
 # ══════════════════════════════════════════════════════════════════
+
+@app.get("/api/driver/history")
+def api_driver_history(user_id: int, period: str = "all", limit: int = 50):
+    """Returns parking payment history for a specific driver."""
+    try:
+        period_filter = ""
+        if period == "today":
+            period_filter = "AND DATE(paid_at AT TIME ZONE 'Asia/Manila') = CURRENT_DATE"
+        elif period == "week":
+            period_filter = "AND paid_at >= DATE_TRUNC('week', NOW() AT TIME ZONE 'Asia/Manila')"
+        elif period == "month":
+            period_filter = "AND paid_at >= DATE_TRUNC('month', NOW() AT TIME ZONE 'Asia/Manila')"
+
+        rows = query(f"""
+            SELECT
+                payment_id,
+                regular_price_php,
+                discount_type,
+                discount_amount_php,
+                final_amount_php,
+                payment_method,
+                notes,
+                paid_at AT TIME ZONE 'Asia/Manila' AS paid_at_ph
+            FROM parking_payments
+            WHERE user_id = %s {period_filter}
+            ORDER BY paid_at DESC
+            LIMIT %s
+        """, (user_id, limit))
+
+        records = []
+        for r in rows:
+            paid_at = r["paid_at_ph"]
+            records.append({
+                "payment_id": r["payment_id"],
+                "regular_price_php": float(r["regular_price_php"]),
+                "discount_type": r["discount_type"],
+                "discount_amount_php": float(r["discount_amount_php"]),
+                "final_amount_php": float(r["final_amount_php"]),
+                "payment_method": r["payment_method"],
+                "slot_label": "--",
+                "duration_minutes": 0,
+                "notes": r["notes"] or "",
+                "paid_date": paid_at.strftime("%b %d, %Y") if paid_at else "--",
+                "paid_time": paid_at.strftime("%I:%M %p") if paid_at else "--",
+            })
+
+        total_spent = sum(r["final_amount_php"] for r in records)
+        return {
+            "records": records,
+            "total_spent_php": round(total_spent, 2),
+            "total_sessions": len(records),
+            "period": period,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 #  GCash Payment via PayMongo
 # ══════════════════════════════════════════════════════════════════
 class GcashCheckoutPayload(BaseModel):

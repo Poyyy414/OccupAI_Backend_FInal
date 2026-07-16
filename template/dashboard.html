@@ -1545,6 +1545,36 @@
       .insight-tools { align-items: flex-start; flex-direction: column; }
       .zone-summary { grid-template-columns: 1fr; }
     }
+
+    /* ── Reports Page ── */
+    .reports-toolbar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom:18px; }
+    .reports-tabs { display:flex; gap:6px; }
+    .report-tab { background:var(--surface); border:1px solid var(--border); color:var(--muted); border-radius:8px; padding:7px 16px; font-size:13px; font-weight:700; cursor:pointer; transition:all .18s; }
+    .report-tab.active { background:var(--green); color:#000; border-color:var(--green); }
+    .reports-actions { display:flex; gap:8px; align-items:center; }
+    .report-dl-btn { background:var(--surface); border:1px solid var(--border); color:var(--text); border-radius:8px; padding:7px 14px; font-size:12px; font-weight:700; cursor:pointer; transition:all .18s; }
+    .report-dl-btn:hover { background:var(--green); color:#000; border-color:var(--green); }
+    .report-dl-pdf { border-color:var(--orange); color:var(--orange); }
+    .report-dl-pdf:hover { background:var(--orange); color:#000; }
+    .report-kpi-row { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:18px; }
+    .report-kpi { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px 18px; display:flex; flex-direction:column; gap:4px; }
+    .report-kpi span { font-size:11px; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; }
+    .report-kpi strong { font-size:20px; font-weight:800; color:var(--green); font-family:'Space Mono',monospace; }
+    .report-kpi small { font-size:11px; color:var(--muted); }
+    .report-chart-wrap { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:18px; margin-bottom:18px; }
+    .report-chart-title { font-size:13px; font-weight:800; color:var(--text); margin-bottom:12px; }
+    .report-table-wrap { background:var(--surface); border:1px solid var(--border); border-radius:12px; overflow:hidden; }
+    .report-table { width:100%; border-collapse:collapse; font-size:13px; }
+    .report-table thead th { background:var(--bg); color:var(--muted); font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.06em; padding:10px 14px; text-align:left; border-bottom:1px solid var(--border); }
+    .report-table tbody tr:nth-child(even) { background:rgba(255,255,255,.02); }
+    .report-table tbody td { padding:10px 14px; color:var(--text); border-bottom:1px solid var(--border); }
+    .report-table tbody tr:last-child td { border-bottom:none; }
+    .report-table .col-money { font-family:'Space Mono',monospace; color:var(--green); font-weight:700; }
+    .report-table .col-discount { color:var(--orange); font-family:'Space Mono',monospace; }
+    .report-empty { padding:40px; text-align:center; color:var(--muted); font-size:14px; }
+    .report-footer { margin-top:10px; font-size:11px; color:var(--muted); text-align:right; padding:4px 2px; }
+    @media(max-width:900px) { .report-kpi-row { grid-template-columns:repeat(2,1fr); } }
+    @media(max-width:600px) { .report-kpi-row { grid-template-columns:1fr; } .reports-toolbar { flex-direction:column; align-items:flex-start; } }
 </style>
 </head>
 <body>
@@ -1596,6 +1626,10 @@
     <button class="nav-item" onclick="switchPanel('predictions', this)">
       <span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-chart"></use></svg></span>
       <span>Predictions</span>
+    </button>
+    <button class="nav-item" onclick="switchPanel('reports', this)">
+      <span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-sparkles"></use></svg></span>
+      <span>Reports</span>
     </button>
   </nav>
 
@@ -2120,6 +2154,54 @@
       </div>
     </section>
   </section>
+
+  <section class="content" id="content-reports">
+    <div class="reports-toolbar">
+      <div class="reports-tabs" id="reportsTabs">
+        <button class="report-tab active" onclick="switchReportTab('daily', this)">Daily</button>
+        <button class="report-tab" onclick="switchReportTab('weekly', this)">Weekly</button>
+        <button class="report-tab" onclick="switchReportTab('monthly', this)">Monthly</button>
+        <button class="report-tab" onclick="switchReportTab('yearly', this)">Yearly</button>
+      </div>
+      <div class="reports-actions">
+        <button class="report-dl-btn" onclick="downloadReportCSV()">&#8595; CSV</button>
+        <button class="report-dl-btn report-dl-pdf" onclick="downloadReportPDF()">&#8595; PDF</button>
+        <button class="refresh-btn" onclick="fetchReports()">&#8635; Refresh</button>
+      </div>
+    </div>
+
+    <div class="report-kpi-row">
+      <div class="report-kpi"><span>Today</span><strong id="rKpiVal1">PHP --</strong><small id="rKpiSub1">-- transactions</small></div>
+      <div class="report-kpi"><span>This Week</span><strong id="rKpiVal2">PHP --</strong><small id="rKpiSub2">-- transactions</small></div>
+      <div class="report-kpi"><span>This Month</span><strong id="rKpiVal3">PHP --</strong><small id="rKpiSub3">-- transactions</small></div>
+      <div class="report-kpi"><span>This Year</span><strong id="rKpiVal4">PHP --</strong><small id="rKpiSub4">-- transactions</small></div>
+    </div>
+
+    <div class="report-chart-wrap">
+      <div class="report-chart-title">Revenue Summary</div>
+      <canvas id="reportChart" height="80"></canvas>
+    </div>
+
+    <div class="report-chart-wrap">
+      <div class="report-chart-title" style="display:flex;align-items:center;justify-content:space-between">
+        <span>&#128200; AI Predicted vs Actual Revenue <span style="font-size:11px;color:var(--muted);font-weight:400">(by day of week)</span></span>
+        <span id="predAccuracyBadge" style="font-size:11px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:3px 10px;color:var(--muted)">Loading...</span>
+      </div>
+      <canvas id="predVsActualChart" height="80"></canvas>
+      <div style="font-size:11px;color:var(--muted);margin-top:10px">
+        Green line = actual average revenue per day &nbsp;|&nbsp; Dashed line = AI predicted revenue per day
+      </div>
+    </div>
+
+    <div class="report-table-wrap">
+      <table class="report-table" id="reportTable">
+        <thead id="reportTableHead"></thead>
+        <tbody id="reportTableBody"></tbody>
+      </table>
+      <div class="report-empty" id="reportEmpty" style="display:none">No payment data recorded yet for this period.</div>
+    </div>
+    <div class="report-footer" id="reportFooter"></div>
+  </section>
 </main>
 
 <script>
@@ -2199,6 +2281,11 @@ const PANEL_META = {
     eyebrow: 'Forecast data',
     title: 'Predictions',
     sub: 'Full 24-hour occupancy forecast, peak hour, busy/quiet days, and weekday revenue'
+  },
+  reports: {
+    eyebrow: 'Business reports',
+    title: 'Revenue Reports',
+    sub: 'Daily, weekly, monthly and yearly revenue summaries — downloadable as CSV or PDF'
   }
 };
 
@@ -3174,6 +3261,348 @@ setInterval(fetchPricingSettings, 30000);
 setInterval(() => {
   if (isPanelActive('insights')) fetchInsights();
 }, 10000);
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+// ── Reports Module ──────────────────────────────────────────────
+let reportTab = 'daily';
+let reportData = null;
+let reportChartInstance = null;
+let predVsActualChartInstance = null;
+
+function switchReportTab(tab, btn) {
+  reportTab = tab;
+  document.querySelectorAll('.report-tab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderReports();
+}
+
+async function fetchReports() {
+  try {
+    const res = await fetch('/api/revenue/dashboard');
+    const data = await res.json();
+    reportData = data;
+    updateReportKpis(data);
+    renderReports();
+    fetchPredVsActual(data.daily_revenue || []);
+  } catch(e) { console.error('Reports fetch error', e); }
+}
+
+function phpFmt(val) {
+  return 'PHP ' + Number(val || 0).toLocaleString('en-PH', {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+
+function updateReportKpis(data) {
+  const setText = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+  setText('rKpiVal1', phpFmt(data.today_revenue_php));
+  setText('rKpiSub1', (data.today_transaction_count || 0) + ' transactions');
+  setText('rKpiVal2', phpFmt(data.week_revenue_php));
+  setText('rKpiSub2', (data.week_transaction_count || 0) + ' transactions');
+  setText('rKpiVal3', phpFmt(data.month_revenue_php));
+  setText('rKpiSub3', (data.month_transaction_count || 0) + ' transactions');
+  const yearly = (data.monthly_revenue || []).reduce((s, r) => s + (r.revenue_php || 0), 0);
+  const yearlyTx = (data.monthly_revenue || []).reduce((s, r) => s + (r.transaction_count || 0), 0);
+  setText('rKpiVal4', phpFmt(yearly));
+  setText('rKpiSub4', yearlyTx + ' transactions');
+}
+
+function getReportTabRows(data) {
+  if (!data) return [];
+  if (reportTab === 'daily') return data.daily_revenue || [];
+  if (reportTab === 'weekly') return buildWeeklyRows(data.daily_revenue || []);
+  if (reportTab === 'monthly') return data.monthly_revenue || [];
+  if (reportTab === 'yearly') return buildYearlyRows(data.monthly_revenue || []);
+  return [];
+}
+
+function buildWeeklyRows(daily) {
+  const weeks = {};
+  daily.forEach(row => {
+    const d = new Date(row.date);
+    const day = d.getDay() || 7;
+    const mon = new Date(d);
+    mon.setDate(d.getDate() - day + 1);
+    const key = mon.toISOString().slice(0,10);
+    if (!weeks[key]) weeks[key] = { week_start: key, revenue_php: 0, discount_php: 0, transaction_count: 0 };
+    weeks[key].revenue_php += row.revenue_php || 0;
+    weeks[key].discount_php += row.discount_php || 0;
+    weeks[key].transaction_count += row.transaction_count || 0;
+  });
+  return Object.values(weeks).sort((a,b) => a.week_start.localeCompare(b.week_start));
+}
+
+function buildYearlyRows(monthly) {
+  const years = {};
+  monthly.forEach(row => {
+    const yr = (row.month || '').slice(0,4);
+    if (!yr) return;
+    if (!years[yr]) years[yr] = { year: yr, revenue_php: 0, discount_php: 0, transaction_count: 0 };
+    years[yr].revenue_php += row.revenue_php || 0;
+    years[yr].discount_php += row.discount_php || 0;
+    years[yr].transaction_count += row.transaction_count || 0;
+  });
+  return Object.values(years).sort((a,b) => a.year.localeCompare(b.year));
+}
+
+function getReportTabColumns() {
+  if (reportTab === 'daily') return [
+    { key: 'date', label: 'Date' },
+    { key: 'label', label: 'Day' },
+    { key: 'revenue_php', label: 'Revenue (PHP)', cls: 'col-money', fmt: v => phpFmt(v) },
+    { key: 'discount_php', label: 'Discounts (PHP)', cls: 'col-discount', fmt: v => phpFmt(v) },
+    { key: 'net', label: 'Net Revenue (PHP)', cls: 'col-money', fmt: (v, row) => phpFmt((row.revenue_php||0) - (row.discount_php||0)) },
+    { key: 'transaction_count', label: 'Transactions' },
+  ];
+  if (reportTab === 'weekly') return [
+    { key: 'week_start', label: 'Week Starting' },
+    { key: 'revenue_php', label: 'Revenue (PHP)', cls: 'col-money', fmt: v => phpFmt(v) },
+    { key: 'discount_php', label: 'Discounts (PHP)', cls: 'col-discount', fmt: v => phpFmt(v) },
+    { key: 'net', label: 'Net Revenue (PHP)', cls: 'col-money', fmt: (v, row) => phpFmt((row.revenue_php||0) - (row.discount_php||0)) },
+    { key: 'transaction_count', label: 'Transactions' },
+  ];
+  if (reportTab === 'monthly') return [
+    { key: 'month', label: 'Month' },
+    { key: 'label', label: 'Name' },
+    { key: 'revenue_php', label: 'Revenue (PHP)', cls: 'col-money', fmt: v => phpFmt(v) },
+    { key: 'discount_php', label: 'Discounts (PHP)', cls: 'col-discount', fmt: v => phpFmt(v) },
+    { key: 'net', label: 'Net Revenue (PHP)', cls: 'col-money', fmt: (v, row) => phpFmt((row.revenue_php||0) - (row.discount_php||0)) },
+    { key: 'transaction_count', label: 'Transactions' },
+  ];
+  if (reportTab === 'yearly') return [
+    { key: 'year', label: 'Year' },
+    { key: 'revenue_php', label: 'Revenue (PHP)', cls: 'col-money', fmt: v => phpFmt(v) },
+    { key: 'discount_php', label: 'Discounts (PHP)', cls: 'col-discount', fmt: v => phpFmt(v) },
+    { key: 'net', label: 'Net Revenue (PHP)', cls: 'col-money', fmt: (v, row) => phpFmt((row.revenue_php||0) - (row.discount_php||0)) },
+    { key: 'transaction_count', label: 'Transactions' },
+  ];
+  return [];
+}
+
+function renderReports() {
+  if (!reportData) return;
+  const rows = getReportTabRows(reportData);
+  const cols = getReportTabColumns();
+
+  const thead = document.getElementById('reportTableHead');
+  const tbody = document.getElementById('reportTableBody');
+  const empty = document.getElementById('reportEmpty');
+  if (thead) thead.innerHTML = '<tr>' + cols.map(c => '<th>' + c.label + '</th>').join('') + '</tr>';
+  if (!rows.length) {
+    if (tbody) tbody.innerHTML = '';
+    if (empty) empty.style.display = '';
+  } else {
+    if (empty) empty.style.display = 'none';
+    if (tbody) tbody.innerHTML = rows.map(row =>
+      '<tr>' + cols.map(c => {
+        const val = c.fmt ? c.fmt(row[c.key], row) : (row[c.key] ?? '--');
+        return '<td class="' + (c.cls || '') + '">' + val + '</td>';
+      }).join('') + '</tr>'
+    ).join('');
+  }
+
+  const totalRev = rows.reduce((s, r) => s + (r.revenue_php || 0), 0);
+  const totalTx = rows.reduce((s, r) => s + (r.transaction_count || 0), 0);
+  const totalDis = rows.reduce((s, r) => s + (r.discount_php || 0), 0);
+  const footer = document.getElementById('reportFooter');
+  if (footer) footer.textContent = 'Total: ' + phpFmt(totalRev) + ' revenue · ' + phpFmt(totalDis) + ' discounts · ' + totalTx + ' transactions · Generated: ' + (reportData.generated_at_ph || '--');
+
+  renderReportChart(rows);
+}
+
+function getReportChartLabel(row) {
+  if (reportTab === 'daily') return row.label || row.date;
+  if (reportTab === 'weekly') return 'Wk ' + (row.week_start || '').slice(5);
+  if (reportTab === 'monthly') return row.label || row.month;
+  if (reportTab === 'yearly') return row.year;
+  return '';
+}
+
+function renderReportChart(rows) {
+  const ctx = document.getElementById('reportChart');
+  if (!ctx) return;
+  if (reportChartInstance) reportChartInstance.destroy();
+  reportChartInstance = new Chart(ctx.getContext('2d'), {
+    type: 'bar',
+    data: {
+      labels: rows.map(getReportChartLabel),
+      datasets: [
+        { label: 'Revenue (PHP)', data: rows.map(r => +(r.revenue_php || 0).toFixed(2)), backgroundColor: 'rgba(72,199,142,.75)', borderRadius: 5 },
+        { label: 'Discounts (PHP)', data: rows.map(r => +(r.discount_php || 0).toFixed(2)), backgroundColor: 'rgba(255,159,67,.65)', borderRadius: 5 },
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { labels: { color: '#aaa', font: { size: 12 } } },
+        tooltip: { callbacks: { label: ctx => ' ' + phpFmt(ctx.parsed.y) } }
+      },
+      scales: {
+        x: { ticks: { color: '#888' }, grid: { color: 'rgba(255,255,255,.05)' } },
+        y: { ticks: { color: '#888', callback: v => 'PHP ' + v.toLocaleString() }, grid: { color: 'rgba(255,255,255,.05)' } }
+      }
+    }
+  });
+}
+
+async function fetchPredVsActual(dailyRows) {
+  try {
+    const res = await fetch('/api/predictions');
+    const pred = await res.json();
+    const weekdayPred = pred.weekday_revenue || {};
+    const days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+    const actualByDay = { Mon:[], Tue:[], Wed:[], Thu:[], Fri:[], Sat:[], Sun:[] };
+    dailyRows.forEach(row => {
+      const d = new Date(row.date);
+      const dayIdx = (d.getDay() + 6) % 7;
+      const label = days[dayIdx];
+      if (actualByDay[label] !== undefined && row.revenue_php > 0) actualByDay[label].push(row.revenue_php);
+    });
+    const actualAvg = days.map(d => { const vals = actualByDay[d]; return vals.length ? +(vals.reduce((a,b)=>a+b,0)/vals.length).toFixed(2) : null; });
+    const predVals = days.map(d => { const v = weekdayPred[d] || weekdayPred[d.toLowerCase()] || null; return v ? +parseFloat(v).toFixed(2) : null; });
+
+    let matchCount = 0, totalCompare = 0;
+    days.forEach((d, i) => {
+      if (actualAvg[i] !== null && predVals[i] !== null) {
+        totalCompare++;
+        if (Math.abs(actualAvg[i] - predVals[i]) / Math.max(actualAvg[i], predVals[i]) <= 0.2) matchCount++;
+      }
+    });
+    const accuracy = totalCompare > 0 ? Math.round((matchCount/totalCompare)*100) : null;
+    const badge = document.getElementById('predAccuracyBadge');
+    if (badge) {
+      badge.textContent = accuracy !== null ? 'Accuracy: ~' + accuracy + '%' : 'Not enough data yet';
+      badge.style.color = accuracy !== null ? (accuracy >= 70 ? 'var(--green)' : accuracy >= 40 ? 'var(--orange)' : '#e55') : 'var(--muted)';
+    }
+
+    const ctx = document.getElementById('predVsActualChart');
+    if (!ctx) return;
+    if (predVsActualChartInstance) predVsActualChartInstance.destroy();
+    predVsActualChartInstance = new Chart(ctx.getContext('2d'), {
+      type: 'line',
+      data: {
+        labels: days,
+        datasets: [
+          { label: 'Actual Avg Revenue (PHP)', data: actualAvg, borderColor: 'rgba(72,199,142,1)', backgroundColor: 'rgba(72,199,142,0.12)', borderWidth: 2.5, pointRadius: 5, pointBackgroundColor: 'rgba(72,199,142,1)', fill: true, tension: 0.3, spanGaps: true },
+          { label: 'AI Predicted Revenue (PHP)', data: predVals, borderColor: 'rgba(150,180,255,0.9)', backgroundColor: 'rgba(150,180,255,0.05)', borderWidth: 2, borderDash: [6,4], pointRadius: 4, pointBackgroundColor: 'rgba(150,180,255,0.9)', fill: false, tension: 0.3, spanGaps: true }
+        ]
+      },
+      options: {
+        responsive: true,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { labels: { color: '#aaa', font: { size: 12 } } },
+          tooltip: { callbacks: { label: ctx => { const v = ctx.parsed.y; return v !== null ? ' ' + ctx.dataset.label + ': ' + phpFmt(v) : ' No data'; } } }
+        },
+        scales: {
+          x: { ticks: { color: '#888' }, grid: { color: 'rgba(255,255,255,.05)' } },
+          y: { ticks: { color: '#888', callback: v => 'PHP ' + Number(v).toLocaleString() }, grid: { color: 'rgba(255,255,255,.05)' } }
+        }
+      }
+    });
+  } catch(e) { console.error('Pred vs actual error', e); }
+}
+
+function downloadReportCSV() {
+  if (!reportData) { alert('No data loaded yet.'); return; }
+  const rows = getReportTabRows(reportData);
+  const cols = getReportTabColumns().filter(c => c.key !== 'net');
+  const headers = [...cols.map(c => c.label), 'Net Revenue (PHP)'];
+  const csvRows = [headers.join(',')];
+  rows.forEach(row => {
+    const vals = cols.map(c => '"' + String(row[c.key] ?? '').replace(/"/g, '""') + '"');
+    vals.push('"' + ((row.revenue_php || 0) - (row.discount_php || 0)).toFixed(2) + '"');
+    csvRows.push(vals.join(','));
+  });
+  csvRows.push('');
+  const totalRev = rows.reduce((s, r) => s + (r.revenue_php || 0), 0);
+  const totalDis = rows.reduce((s, r) => s + (r.discount_php || 0), 0);
+  const totalTx = rows.reduce((s, r) => s + (r.transaction_count || 0), 0);
+  csvRows.push('"TOTAL REVENUE","' + totalRev.toFixed(2) + '"');
+  csvRows.push('"TOTAL DISCOUNTS","' + totalDis.toFixed(2) + '"');
+  csvRows.push('"NET REVENUE","' + (totalRev - totalDis).toFixed(2) + '"');
+  csvRows.push('"TOTAL TRANSACTIONS","' + totalTx + '"');
+  csvRows.push('"GENERATED AT","' + (reportData.generated_at_ph || '') + '"');
+  const blob = new Blob([csvRows.join('\n')], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'occupai_' + reportTab + '_report_' + new Date().toISOString().slice(0,10) + '.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function downloadReportPDF() {
+  if (!reportData) { alert('No data loaded yet.'); return; }
+  const rows = getReportTabRows(reportData);
+  const cols = getReportTabColumns();
+  const totalRev = rows.reduce((s, r) => s + (r.revenue_php || 0), 0);
+  const totalDis = rows.reduce((s, r) => s + (r.discount_php || 0), 0);
+  const totalTx = rows.reduce((s, r) => s + (r.transaction_count || 0), 0);
+  const tabLabel = reportTab.charAt(0).toUpperCase() + reportTab.slice(1);
+
+  const chartCanvas = document.getElementById('reportChart');
+  const predCanvas = document.getElementById('predVsActualChart');
+  const chartImg = chartCanvas ? chartCanvas.toDataURL('image/png') : '';
+  const predImg = predCanvas ? predCanvas.toDataURL('image/png') : '';
+  const badge = document.getElementById('predAccuracyBadge');
+  const accuracyText = badge ? badge.textContent : '';
+
+  const tableRows = rows.map(row => '<tr>' + cols.map(c => { const val = c.fmt ? c.fmt(row[c.key], row) : (row[c.key] ?? '--'); return '<td>' + val + '</td>'; }).join('') + '</tr>').join('');
+  const chartSection = chartImg ? '<div class="section-title">Revenue Summary Chart</div><img src="' + chartImg + '" class="chart-img" /><div class="chart-note">Bar chart showing Revenue (green) vs Discounts (orange) for the selected period.</div>' : '';
+  const predSection = predImg ? '<div class="section-title">AI Predicted vs Actual Revenue &nbsp;<span style="font-size:10px;font-weight:400;color:#888">' + accuracyText + '</span></div><img src="' + predImg + '" class="chart-img" /><div class="chart-note">Green solid line = actual average revenue per day | Blue dashed line = AI predicted revenue per day</div>' : '';
+
+  const html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>OccupAI ' + tabLabel + ' Revenue Report</title><style>'
+    + '* { box-sizing: border-box; } body { font-family: Arial, sans-serif; font-size: 12px; color: #111; margin: 28px; }'
+    + '.header { display:flex; align-items:center; justify-content:space-between; border-bottom:2px solid #1a7a4a; padding-bottom:10px; margin-bottom:16px; }'
+    + '.header-left h1 { font-size: 20px; margin:0 0 2px 0; color:#1a7a4a; } .header-left .sub { color: #666; font-size: 11px; margin:0; }'
+    + '.header-right { text-align:right; font-size:10px; color:#888; } .badge { background:#e8f5ee; color:#1a7a4a; border:1px solid #1a7a4a; border-radius:5px; padding:2px 8px; font-size:10px; font-weight:700; }'
+    + '.kpi-row { display:flex; gap:12px; margin-bottom:20px; } .kpi { border:1px solid #ddd; border-radius:8px; padding:10px 14px; flex:1; background:#fafffe; }'
+    + '.kpi span { font-size:9px; color:#888; display:block; text-transform:uppercase; letter-spacing:.05em; } .kpi strong { font-size:15px; color:#1a7a4a; font-weight:800; display:block; margin:2px 0; } .kpi small { font-size:10px; color:#aaa; }'
+    + '.section-title { font-size:12px; font-weight:800; color:#333; margin:18px 0 8px 0; text-transform:uppercase; letter-spacing:.05em; border-left:3px solid #1a7a4a; padding-left:8px; }'
+    + '.chart-img { width:100%; border:1px solid #eee; border-radius:6px; margin-bottom:6px; } .chart-note { font-size:10px; color:#999; margin-bottom:16px; }'
+    + 'table { width:100%; border-collapse:collapse; margin-top:4px; } th { background:#1a7a4a; color:#fff; font-size:10px; text-transform:uppercase; padding:7px 10px; text-align:left; }'
+    + 'td { padding:6px 10px; border-bottom:1px solid #eee; } tr:nth-child(even) td { background:#f7fdf9; } .money { color:#1a7a4a; font-weight:700; }'
+    + '.summary-box { margin-top:20px; background:#f7fdf9; border:1px solid #c8e6d4; border-radius:8px; padding:14px 18px; display:flex; gap:30px; flex-wrap:wrap; }'
+    + '.summary-item { display:flex; flex-direction:column; gap:2px; } .summary-item span { font-size:9px; color:#888; text-transform:uppercase; } .summary-item strong { font-size:14px; color:#1a7a4a; font-weight:800; }'
+    + '.footer { margin-top:24px; border-top:1px solid #eee; padding-top:8px; font-size:10px; color:#aaa; display:flex; justify-content:space-between; }'
+    + '@media print { body { margin:12px; } @page { margin:1cm; } }'
+    + '</style></head><body>'
+    + '<div class="header"><div class="header-left"><h1>&#128200; OccupAI &mdash; ' + tabLabel + ' Revenue Report</h1><p class="sub">105 Penafrancia Ave, Naga City &nbsp;|&nbsp; Parking Operations Dashboard</p></div>'
+    + '<div class="header-right"><div>Generated: <strong>' + (reportData.generated_at_ph || '--') + '</strong></div><div style="margin-top:4px"><span class="badge">' + tabLabel + ' Report</span></div></div></div>'
+    + '<div class="kpi-row">'
+    + '<div class="kpi"><span>Today</span><strong>' + phpFmt(reportData.today_revenue_php) + '</strong><small>' + (reportData.today_transaction_count || 0) + ' transactions</small></div>'
+    + '<div class="kpi"><span>This Week</span><strong>' + phpFmt(reportData.week_revenue_php) + '</strong><small>' + (reportData.week_transaction_count || 0) + ' transactions</small></div>'
+    + '<div class="kpi"><span>This Month</span><strong>' + phpFmt(reportData.month_revenue_php) + '</strong><small>' + (reportData.month_transaction_count || 0) + ' transactions</small></div>'
+    + '<div class="kpi"><span>Period Total</span><strong>' + phpFmt(totalRev) + '</strong><small>' + totalTx + ' transactions</small></div>'
+    + '</div>'
+    + chartSection + predSection
+    + '<div class="section-title">Detailed Breakdown</div>'
+    + '<table><thead><tr>' + cols.map(c => '<th>' + c.label + '</th>').join('') + '</tr></thead><tbody>' + tableRows + '</tbody></table>'
+    + '<div class="summary-box">'
+    + '<div class="summary-item"><span>Total Revenue</span><strong>' + phpFmt(totalRev) + '</strong></div>'
+    + '<div class="summary-item"><span>Total Discounts</span><strong style="color:#c07000">' + phpFmt(totalDis) + '</strong></div>'
+    + '<div class="summary-item"><span>Net Revenue</span><strong>' + phpFmt(totalRev - totalDis) + '</strong></div>'
+    + '<div class="summary-item"><span>Total Transactions</span><strong>' + totalTx + '</strong></div>'
+    + '</div>'
+    + '<div class="footer"><span>OccupAI Parking Management System &nbsp;|&nbsp; ' + (reportData.revenue_basis || 'Revenue Report') + '</span><span>Confidential &mdash; For Business Use Only</span></div>'
+    + '<script>window.onload=function(){window.print()}<\/script></body></html>';
+
+  const w = window.open('', '_blank');
+  w.document.write(html);
+  w.document.close();
+}
+
+// Auto-load reports when switching to reports panel
+document.addEventListener('DOMContentLoaded', function() {
+  const origSwitch = window.switchPanel;
+  if (origSwitch) {
+    window.switchPanel = function(name, btn) {
+      origSwitch(name, btn);
+      if (name === 'reports') fetchReports();
+    };
+  }
+});
 </script>
 </body>
 </html>
