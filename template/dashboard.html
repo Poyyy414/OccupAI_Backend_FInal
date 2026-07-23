@@ -2209,13 +2209,13 @@
   try {
     const raw = localStorage.getItem('occupai_user');
     if (!raw || raw === 'undefined' || raw === 'null') {
-      localStorage.removeItem('occupai_user');
+      localStorage.removeItem('occupai_user'); localStorage.removeItem('occupai_token');
       window.location.href = '/login';
       return;
     }
     const u = JSON.parse(raw);
     if (!u || typeof u !== 'object' || !u.user_id) {
-      localStorage.removeItem('occupai_user');
+      localStorage.removeItem('occupai_user'); localStorage.removeItem('occupai_token');
       window.location.href = '/login';
       return;
     }
@@ -2224,9 +2224,15 @@
     }
   } catch(e) {
     localStorage.removeItem('occupai_user');
+    localStorage.removeItem('occupai_token');
     window.location.href = '/login';
   }
 })();
+
+function authHeaders() {
+  const token = localStorage.getItem('occupai_token');
+  return token ? { 'Authorization': 'Bearer ' + token } : {};
+}
 
 function getStoredUser() {
   try {
@@ -2252,6 +2258,7 @@ if (user) {
 
 function signOut() {
   localStorage.removeItem('occupai_user');
+  localStorage.removeItem('occupai_token');
   fetch('/auth/logout', { method: 'POST' }).catch(() => {});
   window.location.href = '/login';
 }
@@ -2391,7 +2398,7 @@ async function setLayoutMode(mode) {
   try {
     const r = await fetch('/api/settings/layout-mode', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ mode: normalized, enabled: true })
     });
     if (!r.ok) throw new Error(r.status);
@@ -2412,7 +2419,7 @@ async function toggleLayoutOverride() {
   try {
     const r = await fetch('/api/settings/layout-mode', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ mode: layoutSelectedMode, enabled: nextEnabled })
     });
     if (!r.ok) throw new Error(r.status);
@@ -2499,7 +2506,7 @@ async function savePricingSettings(forceEnabled = true) {
   try {
     const r = await fetch('/api/settings/pricing', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ price_php: price, enabled })
     });
     const d = await r.json();
@@ -2522,7 +2529,7 @@ async function togglePricingOverride() {
   try {
     const r = await fetch('/api/settings/pricing', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ price_php: price, enabled })
     });
     const d = await r.json();
@@ -2926,7 +2933,7 @@ async function recordPayment() {
   try {
     const r = await fetch('/api/payments', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(payload)
     });
     const d = await r.json();

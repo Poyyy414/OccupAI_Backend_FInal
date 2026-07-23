@@ -1,555 +1,157 @@
 """
-backend/slot_adjuster.py  — OccupAI Slot Adjuster v1.5
-=======================================================
-Changes from v1.4:
-  - _get_row_config() now reads ALL row params fresh from .env on
-    every call — no stale cached defaults causing layout to ignore .env
-  - _reload_env() called at top of every cycle AND inside build_layout()
-    so changes to .env take effect without restart
-  - x2 hard-cap still enforced per-slot so demand packing never
-    overflows into excluded areas
-  - ROW_COUNT now drives how many rows are built (default 3)
-    — add ROW_4_* etc. without any code changes
+seed_db.py — OccupAI local/dev database seeder
+
+Populates a fresh database with demo data so the dashboard and driver
+views have something to show without waiting for real camera/payment
+traffic. Safe to run multiple times: everything is idempotent.
+
+Run: python seed_db.py
 """
+import random
+import sys
+from datetime import datetime, timedelta
 
-import time
-import threading
-import os
-import numpy as np
-from datetime import datetime
-from zoneinfo import ZoneInfo
-import joblib
-import keras
-from dotenv import load_dotenv
+import bcrypt
 
-PH_TZ = ZoneInfo("Asia/Manila")
+from backend.db import execute, query
 
-def _now_ph():
-    return datetime.now(PH_TZ)
-
-def _reload_env():
-    load_dotenv(override=True)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#   KERAS CUSTOM LAYER
-# ══════════════════════════════════════════════════════════════════════════════
-
-@keras.saving.register_keras_serializable(package="occupai")
-class SoftAttention(keras.layers.Layer):
-    def __init__(self, units=64, **kwargs):
-        super().__init__(**kwargs)
-        self.units = units
-        self.W = keras.layers.Dense(units, activation="tanh")
-        self.V = keras.layers.Dense(1)
-
-    def call(self, x):
-        w = keras.ops.softmax(self.V(self.W(x)), axis=1)
-        return keras.ops.sum(x * w, axis=1)
-
-    def get_config(self):
-        cfg = super().get_config()
-        cfg["units"] = self.units
-        return cfg
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#   CONSTANTS
-# ══════════════════════════════════════════════════════════════════════════════
-
-LOT_CAPACITY = 44
-
-NB1_FEATURES = [
-    "hour", "day_of_week", "month", "is_weekend",
-    "is_morning_peak", "is_lunch_peak", "is_afternoon_peak",
-    "hour_sin", "hour_cos", "dow_sin", "dow_cos", "month_sin", "month_cos",
-    "lag_1h", "lag_2h", "lag_3h", "lag_24h",
-    "roll_3h", "roll_7h", "roll_24h",
-    "moto_ratio", "car_ratio", "ebike_ratio",
-]
-
-OCC_FEATURES_FALLBACK = [
-    "hour", "day_of_week", "month", "is_weekend",
-    "is_morning_peak", "is_lunch_peak", "is_afternoon_peak",
-    "hour_sin", "hour_cos", "dow_sin", "dow_cos",
-    "vehicles_last_hour", "occupancy_pct_lag1",
+DEMO_DRIVERS = [
+    ("Juan", "Dela Cruz", "juan.delacruz@example.com", "Driver123"),
+    ("Maria", "Santos", "maria.santos@example.com", "Driver123"),
 ]
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#   DEMAND LEVEL
-# ══════════════════════════════════════════════════════════════════════════════
-
-class DemandLevel:
-    LOW    = "LOW"
-    NORMAL = "NORMAL"
-    BUSY   = "BUSY"
-    HIGH   = "HIGH"
-
-    @classmethod
-    def all(cls):
-        return {cls.LOW, cls.NORMAL, cls.BUSY, cls.HIGH}
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#   ENV READERS — always fresh, never cached
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _ef(k, d):
-    try: return float(os.getenv(k, str(d)))
-    except: return d
-
-def _ei(k, d):
-    try: return int(os.getenv(k, str(d)))
-    except: return d
-
-def _eb(k, d):
-    return os.getenv(k, str(d)).strip().lower() not in {"0","false","no","off"}
-
-def _es(k, d=""):
-    raw = os.getenv(k, d) or ""
-    return {s.strip().upper() for s in raw.split(",") if s.strip()}
-
-def _get_force_level():
-    val = (os.getenv("FORCE_DEMAND_LEVEL") or "").strip().upper()
-    return val if val in DemandLevel.all() else None
-
-def _get_excluded():
-    return _es("EXCLUDED_SLOTS")
-
-def _get_thresholds():
-    return {
-        "busy_occ":  _ef("BUSY_OCC_THRESH",  0.40),
-        "busy_fore": _ef("BUSY_FORE_THRESH",  0.25),
-        "high_occ":  _ef("HIGH_OCC_THRESH",   0.70),
-        "high_fore": _ef("HIGH_FORE_THRESH",  0.65),
-        "low_occ":   _ef("LOW_OCC_THRESH",    0.35),
-        "low_fore":  _ef("LOW_FORE_THRESH",   0.30),
-    }
-
-def _get_packing():
-    return {
-        "busy_col": _ei("BUSY_DEMAND_COL_BONUS",  0),
-        "high_col": _ei("HIGH_DEMAND_COL_BONUS",  1),
-        "high_row": _ei("HIGH_DEMAND_ROW_BONUS",  1),
-    }
-
-def _get_row_configs():
-    """
-    Read ALL row definitions from .env fresh every call.
-    ROW_COUNT controls how many rows exist.
-    Each row: R{n}_X1, R{n}_X2, R{n}_Y1, R{n}_Y2, R{n}_N, R{n}_WFRAC, R{n}_HFRAC
-
-    Default layout (if keys missing):
-      Row 1 — 7 portrait top
-      Row 2 — 2 landscape mid
-      Row 3 — 5 portrait bottom
-    """
-    _reload_env()   # always re-read .env before building layout
-
-    row_count = _ei("ROW_COUNT", 3)
-    defaults = [
-        # (x1,   x2,   y1,   y2,   n,  wfrac, hfrac)
-        (0.14, 0.97, 0.05, 0.37,  7,  0.86,  0.90),   # row 1
-        (0.14, 0.97, 0.42, 0.62,  2,  0.86,  0.88),   # row 2
-        (0.14, 0.97, 0.66, 0.97,  5,  0.86,  0.90),   # row 3
-    ]
-
-    configs = []
-    for i in range(1, row_count + 1):
-        di = i - 1
-        dx1, dx2, dy1, dy2, dn, dwf, dhf = (defaults[di] if di < len(defaults)
-                                              else defaults[-1])
-        configs.append({
-            "x1":    _ef(f"R{i}_X1",    dx1),
-            "x2":    _ef(f"R{i}_X2",    dx2),
-            "y1":    _ef(f"R{i}_Y1",    dy1),
-            "y2":    _ef(f"R{i}_Y2",    dy2),
-            "n":     _ei(f"R{i}_N",     dn),
-            "wfrac": _ef(f"R{i}_WFRAC", dwf),
-            "hfrac": _ef(f"R{i}_HFRAC", dhf),
-        })
-        print(f"  [row {i}] x={configs[-1]['x1']:.2f}→{configs[-1]['x2']:.2f} "
-              f"y={configs[-1]['y1']:.2f}→{configs[-1]['y2']:.2f} "
-              f"n={configs[-1]['n']} wf={configs[-1]['wfrac']} hf={configs[-1]['hfrac']}")
-    return configs
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#   ROW BUILDER
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _build_row_slots(fw, fh, row_cfg, n_cols, n_sub_rows, start_idx, pad):
-    """
-    Build one row of slots. x2 is a hard cap — no slot exceeds it.
-    Degenerate boxes (too small after clamping) are skipped.
-    """
-    rx1 = int(fw * row_cfg["x1"])
-    rx2 = int(fw * row_cfg["x2"])
-    ry1 = int(fh * row_cfg["y1"])
-    ry2 = int(fh * row_cfg["y2"])
-    rw  = rx2 - rx1
-    rh  = ry2 - ry1
-
-    if rw < 20 or rh < 10:
-        print(f"  [row] WARNING: degenerate row area {rw}x{rh}px — skipping")
-        return [], start_idx + n_cols * n_sub_rows
-
-    col_w  = rw / max(1, n_cols)
-    sub_h  = rh / max(1, n_sub_rows)
-    slot_w = max(10, int(col_w  * row_cfg["wfrac"]))
-    slot_h = max(10, int(sub_h  * row_cfg["hfrac"]))
-
-    slots = []
-    idx   = start_idx
-    for sr in range(n_sub_rows):
-        cy = int(ry1 + sr * sub_h + sub_h / 2)
-        for c in range(n_cols):
-            cx = int(rx1 + c * col_w + col_w / 2)
-            x1 = max(rx1, cx - slot_w // 2 + pad)
-            x2 = min(rx2, cx + slot_w // 2 - pad)   # hard cap
-            y1 = max(ry1, cy - slot_h // 2 + pad)
-            y2 = min(ry2, cy + slot_h // 2 - pad)
-
-            if x2 - x1 >= 10 and y2 - y1 >= 10:
-                slots.append((f"Z{idx}", (x1, y1, x2, y2)))
-            idx += 1
-
-    return slots, idx
-
-
-def build_layout(fw, fh, col_bonus=0, sub_rows_bonus=0):
-    """
-    Build full slot layout from .env.
-    col_bonus: extra columns per row (BUSY/HIGH demand).
-    sub_rows_bonus: extra sub-rows for R1 and R3 (HIGH demand).
-    EXCLUDED_SLOTS always applied after building.
-    """
-    _reload_env()
-    row_configs = _get_row_configs()
-    pad         = _ei("SLOT_PAD", 3)
-    excl        = _get_excluded()
-
-    all_slots = []
-    idx       = 1
-    n_rows    = len(row_configs)
-
-    for ri, row_cfg in enumerate(row_configs):
-        # sub-row bonus only applies to first and last row
-        is_outer = (ri == 0 or ri == n_rows - 1)
-        sub_rows = 1 + (sub_rows_bonus if is_outer else 0)
-        n_cols   = row_cfg["n"] + col_bonus
-
-        slots, idx = _build_row_slots(fw, fh, row_cfg, n_cols, sub_rows, idx, pad)
-        all_slots += slots
-
-    result = {name: coords for name, coords in all_slots
-              if name.upper() not in excl}
-
-    print(f"[layout] Built {len(result)} slots "
-          f"(col_bonus={col_bonus} sub_rows_bonus={sub_rows_bonus} "
-          f"excluded={excl or 'none'})")
-    return result
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#   GRID ADJUSTER
-# ══════════════════════════════════════════════════════════════════════════════
-
-class GridAdjuster:
-    def __init__(self, fw, fh):
-        self.fw = fw
-        self.fh = fh
-
-    def compute_demand(self, occ_pct, forecast_veh):
-        t    = _get_thresholds()
-        occ  = occ_pct / 100.0
-        fore = forecast_veh / LOT_CAPACITY
-        if occ >= t["high_occ"]  or fore >= t["high_fore"]:  return DemandLevel.HIGH
-        if occ >= t["busy_occ"]  or fore >= t["busy_fore"]:  return DemandLevel.BUSY
-        if occ <= t["low_occ"]  and fore <= t["low_fore"]:   return DemandLevel.LOW
-        return DemandLevel.NORMAL
-
-    def slots_for_demand(self, demand):
-        pk = _get_packing()
-        if demand == DemandLevel.HIGH:
-            return build_layout(self.fw, self.fh,
-                                col_bonus=pk["high_col"],
-                                sub_rows_bonus=pk["high_row"])
-        if demand == DemandLevel.BUSY:
-            return build_layout(self.fw, self.fh,
-                                col_bonus=pk["busy_col"])
-        return build_layout(self.fw, self.fh)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#   SHARED SLOT STATE
-# ══════════════════════════════════════════════════════════════════════════════
-
-class SlotState:
-    def __init__(self):
-        self._lock             = threading.Lock()
-        self._base_slots       = {}
-        self._active_slots     = {}
-        self.demand            = DemandLevel.NORMAL
-        self.forecast_veh      = 0.0
-        self.current_occ       = 0.0
-        self.last_adjusted     = None
-        self.adjustment_reason = "Starting up..."
-        self._needs_bg_reset   = False
-        self._last_demand      = None
-
-    def set_base_slots(self, slots):
-        excl = _get_excluded()
-        with self._lock:
-            self._base_slots   = dict(slots)
-            self._active_slots = {n: c for n, c in slots.items()
-                                  if n.upper() not in excl}
-
-    def update_slots(self, new_slots, demand, forecast_veh, current_occ, reason):
-        excl = _get_excluded()
-        with self._lock:
-            self._active_slots     = {n: c for n, c in new_slots.items()
-                                       if n.upper() not in excl}
-            self.adjustment_reason = reason
-            if demand != self._last_demand:
-                self._needs_bg_reset = True
-                self._last_demand    = demand
-            self.demand        = demand
-            self.forecast_veh  = forecast_veh
-            self.current_occ   = current_occ
-            self.last_adjusted = _now_ph()
-
-    @property
-    def active_slots(self):
-        excl = _get_excluded()
-        with self._lock:
-            return {n: c for n, c in self._active_slots.items()
-                    if n.upper() not in excl}
-
-    @property
-    def base_slots(self):
-        with self._lock:
-            return dict(self._base_slots)
-
-    def check_and_clear_bg_reset(self):
-        with self._lock:
-            if self._needs_bg_reset:
-                self._needs_bg_reset = False
-                return True
-            return False
-
-    def summary(self):
-        with self._lock:
-            return {
-                "demand":        self.demand,
-                "forecast_veh":  round(self.forecast_veh, 1),
-                "current_occ":   round(self.current_occ,  1),
-                "n_slots":       len(self._active_slots),
-                "last_adjusted": (self.last_adjusted.strftime("%H:%M:%S")
-                                  if self.last_adjusted else None),
-                "reason":        self.adjustment_reason,
-            }
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#   FEATURE BUILDERS
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _build_nb1_features(history, lag_counts):
-    now = _now_ph()
-    h, dow, mon = now.hour, now.weekday(), now.month
-    f = {
-        "hour": h, "day_of_week": dow, "month": mon,
-        "is_weekend":        int(dow >= 5),
-        "is_morning_peak":   int(7 <= h <= 9),
-        "is_lunch_peak":     int(11 <= h <= 13),
-        "is_afternoon_peak": int(16 <= h <= 18),
-        "hour_sin":  np.sin(2*np.pi*h/24),  "hour_cos":  np.cos(2*np.pi*h/24),
-        "dow_sin":   np.sin(2*np.pi*dow/7), "dow_cos":   np.cos(2*np.pi*dow/7),
-        "month_sin": np.sin(2*np.pi*mon/12),"month_cos": np.cos(2*np.pi*mon/12),
-        "lag_1h":  lag_counts[0] if len(lag_counts) > 0 else 0,
-        "lag_2h":  lag_counts[1] if len(lag_counts) > 1 else 0,
-        "lag_3h":  lag_counts[2] if len(lag_counts) > 2 else 0,
-        "lag_24h": lag_counts[3] if len(lag_counts) > 3 else 0,
-        "roll_3h":  np.mean(lag_counts[:3])  if lag_counts else 0,
-        "roll_7h":  np.mean(lag_counts[:7])  if lag_counts else 0,
-        "roll_24h": np.mean(lag_counts[:24]) if lag_counts else 0,
-        "moto_ratio": 0.941, "car_ratio": 0.049, "ebike_ratio": 0.010,
-    }
-    return np.array([[f[k] for k in NB1_FEATURES]], dtype=np.float32)
-
-
-def _build_occ_features(current_occ, lag_occ, veh_lh, feats_list):
-    now = _now_ph()
-    h, dow, mon = now.hour, now.weekday(), now.month
-    b = {
-        "hour": h, "day_of_week": dow, "month": mon,
-        "is_weekend":        int(dow >= 5),
-        "is_morning_peak":   int(7 <= h <= 9),
-        "is_lunch_peak":     int(11 <= h <= 13),
-        "is_afternoon_peak": int(16 <= h <= 18),
-        "hour_sin":  np.sin(2*np.pi*h/24),  "hour_cos":  np.cos(2*np.pi*h/24),
-        "dow_sin":   np.sin(2*np.pi*dow/7), "dow_cos":   np.cos(2*np.pi*dow/7),
-        "vehicles_last_hour": veh_lh,
-        "occupancy_pct_lag1": lag_occ,
-    }
-    fl = feats_list if feats_list else OCC_FEATURES_FALLBACK
-    return np.array([[b.get(k, 0) for k in fl]], dtype=np.float32)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#   ADJUSTER THREAD
-# ══════════════════════════════════════════════════════════════════════════════
-
-class SlotAdjusterThread(threading.Thread):
-
-    ADJUST_INTERVAL = 30
-
-    def __init__(self, slot_state, models_dir, db_fn,
-                 frame_w, frame_h, backend_url, cam_token):
-        super().__init__(daemon=True, name="slot-adjuster")
-        self.state       = slot_state
-        self.models_dir  = models_dir
-        self.db_fn       = db_fn
-        self.fw          = frame_w
-        self.fh          = frame_h
-        self.backend_url = backend_url
-        self.headers     = {"x-cam-token": cam_token,
-                            "Content-Type": "application/json"}
-        self.adjuster    = GridAdjuster(frame_w, frame_h)
-        self._nb1_model    = None
-        self._occ_model    = None
-        self._nb1_scaler_X = None
-        self._nb1_scaler_y = None
-        self._occ_scaler_X = None
-        self._occ_scaler_y = None
-        self._occ_features = None
-
-    def _p(self, f):
-        return os.path.join(self.models_dir, f)
-
-    def _load_models(self):
-        print("[adjuster] Loading ML models...")
-        co = {"SoftAttention": SoftAttention}
-        for attr, fname in [("_nb1_model", "spatio_temporal.keras"),
-                             ("_occ_model", "occupancy_model.keras")]:
-            try:
-                setattr(self, attr, keras.models.load_model(
-                    self._p(fname), custom_objects=co))
-                print(f"[adjuster] ✓ {fname}")
-            except Exception as e:
-                print(f"[adjuster] ✗ {fname}: {e}")
-
-        for attr, fname in [
-            ("_nb1_scaler_X", "scaler_nb1_X.pkl"),
-            ("_nb1_scaler_y", "scaler_nb1_y.pkl"),
-            ("_occ_scaler_X", "scaler_occ_X.pkl"),
-            ("_occ_scaler_y", "scaler_occ_y.pkl"),
-            ("_occ_features", "occ_features.pkl"),
-        ]:
-            try:
-                setattr(self, attr, joblib.load(self._p(fname)))
-                print(f"[adjuster] ✓ {fname}")
-            except Exception as e:
-                print(f"[adjuster] ✗ {fname}: {e}")
-        print("[adjuster] Models ready.")
-
-    def _forecast(self, history):
-        if not self._nb1_model or not self._nb1_scaler_X:
-            return LOT_CAPACITY * 0.5
-        lags = [r.get("occupied", 0) for r in history[:24]]
-        while len(lags) < 24: lags.append(0)
-        try:
-            X = _build_nb1_features(history, lags)
-            e = self._nb1_scaler_X.n_features_in_
-            if X.shape[1] > e:   X = X[:, :e]
-            elif X.shape[1] < e: X = np.pad(X, ((0,0),(0,e-X.shape[1])))
-            Xs = self._nb1_scaler_X.transform(X)
-            y  = float(self._nb1_model.predict(
-                Xs.reshape(1,1,-1), verbose=0).flatten()[0])
-            return max(0., min(LOT_CAPACITY,
-                float(self._nb1_scaler_y.inverse_transform([[y]])[0][0])))
-        except Exception as e:
-            print(f"[adjuster] forecast err: {e}")
-            return LOT_CAPACITY * 0.5
-
-    def _pred_occ(self, history, cur_occ):
-        if not self._occ_model or not self._occ_scaler_X:
-            return cur_occ
-        lag = history[0].get("occupancy_pct", cur_occ) if history else cur_occ
-        vlh = history[0].get("occupied", 0) if history else 0
-        try:
-            X = _build_occ_features(cur_occ, lag, vlh, self._occ_features)
-            e = self._occ_scaler_X.n_features_in_
-            if X.shape[1] > e:   X = X[:, :e]
-            elif X.shape[1] < e: X = np.pad(X, ((0,0),(0,e-X.shape[1])))
-            Xs = self._occ_scaler_X.transform(X)
-            y  = float(self._occ_model.predict(
-                Xs.reshape(1,1,-1), verbose=0).flatten()[0])
-            return max(0., min(100.,
-                float(self._occ_scaler_y.inverse_transform([[y]])[0][0])))
-        except Exception as e:
-            print(f"[adjuster] occ err: {e}")
-            return cur_occ
-
-    def _run_cycle(self):
-        _reload_env()
-        force = _get_force_level()
-
-        if force:
-            demand       = force
-            forecast_veh = 0.0
-            cur_occ      = 0.0
-            reason       = f"FORCE_DEMAND_LEVEL={force}"
-        else:
-            history      = self.db_fn()
-            cur_occ      = history[0].get("occupancy_pct", 0.) if history else 0.
-            forecast_veh = self._forecast(history)
-            pred_occ     = self._pred_occ(history, cur_occ)
-
-            if (_eb("CV_PEAK_TEST", False) or _eb("TEST_PEAK_ENABLED", False)) \
-               and _now_ph().hour == _ei("TEST_PEAK_HOUR", 23) % 24:
-                demand = DemandLevel.HIGH
-                reason = f"CV_PEAK_TEST hour={_ei('TEST_PEAK_HOUR',23)%24:02d}"
-            else:
-                demand = self.adjuster.compute_demand(pred_occ, forecast_veh)
-                fp     = forecast_veh / LOT_CAPACITY * 100
-                msgs   = {
-                    DemandLevel.HIGH:   f"HIGH: occ={pred_occ:.0f}% fore={forecast_veh:.0f}veh ({fp:.0f}%)",
-                    DemandLevel.BUSY:   f"BUSY: occ={pred_occ:.0f}% fore={forecast_veh:.0f}veh",
-                    DemandLevel.NORMAL: f"NORMAL: occ={pred_occ:.0f}% fore={forecast_veh:.0f}veh",
-                    DemandLevel.LOW:    f"LOW: occ={pred_occ:.0f}% fore={forecast_veh:.0f}veh",
-                }
-                reason = msgs[demand]
-
-        new_slots = self.adjuster.slots_for_demand(demand)
-        if not new_slots:
-            print("[adjuster] Empty layout — skipping")
-            return
-
-        self.state.update_slots(new_slots, demand, forecast_veh, cur_occ, reason)
-        print(f"[adjuster] {demand}  slots={len(new_slots)}  {reason[:80]}")
-
-        try:
-            import requests as req
-            req.post(f"{self.backend_url}/yolo/slot_adjustment",
-                     json=self.state.summary(),
-                     headers=self.headers, timeout=2)
-        except Exception:
-            pass
-
-    def run(self):
-        self._load_models()
-        print("[adjuster] First cycle running immediately...")
-        try:
-            self._run_cycle()
-        except Exception as e:
-            print(f"[adjuster] first cycle error: {e}")
-
-        while True:
-            time.sleep(self.ADJUST_INTERVAL)
-            try:
-                self._run_cycle()
-            except Exception as e:
-                print(f"[adjuster] cycle error: {e}")
+def ensure_tables():
+    execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id BIGSERIAL PRIMARY KEY,
+            first_name TEXT NOT NULL,
+            last_name TEXT NOT NULL,
+            full_name TEXT GENERATED ALWAYS AS (BTRIM(first_name || ' ' || last_name)) STORED,
+            email TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'driver',
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            last_login TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower ON users (LOWER(email))")
+    execute("""
+        CREATE TABLE IF NOT EXISTS drivers (
+            user_id BIGINT PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    execute("""
+        CREATE TABLE IF NOT EXISTS parking_logs (
+            log_id BIGSERIAL PRIMARY KEY,
+            occupied INTEGER NOT NULL,
+            free INTEGER NOT NULL DEFAULT 0,
+            total INTEGER NOT NULL,
+            occupancy_pct NUMERIC(6,2) NOT NULL DEFAULT 0,
+            lot_full BOOLEAN NOT NULL DEFAULT FALSE,
+            logged_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    execute("""
+        CREATE TABLE IF NOT EXISTS parking_payments (
+            payment_id BIGSERIAL PRIMARY KEY,
+            user_id INTEGER,
+            regular_price_php NUMERIC(10,2) NOT NULL,
+            discount_type TEXT NOT NULL DEFAULT 'none',
+            discount_rate NUMERIC(6,4) NOT NULL DEFAULT 0,
+            discount_amount_php NUMERIC(10,2) NOT NULL DEFAULT 0,
+            final_amount_php NUMERIC(10,2) NOT NULL,
+            payment_method TEXT NOT NULL DEFAULT 'cash',
+            notes TEXT,
+            paid_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+
+
+def seed_drivers():
+    driver_ids = []
+    for first, last, email, password in DEMO_DRIVERS:
+        rows = query("SELECT user_id FROM users WHERE LOWER(email)=LOWER(%s)", (email,))
+        if rows:
+            driver_ids.append(rows[0]["user_id"])
+            continue
+        pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+        rows = query(
+            "INSERT INTO users (first_name,last_name,email,password_hash,role) "
+            "VALUES (%s,%s,%s,%s,'driver') RETURNING user_id",
+            (first, last, email, pw_hash),
+        )
+        user_id = rows[0]["user_id"]
+        execute("INSERT INTO drivers(user_id) VALUES(%s) ON CONFLICT DO NOTHING", (user_id,))
+        driver_ids.append(user_id)
+        print(f"[seed] Created demo driver {email} (password: {password})")
+    return driver_ids
+
+
+def seed_parking_logs(hours=24, lot_capacity=44):
+    existing = query("SELECT COUNT(*) AS n FROM parking_logs")
+    if existing[0]["n"] > 0:
+        print("[seed] parking_logs already has data, skipping")
+        return
+    now = datetime.utcnow()
+    for i in range(hours, 0, -1):
+        occupied = random.randint(0, lot_capacity)
+        logged_at = now - timedelta(hours=i)
+        execute(
+            "INSERT INTO parking_logs (occupied,free,total,occupancy_pct,lot_full,logged_at) "
+            "VALUES (%s,%s,%s,%s,%s,%s)",
+            (
+                occupied,
+                lot_capacity - occupied,
+                lot_capacity,
+                round(occupied / lot_capacity * 100, 2),
+                occupied >= lot_capacity,
+                logged_at,
+            ),
+        )
+    print(f"[seed] Inserted {hours} sample parking_logs rows")
+
+
+def seed_parking_payments(driver_ids, count=10):
+    existing = query("SELECT COUNT(*) AS n FROM parking_payments")
+    if existing[0]["n"] > 0:
+        print("[seed] parking_payments already has data, skipping")
+        return
+    now = datetime.utcnow()
+    for i in range(count):
+        price = random.choice([25.0, 30.0, 35.0, 40.0])
+        discount_type = random.choice(["none", "none", "pwd", "senior"])
+        discount_rate = 0.20 if discount_type in ("pwd", "senior") else 0.0
+        discount_amount = round(price * discount_rate, 2)
+        final_amount = round(price - discount_amount, 2)
+        paid_at = now - timedelta(hours=random.randint(0, 24 * 7))
+        execute(
+            """
+            INSERT INTO parking_payments (
+                user_id, regular_price_php, discount_type, discount_rate,
+                discount_amount_php, final_amount_php, payment_method, notes, paid_at
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """,
+            (
+                random.choice(driver_ids) if driver_ids else None,
+                price, discount_type, discount_rate,
+                discount_amount, final_amount,
+                random.choice(["cash", "gcash"]), "Seed data", paid_at,
+            ),
+        )
+    print(f"[seed] Inserted {count} sample parking_payments rows")
+
+
+def main():
+    ensure_tables()
+    driver_ids = seed_drivers()
+    seed_parking_logs()
+    seed_parking_payments(driver_ids)
+    print("[seed] Done.")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

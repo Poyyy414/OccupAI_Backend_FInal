@@ -7,7 +7,8 @@ CHANGES in v2.2:
   - /api/predictions now includes weekday_revenue and today_revenue_forecast
   - Revenue forecast added to predictions endpoint
 """
-import os, math, bcrypt, uvicorn, joblib, threading, warnings, time, json, base64, secrets
+import os, math, bcrypt, uvicorn, joblib, threading, warnings, time, json, base64, secrets, hmac, hashlib
+import psycopg2
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -19,7 +20,7 @@ from zoneinfo import ZoneInfo
 
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Header, Request
+from fastapi import FastAPI, HTTPException, Header, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -33,12 +34,85 @@ load_dotenv(override=True)
 
 PH_TZ        = ZoneInfo("Asia/Manila")
 
-CAM_TOKEN    = os.getenv("CAM_TOKEN",   "occupai_cam_2027")
+_CAM_TOKEN_DEFAULT = "occupai_cam_2027"
+_ADMIN_PASSWORD_DEFAULT = "12345678"
+
+CAM_TOKEN    = os.getenv("CAM_TOKEN",   _CAM_TOKEN_DEFAULT)
 DEPLOY_MODE  = os.getenv("DEPLOY_MODE", "local")
 STREAM_PORT  = int(os.getenv("STREAM_PORT", "8001"))
 LOT_CAPACITY = int(os.getenv("LOT_CAPACITY", "44"))
 ADMIN_EMAIL  = os.getenv("ADMIN_EMAIL", "jpcambiado@gbox.ncf.edu.ph").strip().lower()
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "12345678")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", _ADMIN_PASSWORD_DEFAULT)
+
+if CAM_TOKEN == _CAM_TOKEN_DEFAULT:
+    print(
+        "[SECURITY WARNING] CAM_TOKEN is not set — using the hardcoded default value. "
+        "Anyone who reads the source can push fake camera data. Set CAM_TOKEN in your "
+        "environment (e.g. Render dashboard) to a private random value."
+    )
+if ADMIN_PASSWORD == _ADMIN_PASSWORD_DEFAULT:
+    print(
+        "[SECURITY WARNING] ADMIN_PASSWORD is not set — using the hardcoded default "
+        "'12345678'. The admin account is only as secure as this value. Set ADMIN_PASSWORD "
+        "in your environment (e.g. Render dashboard) to a strong private password."
+    )
+AUTH_SECRET_KEY = os.getenv("AUTH_SECRET_KEY", "")
+if not AUTH_SECRET_KEY:
+    AUTH_SECRET_KEY = secrets.token_hex(32)
+    print(
+        "[auth] WARNING: AUTH_SECRET_KEY is not set. Using a random secret generated for this "
+        "process — all login sessions will be invalidated on every restart/deploy. "
+        "Set AUTH_SECRET_KEY in your environment for stable sessions."
+    )
+
+AUTH_TOKEN_TTL_SECONDS = 60 * 60 * 24  # 24h
+
+
+def _sign_auth_token(user_id: int, role: str) -> str:
+    payload = json.dumps({
+        "user_id": user_id,
+        "role": role,
+        "exp": int(time.time()) + AUTH_TOKEN_TTL_SECONDS,
+    }, separators=(",", ":")).encode()
+    raw = base64.urlsafe_b64encode(payload).decode().rstrip("=")
+    sig = hmac.new(AUTH_SECRET_KEY.encode(), raw.encode(), hashlib.sha256).hexdigest()
+    return f"{raw}.{sig}"
+
+
+def _verify_auth_token(token: str):
+    try:
+        raw, sig = token.split(".", 1)
+        expected = hmac.new(AUTH_SECRET_KEY.encode(), raw.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, expected):
+            return None
+        padded = raw + "=" * (-len(raw) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode()).decode())
+        if int(payload.get("exp", 0)) < int(time.time()):
+            return None
+        return payload
+    except Exception:
+        return None
+
+
+def _auth_payload_from_header(authorization: Optional[str]):
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return None
+    token = authorization.split(" ", 1)[1].strip()
+    return _verify_auth_token(token)
+
+
+def require_user(authorization: str = Header(None)):
+    payload = _auth_payload_from_header(authorization)
+    if not payload:
+        raise HTTPException(401, "Authentication required")
+    return payload
+
+
+def require_admin(authorization: str = Header(None)):
+    payload = require_user(authorization)
+    if payload.get("role") != "admin":
+        raise HTTPException(403, "Admin access required")
+    return payload
 DB_LOG_CONFIRM_SECONDS = max(0.0, float(os.getenv("DB_LOG_CONFIRM_SECONDS", "20")))
 DB_LOG_MIN_INTERVAL_SECONDS = max(1.0, float(os.getenv("DB_LOG_MIN_INTERVAL_SECONDS", "20")))
 
@@ -798,6 +872,46 @@ def _insight_scheduler():
 # ══════════════════════════════════════════════════════════════════
 #  Lifespan
 # ══════════════════════════════════════════════════════════════════
+def _ensure_core_tables():
+    try:
+        execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id BIGSERIAL PRIMARY KEY,
+                first_name TEXT NOT NULL,
+                last_name TEXT NOT NULL,
+                full_name TEXT GENERATED ALWAYS AS (BTRIM(first_name || ' ' || last_name)) STORED,
+                email TEXT NOT NULL,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'driver',
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                last_login TIMESTAMPTZ,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower ON users (LOWER(email))"
+        )
+        execute("""
+            CREATE TABLE IF NOT EXISTS drivers (
+                user_id BIGINT PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        execute("""
+            CREATE TABLE IF NOT EXISTS parking_logs (
+                log_id BIGSERIAL PRIMARY KEY,
+                occupied INTEGER NOT NULL,
+                free INTEGER NOT NULL DEFAULT 0,
+                total INTEGER NOT NULL,
+                occupancy_pct NUMERIC(6,2) NOT NULL DEFAULT 0,
+                lot_full BOOLEAN NOT NULL DEFAULT FALSE,
+                logged_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+    except Exception as e:
+        print(f"[DB] core table setup warning: {e}")
+
+
 def _ensure_parking_log_indexes():
     try:
         execute(
@@ -854,6 +968,7 @@ def _ensure_gcash_checkout_table():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _ensure_core_tables()
     try:
         _ensure_default_admin()
         print(f"[auth] Default admin ready: {ADMIN_EMAIL}")
@@ -884,7 +999,8 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 @app.exception_handler(Exception)
 async def _err(request: Request, exc: Exception):
     import traceback
-    return JSONResponse(status_code=500, content={"error": str(exc), "trace": traceback.format_exc()})
+    print(f"[unhandled] {request.method} {request.url.path}: {exc}\n{traceback.format_exc()}")
+    return JSONResponse(status_code=500, content={"error": "Internal server error"})
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -2206,15 +2322,17 @@ class PaymentRecordPayload(BaseModel):
 
 
 @app.post("/api/payments")
-def api_record_payment(payload: PaymentRecordPayload):
+def api_record_payment(payload: PaymentRecordPayload, _admin=Depends(require_admin)):
     return _record_parking_payment(payload)
 
 
 # ══════════════════════════════════════════════════════════════════
 
 @app.get("/api/driver/history")
-def api_driver_history(user_id: int, period: str = "all", limit: int = 50):
+def api_driver_history(user_id: int, period: str = "all", limit: int = 50, _auth=Depends(require_user)):
     """Returns parking payment history for a specific driver."""
+    if _auth.get("role") != "admin" and int(_auth.get("user_id") or 0) != int(user_id):
+        raise HTTPException(403, "You can only view your own payment history")
     try:
         period_filter = ""
         if period == "today":
@@ -2270,7 +2388,6 @@ def api_driver_history(user_id: int, period: str = "all", limit: int = 50):
 #  GCash Payment via PayMongo
 # ══════════════════════════════════════════════════════════════════
 class GcashCheckoutPayload(BaseModel):
-    amount_php: float
     discount_type: Optional[str] = "none"
     description: Optional[str] = "OccupAI Parking Payment"
     user_id: Optional[int] = None
@@ -2290,10 +2407,11 @@ def gcash_create_checkout(payload: GcashCheckoutPayload, request: Request):
     if not PAYMONGO_SECRET_KEY:
         raise HTTPException(503, "PayMongo is not configured. Set PAYMONGO_SECRET_KEY in .env")
 
+    regular_price = _current_payment_regular_price()
     discount_type, discount_rate = _discount_rate_for_type(payload.discount_type)
-    discount_amount = round(payload.amount_php * discount_rate, 2)
-    final_amount = round(max(1.0, payload.amount_php - discount_amount), 2)
-    amount_centavos = int(final_amount * 100)
+    discount_amount = round(regular_price * discount_rate, 2)
+    final_amount = round(max(1.0, regular_price - discount_amount), 2)
+    amount_centavos = round(final_amount * 100)
 
     base_url = str(request.base_url).rstrip("/")
 
@@ -2306,7 +2424,7 @@ def gcash_create_checkout(payload: GcashCheckoutPayload, request: Request):
         INSERT INTO gcash_checkouts (ref, user_id, regular_price_php, discount_type, final_amount_php)
         VALUES (%s,%s,%s,%s,%s)
         """,
-        (ref, payload.user_id, payload.amount_php, discount_type, final_amount),
+        (ref, payload.user_id, regular_price, discount_type, final_amount),
     )
 
     body = json.dumps({
@@ -2379,8 +2497,66 @@ text-decoration:none;font-weight:600}
     return HTMLResponse(content=html)
 
 
+def _gcash_pending_page(ref: str, next_attempt: int):
+    """Auto-refreshing page shown while PayMongo is still confirming a GCash payment.
+
+    GCash confirmation frequently lags a few seconds past the redirect, so instead of
+    hard-failing we reload the success URL a few times before giving up.
+    """
+    retry_url = f"/api/gcash/success?ref={ref}&attempt={next_attempt}"
+    html = """<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Confirming Payment…</title>
+<meta http-equiv="refresh" content="4;url=""" + retry_url + """">
+<style>
+body{font-family:"DM Sans",system-ui,sans-serif;background:#07100d;color:#f1f5f9;
+display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
+.box{background:rgba(241,245,249,.08);border-radius:16px;padding:48px 36px;text-align:center;max-width:420px}
+.spin{width:56px;height:56px;margin:0 auto 20px;border:5px solid rgba(34,201,150,.25);
+border-top-color:#22c996;border-radius:50%;animation:s 1s linear infinite}
+@keyframes s{to{transform:rotate(360deg)}}
+h1{font-size:22px;margin-bottom:8px;color:#22c996}
+p{color:#8794a6;margin-bottom:24px}
+a{display:inline-block;background:#22c996;color:#07100d;padding:12px 32px;border-radius:8px;
+text-decoration:none;font-weight:600}
+</style></head><body><div class="box">
+<div class="spin"></div>
+<h1>Confirming your payment…</h1>
+<p>Please wait a moment while GCash confirms your payment. This can take a few seconds.</p>
+<a href=\"""" + retry_url + """\">Check now</a>
+</div></body></html>"""
+    return HTMLResponse(content=html)
+
+
+# Number of times the success page will auto-refresh while waiting for GCash to
+# confirm. Combined with the per-request polling below this gives PayMongo a
+# generous window (well over a minute) before we show a hard failure.
+_GCASH_MAX_PAGE_RETRIES = 6
+
+
+def _checkout_is_paid(attributes: dict) -> bool:
+    """True if a PayMongo checkout session shows the payment as completed.
+
+    GCash confirmation can surface in any of three places depending on timing, so
+    check all of them: the session's own ``payment_status``, the underlying
+    ``payments`` list, and the ``payment_intent`` status.
+    """
+    if attributes.get("payment_status") == "paid":
+        return True
+
+    payments = attributes.get("payments") or []
+    if any(p.get("attributes", {}).get("status") == "paid" for p in payments):
+        return True
+
+    intent = attributes.get("payment_intent") or {}
+    if intent.get("attributes", {}).get("status") == "succeeded":
+        return True
+
+    return False
+
+
 @app.get("/api/gcash/success")
-def gcash_success(ref: str):
+def gcash_success(ref: str, attempt: int = 0):
     rows = query("SELECT * FROM gcash_checkouts WHERE ref = %s", (ref,))
     if not rows:
         return _gcash_result_page(False, "We couldn't find this checkout session.")
@@ -2395,23 +2571,43 @@ def gcash_success(ref: str):
     if not checkout_id:
         return _gcash_result_page(False, "This checkout session was never started with PayMongo.")
 
+    import time
     import urllib.request
     import urllib.error
 
-    try:
-        req = urllib.request.Request(
-            f"https://api.paymongo.com/v1/checkout_sessions/{checkout_id}",
-            headers=_paymongo_headers(),
-            method="GET",
-        )
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            result = json.loads(resp.read().decode())
-    except Exception as e:
-        print(f"[GCash] Could not verify checkout {checkout_id}: {e}")
-        return _gcash_result_page(False, "We couldn't verify your payment with PayMongo. Please contact support.")
+    paid = False
+    attributes = {}
+    max_attempts = 4
+    for poll in range(max_attempts):
+        try:
+            req = urllib.request.Request(
+                f"https://api.paymongo.com/v1/checkout_sessions/{checkout_id}",
+                headers=_paymongo_headers(),
+                method="GET",
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                result = json.loads(resp.read().decode())
+        except Exception as e:
+            print(f"[GCash] Could not verify checkout {checkout_id}: {e}")
+            # Transient network/API hiccup — let the page retry rather than hard-fail.
+            if attempt < _GCASH_MAX_PAGE_RETRIES:
+                return _gcash_pending_page(ref, attempt + 1)
+            return _gcash_result_page(False, "We couldn't verify your payment with PayMongo. Please contact support.")
 
-    payment_status = result.get("data", {}).get("attributes", {}).get("payment_status")
-    if payment_status != "paid":
+        attributes = result.get("data", {}).get("attributes", {})
+        if _checkout_is_paid(attributes):
+            paid = True
+            break
+
+        if poll < max_attempts - 1:
+            time.sleep(2)
+
+    if not paid:
+        # GCash confirmation often lags past the redirect. Auto-refresh a few times
+        # before giving up so a slightly-late payment still gets recorded.
+        if attempt < _GCASH_MAX_PAGE_RETRIES:
+            return _gcash_pending_page(ref, attempt + 1)
+        print(f"[GCash] checkout {checkout_id} still not paid after retries: {attributes}")
         return _gcash_result_page(False, "PayMongo has not confirmed this payment yet.")
 
     try:
@@ -2694,6 +2890,7 @@ def _normalized_auth_role(role: str, email: str) -> str:
         return "admin"
     return "admin" if str(role or "").strip().lower() == "admin" else "driver"
 
+
 def _ensure_default_admin():
     if not ADMIN_EMAIL or not ADMIN_PASSWORD:
         return
@@ -2799,7 +2996,7 @@ def get_layout_mode():
     return {"mode": mode, "enabled": enabled, "modes": ["NORMAL", "BUSY", "HIGH"]}
 
 @app.post("/api/settings/layout-mode")
-def set_layout_mode(payload: LayoutModePayload):
+def set_layout_mode(payload: LayoutModePayload, _admin=Depends(require_admin)):
     enabled = True if payload.enabled is None else bool(payload.enabled)
     mode = (payload.mode or _read_env_value("FORCE_DEMAND_LEVEL", "NORMAL") or "NORMAL").strip().upper()
     if mode not in _LAYOUT_MODES:
@@ -2829,7 +3026,7 @@ def get_pricing_settings():
     return _pricing_settings()
 
 @app.post("/api/settings/pricing")
-def set_pricing_settings(payload: PricingSettingsPayload):
+def set_pricing_settings(payload: PricingSettingsPayload, _admin=Depends(require_admin)):
     current = _pricing_settings()
     enabled = current["enabled"] if payload.enabled is None else bool(payload.enabled)
     price = current["price_php"] if payload.price_php is None else _parse_price(payload.price_php)
@@ -2853,25 +3050,36 @@ def set_pricing_settings(payload: PricingSettingsPayload):
     })
     return result
 
+def _validate_password_strength(password: str) -> None:
+    pw = password or ""
+    if len(pw) < 8:
+        raise HTTPException(400, "Password must be at least 8 characters long")
+    if not any(c.isalpha() for c in pw) or not any(c.isdigit() for c in pw):
+        raise HTTPException(400, "Password must contain at least one letter and one number")
+
+
 @app.post("/auth/register")
 def register(data: UserRegister):
     email = _clean_email(data.email)
     if _is_reserved_admin_email(email) and not _is_reserved_admin_credentials(email, data.password):
         raise HTTPException(400, "This email is reserved for the admin account")
 
+    _validate_password_strength(data.password)
+
     role = "admin" if _is_reserved_admin_credentials(email, data.password) else "driver"
     pw = bcrypt.hashpw(data.password.encode(), bcrypt.gensalt()).decode()
     conn = get_db()
     cur = conn.cursor()
     try:
-        cur.execute("SELECT user_id FROM users WHERE LOWER(email)=LOWER(%s)", (email,))
-        if cur.fetchone():
+        try:
+            cur.execute(
+                "INSERT INTO users (first_name,last_name,email,password_hash,role) "
+                "VALUES (%s,%s,%s,%s,%s) RETURNING user_id",
+                (data.first_name, data.last_name, email, pw, role),
+            )
+        except psycopg2.errors.UniqueViolation:
+            conn.rollback()
             raise HTTPException(400, "Email already registered")
-        cur.execute(
-            "INSERT INTO users (first_name,last_name,email,password_hash,role) "
-            "VALUES (%s,%s,%s,%s,%s) RETURNING user_id",
-            (data.first_name, data.last_name, email, pw, role),
-        )
         new_id = cur.fetchone()["user_id"]
         if role == "driver":
             cur.execute("INSERT INTO drivers(user_id) VALUES(%s)", (new_id,))
@@ -2884,6 +3092,7 @@ def register(data: UserRegister):
             "full_name": f"{data.first_name} {data.last_name}".strip(),
             "email": email,
             "role": role,
+            "token": _sign_auth_token(new_id, role),
         }
     except HTTPException:
         conn.rollback()
@@ -2922,6 +3131,7 @@ def login(data: UserLogin):
             "first_name": u["first_name"], "last_name": u["last_name"],
             "full_name":  u["full_name"],  "email":     u["email"],
             "role":       role,
+            "token": _sign_auth_token(u["user_id"], role),
         }
     except HTTPException: raise
     except Exception as e: raise HTTPException(500, str(e))

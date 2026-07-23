@@ -719,6 +719,7 @@
         return parsed && parsed.user_id ? parsed : null;
       } catch (e) {
         localStorage.removeItem('occupai_user');
+        localStorage.removeItem('occupai_token');
         return null;
       }
     }
@@ -834,6 +835,7 @@
 
     function signOut() {
       localStorage.removeItem('occupai_user');
+      localStorage.removeItem('occupai_token');
       fetch('/auth/logout', { method: 'POST' }).catch(() => {});
       window.location.href = '/login';
     }

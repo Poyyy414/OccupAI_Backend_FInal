@@ -16,7 +16,14 @@
       "Bash(git -C \"c:\\\\Users\\\\arias\\\\Documents\\\\OccupAI_Backend_FInal\" log --all --oneline -- .env)",
       "Bash(\"./.venv311/Scripts/uvicorn.exe\" backend.main:app --port 8000)",
       "Bash(curl -s http://127.0.0.1:8000/api/gcash/status)",
-      "Bash(curl -s -X POST http://127.0.0.1:8000/api/gcash/create-checkout -H \"Content-Type: application/json\" -d '{\"amount_php\": 25}')"
+      "Bash(curl -s -X POST http://127.0.0.1:8000/api/gcash/create-checkout -H \"Content-Type: application/json\" -d '{\"amount_php\": 25}')",
+      "Bash(python -m py_compile backend/main.py)",
+      "Bash(grep -n \"headers: { 'Content-Type': 'application/json' },\" template/dashboard.html)",
+      "Bash(grep -n -B3 \"headers: { 'Content-Type': 'application/json' },\" template/dashboard.html)",
+      "Bash(python -m py_compile yolo_service/detector_v7.py)",
+      "Bash(git rm *)",
+      "Bash(python -m py_compile backend/main.py backend/db.py seed_db.py yolo_service/detector_v7.py)",
+      "Bash(python -c ' *)"
     ]
   }
 }

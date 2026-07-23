@@ -710,141 +710,152 @@ def detection_loop():
     last_sent_total=None
     last_sent_zones={}
 
+    consecutive_errors=0
     while True:
         try: frame=_cam_q.get(timeout=0.1)
         except queue.Empty: continue
 
-        frame_idx+=1; fps_n+=1
-        now=time.time()
-        if now-fps_t>=1.0:
-            fps_val=fps_n/(now-fps_t); fps_n=0; fps_t=now
+        try:
+            frame_idx+=1; fps_n+=1
+            now=time.time()
+            if now-fps_t>=1.0:
+                fps_val=fps_n/(now-fps_t); fps_n=0; fps_t=now
 
-        # ── Camera blocked check ───────────────────────────────────────────────
-        if frame_idx%STATIC_N==0:
-            blocked,prev_gray=is_blocked(frame,prev_gray)
-            with _cam_ok_lock: _cam_ok=not blocked
+            # ── Camera blocked check ───────────────────────────────────────────────
+            if frame_idx%STATIC_N==0:
+                blocked,prev_gray=is_blocked(frame,prev_gray)
+                with _cam_ok_lock: _cam_ok=not blocked
 
-        with _cam_ok_lock: cam_ok=_cam_ok
+            with _cam_ok_lock: cam_ok=_cam_ok
 
-        # ── MOG2 rewarm when layout changes (fixes false OCC after switch) ────
-        if slot_state.check_and_clear_bg_reset() and not rewarming:
-            rewarming=True
-            print("[detector] Layout changed — re-warming MOG2...")
-            def _do_rewarm():
-                nonlocal rewarming
-                new_bs=cv2.createBackgroundSubtractorMOG2(
-                    history=BG_HISTORY,varThreshold=BG_VAR_THRESH,
-                    detectShadows=False)
-                grab_background(cap, new_bs, n=BG_REWARM_N)
-                bg_sub_ref[0]=new_bs
-                rewarming=False
-                print("[detector] ✓ MOG2 re-warmed after layout change")
-            threading.Thread(target=_do_rewarm,daemon=True,name="bg-rewarm").start()
+            # ── MOG2 rewarm when layout changes (fixes false OCC after switch) ────
+            if slot_state.check_and_clear_bg_reset() and not rewarming:
+                rewarming=True
+                print("[detector] Layout changed — re-warming MOG2...")
+                def _do_rewarm():
+                    nonlocal rewarming
+                    new_bs=cv2.createBackgroundSubtractorMOG2(
+                        history=BG_HISTORY,varThreshold=BG_VAR_THRESH,
+                        detectShadows=False)
+                    grab_background(cap, new_bs, n=BG_REWARM_N)
+                    bg_sub_ref[0]=new_bs
+                    rewarming=False
+                    print("[detector] ✓ MOG2 re-warmed after layout change")
+                threading.Thread(target=_do_rewarm,daemon=True,name="bg-rewarm").start()
 
-        # ── Scene change (camera physically moved) ────────────────────────────
-        if (not rescanning and not rewarming and cam_ok
-                and ref_gray is not None
-                and (now-last_check_t)>=REDETECT_INTERVAL):
-            last_check_t=now
-            cg=cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)
-            ed=edge_region_diff(cg,ref_gray)
-            print(f"[redetect] edge diff={ed:.1f}  thresh={REDETECT_THRESH}")
-            if ed>REDETECT_THRESH:
-                print("[redetect] Camera moved — re-warming MOG2...")
-                rescanning=True
-                def _redo():
-                    nonlocal rescanning,ref_gray
-                    try:
-                        new_bs=cv2.createBackgroundSubtractorMOG2(
-                            history=BG_HISTORY,varThreshold=BG_VAR_THRESH,
-                            detectShadows=False)
-                        grab_background(cap,new_bs,n=20)
-                        bg_sub_ref[0]=new_bs
-                        new_slots=build_layout(actual_w,actual_h)
-                        if len(new_slots)>=MIN_SLOTS:
-                            slot_state.set_base_slots(new_slots)
-                        ret2,rf2=cap.read()
-                        ref_gray=cv2.cvtColor(rf2,cv2.COLOR_BGR2GRAY) if ret2 else ref_gray
-                        print(f"[redetect] ✓ Rebuilt: {len(slot_state.active_slots)} slots")
-                    except Exception as e: print(f"[redetect] err: {e}")
-                    finally: rescanning=False
-                threading.Thread(target=_redo,daemon=True,name="redetect").start()
+            # ── Scene change (camera physically moved) ────────────────────────────
+            if (not rescanning and not rewarming and cam_ok
+                    and ref_gray is not None
+                    and (now-last_check_t)>=REDETECT_INTERVAL):
+                last_check_t=now
+                cg=cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)
+                ed=edge_region_diff(cg,ref_gray)
+                print(f"[redetect] edge diff={ed:.1f}  thresh={REDETECT_THRESH}")
+                if ed>REDETECT_THRESH:
+                    print("[redetect] Camera moved — re-warming MOG2...")
+                    rescanning=True
+                    def _redo():
+                        nonlocal rescanning,ref_gray
+                        try:
+                            new_bs=cv2.createBackgroundSubtractorMOG2(
+                                history=BG_HISTORY,varThreshold=BG_VAR_THRESH,
+                                detectShadows=False)
+                            grab_background(cap,new_bs,n=20)
+                            bg_sub_ref[0]=new_bs
+                            new_slots=build_layout(actual_w,actual_h)
+                            if len(new_slots)>=MIN_SLOTS:
+                                slot_state.set_base_slots(new_slots)
+                            ret2,rf2=cap.read()
+                            ref_gray=cv2.cvtColor(rf2,cv2.COLOR_BGR2GRAY) if ret2 else ref_gray
+                            print(f"[redetect] ✓ Rebuilt: {len(slot_state.active_slots)} slots")
+                        except Exception as e: print(f"[redetect] err: {e}")
+                        finally: rescanning=False
+                    threading.Thread(target=_redo,daemon=True,name="redetect").start()
 
-        # ── MOG2 foreground ───────────────────────────────────────────────────
-        fg=bg_sub_ref[0].apply(frame,learningRate=BG_LEARN_RATE)
-        k=cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(5,5))
-        fg=cv2.morphologyEx(fg,cv2.MORPH_OPEN,k,iterations=1)
+            # ── MOG2 foreground ───────────────────────────────────────────────────
+            fg=bg_sub_ref[0].apply(frame,learningRate=BG_LEARN_RATE)
+            k=cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(5,5))
+            fg=cv2.morphologyEx(fg,cv2.MORPH_OPEN,k,iterations=1)
 
-        # ── YOLO + toy blobs ──────────────────────────────────────────────────
-        if YOLO_ASYNC:
-            if (cam_ok and not rescanning and not rewarming
-                    and now-last_yolo_submit >= YOLO_INTERVAL):
-                last_yolo_submit = now
-                if det_q.full():
-                    try: det_q.get_nowait()
-                    except queue.Empty: pass
-                try: det_q.put_nowait(frame.copy())
-                except queue.Full: pass
-            with det_result["lock"]:
-                yolo_b = list(det_result["yolo"])
-                toy_b = list(det_result["toy"])
-        elif frame_idx%YOLO_SKIP==0 and cam_ok and not rescanning and not rewarming:
-            yolo_b=[] if TOY_ONLY_DETECTION else yolo_boxes(model,frame)
-            toy_b=find_toy_boxes(frame)
+            # ── YOLO + toy blobs ──────────────────────────────────────────────────
+            if YOLO_ASYNC:
+                if (cam_ok and not rescanning and not rewarming
+                        and now-last_yolo_submit >= YOLO_INTERVAL):
+                    last_yolo_submit = now
+                    if det_q.full():
+                        try: det_q.get_nowait()
+                        except queue.Empty: pass
+                    try: det_q.put_nowait(frame.copy())
+                    except queue.Full: pass
+                with det_result["lock"]:
+                    yolo_b = list(det_result["yolo"])
+                    toy_b = list(det_result["toy"])
+            elif frame_idx%YOLO_SKIP==0 and cam_ok and not rescanning and not rewarming:
+                yolo_b=[] if TOY_ONLY_DETECTION else yolo_boxes(model,frame)
+                toy_b=find_toy_boxes(frame)
 
-        # ── Active slots (AI may have updated) ────────────────────────────────
-        active=slot_state.active_slots
-        n_slots=len(active)
-        if n_slots!=last_n_slots:
-            _save_debug_zones(frame,active)
-            last_n_slots=n_slots
-            print(f"[detector] Slot count → {n_slots}  debug_zones.jpg updated")
+            # ── Active slots (AI may have updated) ────────────────────────────────
+            active=slot_state.active_slots
+            n_slots=len(active)
+            if n_slots!=last_n_slots:
+                _save_debug_zones(frame,active)
+                last_n_slots=n_slots
+                print(f"[detector] Slot count → {n_slots}  debug_zones.jpg updated")
 
-        # ── Occupancy ─────────────────────────────────────────────────────────
-        if cam_ok and not rescanning and not rewarming and active:
-            all_b = toy_b if TOY_ONLY_DETECTION else (yolo_b + toy_b)
-            zone_status, assigned_boxes = assign_occupancy(
-                active, fg, all_b, use_bg=USE_BG_OCCUPANCY
+            # ── Occupancy ─────────────────────────────────────────────────────────
+            if cam_ok and not rescanning and not rewarming and active:
+                all_b = toy_b if TOY_ONLY_DETECTION else (yolo_b + toy_b)
+                zone_status, assigned_boxes = assign_occupancy(
+                    active, fg, all_b, use_bg=USE_BG_OCCUPANCY
+                )
+            else:
+                zone_status={name:False for name in active}
+                assigned_boxes=[]
+
+            occupied=sum(1 for v in zone_status.values() if v)
+            free=n_slots-occupied
+            pct=round(occupied/n_slots*100,1) if n_slots else 0.0
+            demand=slot_state.demand
+
+            # ── Annotate ──────────────────────────────────────────────────────────
+            ann=frame.copy()
+            if not cam_ok:
+                draw_blocked(ann); zone_status={}; occupied=free=0
+            elif rescanning or rewarming:
+                draw_scanning(ann, "CALIBRATING..." if rewarming else "RE-SCANNING...")
+            else:
+                draw_zones(ann,active,zone_status)
+                if DRAW_DETECTOR_BOXES:
+                    draw_boxes(ann,assigned_boxes,(0,230,255))
+
+            draw_hud(ann,free,occupied,n_slots,fps_val,
+                     cam_ok=cam_ok,rescanning=rescanning,
+                     rewarming=rewarming,demand=demand)
+
+            with _stream_lock: _stream_frame=ann
+
+            zones_changed = (
+                n_slots != last_sent_total or
+                dict(zone_status) != last_sent_zones
             )
-        else:
-            zone_status={name:False for name in active}
-            assigned_boxes=[]
+            periodic_due = frame_idx%PUSH_EVERY==0
+            quick_due = zones_changed and (now-last_push_t)>=PUSH_MIN_INTERVAL
+            if periodic_due or quick_due:
+                last_push_t=now
+                last_sent_total=n_slots
+                last_sent_zones=dict(zone_status)
+                threading.Thread(target=push_to_backend,
+                    args=(occupied,free,n_slots,pct,round(fps_val,1),zone_status,ann.copy()),
+                    daemon=True).start()
 
-        occupied=sum(1 for v in zone_status.values() if v)
-        free=n_slots-occupied
-        pct=round(occupied/n_slots*100,1) if n_slots else 0.0
-        demand=slot_state.demand
-
-        # ── Annotate ──────────────────────────────────────────────────────────
-        ann=frame.copy()
-        if not cam_ok:
-            draw_blocked(ann); zone_status={}; occupied=free=0
-        elif rescanning or rewarming:
-            draw_scanning(ann, "CALIBRATING..." if rewarming else "RE-SCANNING...")
-        else:
-            draw_zones(ann,active,zone_status)
-            if DRAW_DETECTOR_BOXES:
-                draw_boxes(ann,assigned_boxes,(0,230,255))
-
-        draw_hud(ann,free,occupied,n_slots,fps_val,
-                 cam_ok=cam_ok,rescanning=rescanning,
-                 rewarming=rewarming,demand=demand)
-
-        with _stream_lock: _stream_frame=ann
-
-        zones_changed = (
-            n_slots != last_sent_total or
-            dict(zone_status) != last_sent_zones
-        )
-        periodic_due = frame_idx%PUSH_EVERY==0
-        quick_due = zones_changed and (now-last_push_t)>=PUSH_MIN_INTERVAL
-        if periodic_due or quick_due:
-            last_push_t=now
-            last_sent_total=n_slots
-            last_sent_zones=dict(zone_status)
-            threading.Thread(target=push_to_backend,
-                args=(occupied,free,n_slots,pct,round(fps_val,1),zone_status,ann.copy()),
-                daemon=True).start()
+            consecutive_errors=0
+        except Exception as e:
+            consecutive_errors+=1
+            print(f"[detector] frame processing error ({consecutive_errors}): {e}")
+            if consecutive_errors>=50:
+                print("[detector] Too many consecutive frame errors — stopping detection loop.")
+                break
+            continue
 
     cap.release()
 

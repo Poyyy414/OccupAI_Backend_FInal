@@ -511,6 +511,7 @@
     }
 
     localStorage.removeItem('occupai_user');
+    localStorage.removeItem('occupai_token');
 
     const form = document.getElementById('registerForm');
     const firstName = document.getElementById('first_name');
@@ -600,6 +601,7 @@
           role: result.role || 'driver',
         };
         localStorage.setItem('occupai_user', JSON.stringify(userObj));
+        if (result.token) localStorage.setItem('occupai_token', result.token);
         if (!localStorage.getItem('occupai_user')) {
           throw new Error('Could not save session. Check browser storage settings.');
         }
