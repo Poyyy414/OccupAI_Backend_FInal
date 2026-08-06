@@ -92,11 +92,15 @@ class DemandLevel:
 
 def _ef(k, d):
     try: return float(os.getenv(k, str(d)))
-    except: return d
+    except (TypeError, ValueError):
+        print(f"[env] Invalid float for {k}={os.getenv(k)!r}, using default {d}")
+        return d
 
 def _ei(k, d):
     try: return int(os.getenv(k, str(d)))
-    except: return d
+    except (TypeError, ValueError):
+        print(f"[env] Invalid integer for {k}={os.getenv(k)!r}, using default {d}")
+        return d
 
 def _eb(k, d):
     return os.getenv(k, str(d)).strip().lower() not in {"0","false","no","off"}
@@ -644,8 +648,8 @@ class SlotAdjusterThread(threading.Thread):
             req.post(f"{self.backend_url}/yolo/slot_adjustment",
                      json=self.state.summary(),
                      headers=self.headers, timeout=2)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[adjuster] Could not push slot adjustment to backend: {e}")
 
     def run(self):
         self._load_models()

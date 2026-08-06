@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 from typing import Optional, Any
 from datetime import datetime
 
@@ -13,18 +13,24 @@ class UserLogin(BaseModel):
     password: str
 
 class YoloUpdate(BaseModel):
-    occupied:      int
-    free:          int      = 0
-    total:         int
-    occupancy_pct: float    = 0.0
+    occupied:      int      = Field(ge=0)
+    free:          int      = Field(default=0, ge=0)
+    total:         int      = Field(ge=0, le=1000)
+    occupancy_pct: float    = Field(default=0.0, ge=0.0, le=100.0)
     lot_full:      bool     = False
-    fps:           float    = 0.0
-    yolo_count:    int      = 0
+    fps:           float    = Field(default=0.0, ge=0.0, le=240.0)
+    yolo_count:    int      = Field(default=0, ge=0)
     timestamp:     str      = ""
     snapshot_b64:  str      = ""
     yolo_boxes:    list     = []
     slots:         list     = []
     zones:         dict     = {}   # {"Z1": True, "Z2": False, ...}
+
+    @model_validator(mode="after")
+    def _check_occupied_within_total(self):
+        if self.occupied > self.total:
+            raise ValueError("occupied cannot exceed total")
+        return self
 
 class PushFrame(BaseModel):
     frame: str              # base64 JPEG

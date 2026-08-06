@@ -36,11 +36,15 @@ from backend.slot_adjuster import (SlotState, SlotAdjusterThread,
 
 def _ei(k, d):
     try: return int(os.getenv(k, str(d)))
-    except: return d
+    except (TypeError, ValueError):
+        print(f"[env] Invalid integer for {k}={os.getenv(k)!r}, using default {d}")
+        return d
 
 def _ef(k, d):
     try: return float(os.getenv(k, str(d)))
-    except: return d
+    except (TypeError, ValueError):
+        print(f"[env] Invalid float for {k}={os.getenv(k)!r}, using default {d}")
+        return d
 
 def _eb(k, d):
     return os.getenv(k, str(d)).strip().lower() not in {"0","false","no","off"}
@@ -186,27 +190,9 @@ def grab_background(cap, bg_sub, n=30):
             bg_sub.apply(f, learningRate=1.0)
         time.sleep(0.04)
     if not frames:
-        _, f = cap.read()
-        return f
-    return np.clip(np.mean(frames, axis=0), 0, 255).astype(np.uint8)
-
-
-def rewarm_bg_sub(cap, bg_sub, n=20):
-    """
-    Re-warm MOG2 in-place after layout change.
-    Called in a background thread — doesn't block detection.
-    Resets the model so it learns the new 'empty' background.
-    """
-    print(f"[bg-rewarm] Re-warming MOG2 with {n} frames...")
-    bg_sub.__init__()   # reset MOG2 state
-    # Re-create is safer than __init__ on OpenCV objects:
-    # caller should replace bg_sub with a new instance
-    for _ in range(n):
         ret, f = cap.read()
-        if ret and f is not None:
-            bg_sub.apply(f, learningRate=1.0)
-        time.sleep(0.04)
-    print("[bg-rewarm] ✓ MOG2 re-warmed")
+        return f if ret else None
+    return np.clip(np.mean(frames, axis=0), 0, 255).astype(np.uint8)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -528,7 +514,12 @@ def draw_scanning(frame, msg="LOADING LAYOUT..."):
 
 def camera_reader(cap, tw, th):
     while True:
-        ret,f=cap.read()
+        try:
+            ret,f=cap.read()
+        except Exception as e:
+            print(f"[cam-reader] cap.read() raised, retrying: {e}")
+            time.sleep(0.1)
+            continue
         if not ret or f is None: time.sleep(0.005); continue
         if f.shape[1]!=tw or f.shape[0]!=th: f=cv2.resize(f,(tw,th))
         if _cam_q.full():
@@ -581,7 +572,9 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                 self.wfile.flush()
                 time.sleep(1.0/STREAM_FPS)
             except(BrokenPipeError,ConnectionResetError): break
-            except Exception: break
+            except Exception as e:
+                print(f"[mjpeg] stream handler error, dropping client: {e}")
+                break
 
 def start_mjpeg_server():
     ThreadingHTTPServer(('0.0.0.0',STREAM_PORT),MJPEGHandler).serve_forever()
@@ -650,57 +643,64 @@ def detection_loop():
     time.sleep(1.0)
 
     if not cap.isOpened():
-        print(f"[ERROR] Cannot open webcam {WEBCAM_IDX}"); return
+        print(f"[ERROR] Cannot open webcam {WEBCAM_IDX}")
+        cap.release()
+        return
 
-    actual_w=int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    actual_h=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    print(f"[cam]  {actual_w}×{actual_h}  index={WEBCAM_IDX}")
+    try:
+        actual_w=int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual_h=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        print(f"[cam]  {actual_w}×{actual_h}  index={WEBCAM_IDX}")
 
-    # ── MOG2 (shared reference so rewarm can replace it) ──────────────────────
-    bg_sub_ref = [cv2.createBackgroundSubtractorMOG2(
-        history=BG_HISTORY, varThreshold=BG_VAR_THRESH, detectShadows=False)]
+        # ── MOG2 (shared reference so rewarm can replace it) ──────────────────────
+        bg_sub_ref = [cv2.createBackgroundSubtractorMOG2(
+            history=BG_HISTORY, varThreshold=BG_VAR_THRESH, detectShadows=False)]
 
-    print("\n" + "═"*58)
-    print("  OccupAI v7.2 — Row Layout + AI Adjuster")
-    print("  Warming up background model (3s)...")
-    print("═"*58)
-    time.sleep(3.0)
-    grab_background(cap, bg_sub_ref[0], n=25)
+        print("\n" + "═"*58)
+        print("  OccupAI v7.2 — Row Layout + AI Adjuster")
+        print("  Warming up background model (3s)...")
+        print("═"*58)
+        time.sleep(3.0)
+        grab_background(cap, bg_sub_ref[0], n=25)
 
-    # ── Build base layout ──────────────────────────────────────────────────────
-    base_slots = build_layout(actual_w, actual_h)
-    slot_state.set_base_slots(base_slots)
-    print(f"[layout] ✓ {len(slot_state.active_slots)} active slots "
-          f"(excluded: {_es('EXCLUDED_SLOTS')})")
+        # ── Build base layout ──────────────────────────────────────────────────────
+        base_slots = build_layout(actual_w, actual_h)
+        slot_state.set_base_slots(base_slots)
+        print(f"[layout] ✓ {len(slot_state.active_slots)} active slots "
+              f"(excluded: {_es('EXCLUDED_SLOTS')})")
 
-    ret0,bg_frame=cap.read()
-    if bg_frame is not None:
-        _save_debug_zones(bg_frame, slot_state.active_slots)
+        ret0,bg_frame=cap.read()
+        if bg_frame is not None:
+            _save_debug_zones(bg_frame, slot_state.active_slots)
 
-    # ── AI Adjuster thread ─────────────────────────────────────────────────────
-    adjuster=SlotAdjusterThread(
-        slot_state=slot_state, models_dir=MODELS_DIR,
-        db_fn=_fetch_db_history, frame_w=actual_w, frame_h=actual_h,
-        backend_url=BACKEND_URL, cam_token=CAM_TOKEN,
-    )
-    adjuster.start()
-    print(f"[adjuster] Started — cycles every {SlotAdjusterThread.ADJUST_INTERVAL}s")
+        # ── AI Adjuster thread ─────────────────────────────────────────────────────
+        adjuster=SlotAdjusterThread(
+            slot_state=slot_state, models_dir=MODELS_DIR,
+            db_fn=_fetch_db_history, frame_w=actual_w, frame_h=actual_h,
+            backend_url=BACKEND_URL, cam_token=CAM_TOKEN,
+        )
+        adjuster.start()
+        print(f"[adjuster] Started — cycles every {SlotAdjusterThread.ADJUST_INTERVAL}s")
 
-    # ── Reference frame for scene change ──────────────────────────────────────
-    ret_r,ref_f=cap.read()
-    ref_gray=cv2.cvtColor(ref_f,cv2.COLOR_BGR2GRAY) if ret_r else None
+        # ── Reference frame for scene change ──────────────────────────────────────
+        ret_r,ref_f=cap.read()
+        ref_gray=cv2.cvtColor(ref_f,cv2.COLOR_BGR2GRAY) if ret_r else None
 
-    threading.Thread(target=camera_reader,args=(cap,actual_w,actual_h),
-                     daemon=True,name="cam-reader").start()
+        threading.Thread(target=camera_reader,args=(cap,actual_w,actual_h),
+                         daemon=True,name="cam-reader").start()
 
-    det_q = queue.Queue(maxsize=1)
-    det_stop = threading.Event()
-    det_result = {"lock": threading.Lock(), "yolo": [], "toy": [], "ts": 0.0}
-    last_yolo_submit = 0.0
-    if YOLO_ASYNC:
-        threading.Thread(target=detector_worker,
-                         args=(model,det_q,det_result,det_stop),
-                         daemon=True,name="detector-worker").start()
+        det_q = queue.Queue(maxsize=1)
+        det_stop = threading.Event()
+        det_result = {"lock": threading.Lock(), "yolo": [], "toy": [], "ts": 0.0}
+        last_yolo_submit = 0.0
+        if YOLO_ASYNC:
+            threading.Thread(target=detector_worker,
+                             args=(model,det_q,det_result,det_stop),
+                             daemon=True,name="detector-worker").start()
+    except Exception:
+        print("[ERROR] Detector setup failed — releasing camera before exit.")
+        cap.release()
+        raise
 
     frame_idx=0; yolo_b=[]; toy_b=[]
     fps_t=time.time(); fps_n=0; fps_val=0.0
@@ -840,7 +840,7 @@ def detection_loop():
             )
             periodic_due = frame_idx%PUSH_EVERY==0
             quick_due = zones_changed and (now-last_push_t)>=PUSH_MIN_INTERVAL
-            if periodic_due or quick_due:
+            if (periodic_due or quick_due) and not _pushing:
                 last_push_t=now
                 last_sent_total=n_slots
                 last_sent_zones=dict(zone_status)
@@ -853,8 +853,12 @@ def detection_loop():
             consecutive_errors+=1
             print(f"[detector] frame processing error ({consecutive_errors}): {e}")
             if consecutive_errors>=50:
-                print("[detector] Too many consecutive frame errors — stopping detection loop.")
-                break
+                print("[FATAL] Too many consecutive frame errors — the camera/detection "
+                      "pipeline is unrecoverable. Stopping the detector process now so a "
+                      "process supervisor (systemd/pm2/Docker restart policy) can restart it.")
+                det_stop.set()
+                cap.release()
+                sys.exit(1)
             continue
 
     cap.release()

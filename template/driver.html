@@ -418,6 +418,61 @@
       line-height: 1.4;
     }
 
+    .vehicle-rate-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .vehicle-rate-card {
+      text-align: left;
+      border: 1.5px solid var(--line);
+      border-radius: var(--radius);
+      padding: 12px;
+      background: #fff;
+      cursor: pointer;
+      transition: border-color .15s, background .15s;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .vehicle-rate-card:hover { border-color: var(--green); }
+    .vehicle-rate-card.active {
+      border-color: var(--green);
+      background: var(--green-soft);
+    }
+    .vehicle-rate-label {
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--muted);
+    }
+    .vehicle-rate-card.active .vehicle-rate-label { color: var(--green-dark); }
+    .vehicle-rate-price {
+      margin-top: 4px;
+      font-family: "Space Mono", ui-monospace, monospace;
+      font-size: 26px;
+      font-weight: 800;
+      color: var(--ink);
+    }
+    .vehicle-rate-unit {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .vehicle-rate-discount {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .gcash-vehicle-label {
+      font-weight: 800;
+      color: var(--ink);
+      margin: -2px 0 10px;
+      font-size: 14px;
+    }
+
     .gcash-section {
       margin-top: 18px;
       padding-top: 18px;
@@ -643,17 +698,26 @@
             <span>Live price</span>
           </div>
           <div class="card-body">
-            <div class="label">Current price</div>
-            <div class="price-value">PHP <span id="priceValue">--</span></div>
-            <div class="price-unit">per hour</div>
-            <div class="discount-box">
-              <div class="discount-label">PWD / Senior discount</div>
-              <div class="discount-price">PHP <span id="discountPriceValue">--</span> / hr</div>
-              <div class="discount-note" id="discountNote">20% off the active parking rate.</div>
+            <div class="label">Select vehicle type</div>
+            <div class="vehicle-rate-grid" id="vehicleRateGrid">
+              <button type="button" class="vehicle-rate-card active" id="rateCardCar" onclick="selectVehicleType('car')">
+                <span class="vehicle-rate-label">Car</span>
+                <span class="vehicle-rate-price">PHP <span id="carPriceValue">--</span></span>
+                <span class="vehicle-rate-unit">per hour</span>
+                <span class="vehicle-rate-discount">PWD/Senior: PHP <span id="carDiscountValue">--</span></span>
+              </button>
+              <button type="button" class="vehicle-rate-card" id="rateCardMoto" onclick="selectVehicleType('motorcycle')">
+                <span class="vehicle-rate-label">Motorcycle</span>
+                <span class="vehicle-rate-price">PHP <span id="motoPriceValue">--</span></span>
+                <span class="vehicle-rate-unit">per hour</span>
+                <span class="vehicle-rate-discount">PWD/Senior: PHP <span id="motoDiscountValue">--</span></span>
+              </button>
             </div>
             <p class="detail-line" id="priceNote">Checking current rate.</p>
 
             <div class="gcash-section" id="gcashSection" style="display:none">
+              <label>Paying for</label>
+              <div class="gcash-vehicle-label" id="gcashVehicleLabel">Car</div>
               <label>Discount</label>
               <select class="gcash-select" id="gcashDiscount">
                 <option value="none">None</option>
@@ -701,6 +765,8 @@
 
   <script>
     const ADMIN_ROLES = ['admin'];
+    let selectedVehicleType = 'car';
+    let latestSummary = null;
     const user = getUser();
     if (!user) {
       window.location.href = '/login';
@@ -746,6 +812,7 @@
     }
 
     function updateSummary(data) {
+      latestSummary = data;
       const total = Number(data.total || 0);
       const available = data.available;
       const occupied = data.occupied;
@@ -755,10 +822,16 @@
       document.getElementById('totalSpaces').textContent = total || '--';
       document.getElementById('occupiedSpaces').textContent = occupied === null || occupied === undefined ? '--' : occupied;
       document.getElementById('occupancyPct').textContent = pct === null ? '--' : Math.round(pct) + '%';
-      document.getElementById('priceValue').textContent = formatPrice(data.price_php);
-      document.getElementById('discountPriceValue').textContent = formatPrice(data.pwd_senior_price_php);
-      document.getElementById('discountNote').textContent = data.pwd_senior_note || 'PWD and senior citizens get 20% off the active parking rate.';
-      document.getElementById('priceNote').textContent = data.price_note || 'Current parking rate.';
+
+      const car = data.car || {};
+      const moto = data.motorcycle || {};
+      document.getElementById('carPriceValue').textContent = formatPrice(car.price_php);
+      document.getElementById('carDiscountValue').textContent = formatPrice(car.pwd_senior_price_php);
+      document.getElementById('motoPriceValue').textContent = formatPrice(moto.price_php);
+      document.getElementById('motoDiscountValue').textContent = formatPrice(moto.pwd_senior_price_php);
+
+      const activeRate = selectedVehicleType === 'motorcycle' ? moto : car;
+      document.getElementById('priceNote').textContent = activeRate.price_note || 'Current parking rate.';
       document.getElementById('generatedAt').textContent = data.generated_at_ph ? 'Updated ' + data.generated_at_ph.slice(11, 16) : '--';
       document.getElementById('lastUpdate').textContent = data.last_update ? 'Live ' + data.last_update.slice(11, 16) : 'No live update';
 
@@ -810,6 +883,14 @@
       map.innerHTML = html;
     }
 
+    function selectVehicleType(type) {
+      selectedVehicleType = type === 'motorcycle' ? 'motorcycle' : 'car';
+      document.getElementById('rateCardCar').classList.toggle('active', selectedVehicleType === 'car');
+      document.getElementById('rateCardMoto').classList.toggle('active', selectedVehicleType === 'motorcycle');
+      document.getElementById('gcashVehicleLabel').textContent = selectedVehicleType === 'motorcycle' ? 'Motorcycle' : 'Car';
+      if (latestSummary) updateSummary(latestSummary);
+    }
+
     function formatPrice(value) {
       const n = Number(value);
       if (!Number.isFinite(n)) return '--';
@@ -853,7 +934,8 @@
     async function payWithGcash() {
       const btn = document.getElementById('gcashBtn');
       const status = document.getElementById('gcashStatus');
-      const priceText = document.getElementById('priceValue')?.textContent;
+      const priceId = selectedVehicleType === 'motorcycle' ? 'motoPriceValue' : 'carPriceValue';
+      const priceText = document.getElementById(priceId)?.textContent;
       const price = Number(String(priceText).replace(/,/g, ''));
       if (!Number.isFinite(price) || price < 1) {
         status.textContent = 'Waiting for price to load.';
@@ -869,9 +951,9 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            amount_php: price,
+            vehicle_type: selectedVehicleType,
             discount_type: document.getElementById('gcashDiscount')?.value || 'none',
-            description: 'OccupAI Parking - ' + (document.getElementById('driverName')?.textContent || 'Driver'),
+            description: 'OccupAI Parking (' + (selectedVehicleType === 'motorcycle' ? 'Motorcycle' : 'Car') + ') - ' + (document.getElementById('driverName')?.textContent || 'Driver'),
             user_id: getUser()?.user_id ?? null,
           })
         });

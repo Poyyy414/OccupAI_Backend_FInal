@@ -113,6 +113,11 @@ def require_admin(authorization: str = Header(None)):
     if payload.get("role") != "admin":
         raise HTTPException(403, "Admin access required")
     return payload
+
+
+def _check_cam_token(x_cam_token: Optional[str]):
+    if not x_cam_token or not hmac.compare_digest(x_cam_token, CAM_TOKEN):
+        raise HTTPException(401, "Unauthorized")
 DB_LOG_CONFIRM_SECONDS = max(0.0, float(os.getenv("DB_LOG_CONFIRM_SECONDS", "20")))
 DB_LOG_MIN_INTERVAL_SECONDS = max(1.0, float(os.getenv("DB_LOG_MIN_INTERVAL_SECONDS", "20")))
 
@@ -124,7 +129,8 @@ TRAINING_DATA_PATH = BASE_DIR / "parking_data_training.csv"
 
 INTERNAL_STREAM = f"http://127.0.0.1:{STREAM_PORT}/stream"
 
-FLAT_RATE       = float(os.getenv("FLAT_RATE", "25") or 25)
+FLAT_RATE_CAR        = float(os.getenv("FLAT_RATE_CAR", os.getenv("FLAT_RATE", "50")) or 50)
+FLAT_RATE_MOTORCYCLE = float(os.getenv("FLAT_RATE_MOTORCYCLE", "25") or 25)
 PWD_SENIOR_DISCOUNT_RATE = float(os.getenv("PWD_SENIOR_DISCOUNT_RATE", "0.20") or 0.20)
 OCC_LOW_THRESH  = 7.0
 OCC_HIGH_THRESH = 20.0
@@ -928,6 +934,7 @@ def _ensure_payment_table():
             CREATE TABLE IF NOT EXISTS parking_payments (
                 payment_id BIGSERIAL PRIMARY KEY,
                 user_id INTEGER,
+                vehicle_type TEXT NOT NULL DEFAULT 'car',
                 regular_price_php NUMERIC(10,2) NOT NULL,
                 discount_type TEXT NOT NULL DEFAULT 'none',
                 discount_rate NUMERIC(6,4) NOT NULL DEFAULT 0,
@@ -944,6 +951,7 @@ def _ensure_payment_table():
             "ON parking_payments (paid_at DESC)"
         )
         execute("ALTER TABLE parking_payments ADD COLUMN IF NOT EXISTS user_id INTEGER")
+        execute("ALTER TABLE parking_payments ADD COLUMN IF NOT EXISTS vehicle_type TEXT NOT NULL DEFAULT 'car'")
     except Exception as e:
         print(f"[DB] payment table setup warning: {e}")
 
@@ -955,6 +963,7 @@ def _ensure_gcash_checkout_table():
                 ref TEXT PRIMARY KEY,
                 checkout_id TEXT,
                 user_id INTEGER,
+                vehicle_type TEXT NOT NULL DEFAULT 'car',
                 regular_price_php NUMERIC(10,2) NOT NULL,
                 discount_type TEXT NOT NULL DEFAULT 'none',
                 final_amount_php NUMERIC(10,2) NOT NULL,
@@ -962,6 +971,7 @@ def _ensure_gcash_checkout_table():
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
         """)
+        execute("ALTER TABLE gcash_checkouts ADD COLUMN IF NOT EXISTS vehicle_type TEXT NOT NULL DEFAULT 'car'")
     except Exception as e:
         print(f"[DB] gcash checkout table setup warning: {e}")
 
@@ -1220,8 +1230,7 @@ async def stream_proxy():
 # ══════════════════════════════════════════════════════════════════
 @app.post("/yolo/update")
 def yolo_update(data: YoloUpdate, x_cam_token: str = Header(...)):
-    if x_cam_token != CAM_TOKEN:
-        raise HTTPException(401, "Unauthorized")
+    _check_cam_token(x_cam_token)
     # PH time timestamp
     ts = datetime.now(PH_TZ).strftime("%Y-%m-%d %H:%M:%S")
     with state_lock:
@@ -1270,8 +1279,7 @@ def yolo_update(data: YoloUpdate, x_cam_token: str = Header(...)):
 
 @app.post("/yolo/push-frame")
 def push_frame(data: PushFrame, x_cam_token: str = Header(...)):
-    if x_cam_token != CAM_TOKEN:
-        raise HTTPException(401, "Unauthorized")
+    _check_cam_token(x_cam_token)
     return {"ok": True}
 
 
@@ -1297,9 +1305,11 @@ def api_occupancy():
 # ══════════════════════════════════════════════════════════════════
 def _db_history(hours: int = 168) -> pd.DataFrame:
     try:
+        limit = max(1, min(int(hours), 10000))
         rows = query(
-            f"SELECT logged_at AS datetime, occupied AS vehicles_hour "
-            f"FROM parking_logs ORDER BY logged_at DESC LIMIT {hours}"
+            "SELECT logged_at AS datetime, occupied AS vehicles_hour "
+            "FROM parking_logs ORDER BY logged_at DESC LIMIT %s",
+            (limit,),
         )
         if not rows:
             return pd.DataFrame()
@@ -1423,18 +1433,20 @@ def _with_pwd_senior_discount(result):
     return result
 
 
-def _dynamic_price_formula(vehicles_hour=0.0, lot_capacity=None, when=None):
+def _dynamic_price_formula(vehicles_hour=0.0, lot_capacity=None, when=None, vehicle_type="car"):
+    vt = _normalize_vehicle_type(vehicle_type)
     capacity = max(1, int(lot_capacity or _active_slot_capacity(LOT_CAPACITY)))
     vehicles = max(0.0, float(vehicles_hour or 0.0))
     occupancy_pct = round(min(100.0, (vehicles / capacity) * 100.0), 2)
     occupancy_multiplier = _occupancy_price_multiplier(occupancy_pct)
     day_multiplier, day_rule = _day_price_multiplier(when or datetime.now(PH_TZ))
-    flat_rate = _current_flat_rate()
+    flat_rate = _current_flat_rate(vt)
 
-    manual_price = _manual_price_override()
+    manual_price = _manual_price_override(vt)
     if manual_price is not None:
         change_pct = round((manual_price - flat_rate) / flat_rate * 100.0, 1)
         return _with_pwd_senior_discount({
+            "vehicle_type": vt,
             "recommended_price_php": manual_price,
             "base_model_price_php": manual_price,
             "flat_rate_php": flat_rate,
@@ -1464,6 +1476,7 @@ def _dynamic_price_formula(vehicles_hour=0.0, lot_capacity=None, when=None):
     else:
         note = "Standard parking rate."
     return _with_pwd_senior_discount({
+        "vehicle_type": vt,
         "recommended_price_php": final_price,
         "base_model_price_php": occupancy_price,
         "flat_rate_php": flat_rate,
@@ -1779,6 +1792,9 @@ def _parking_revenue_dashboard():
     }
 
 
+_PAYMENT_METHODS = {"cash", "gcash", "card", "other"}
+
+
 def _discount_rate_for_type(discount_type):
     kind = str(discount_type or "none").strip().lower()
     if kind in {"pwd", "senior"}:
@@ -1788,14 +1804,14 @@ def _discount_rate_for_type(discount_type):
     raise HTTPException(400, "discount_type must be none, pwd, or senior")
 
 
-def _current_payment_regular_price():
+def _current_payment_regular_price(vehicle_type="car"):
     with state_lock:
         snapshot = dict(state)
     total = int(snapshot.get("total") or _active_slot_capacity(LOT_CAPACITY))
     occupied = int(snapshot.get("occupied") or 0)
     timestamp = snapshot.get("timestamp") or ""
     vehicles = occupied if total > 0 and timestamp else 0
-    return float(_dynamic_price_formula(vehicles, total)["recommended_price_php"])
+    return float(_dynamic_price_formula(vehicles, total, vehicle_type=vehicle_type)["recommended_price_php"])
 
 
 def _row_float(row, key):
@@ -1850,7 +1866,9 @@ def _empty_payment_dashboard(error=None):
         "daily_revenue": daily,
         "monthly_revenue": monthly,
         "recent_payments": [],
-        "suggested_regular_price_php": round(_current_payment_regular_price(), 2),
+        "suggested_regular_price_php": round(_current_payment_regular_price("car"), 2),
+        "suggested_regular_price_php_car": round(_current_payment_regular_price("car"), 2),
+        "suggested_regular_price_php_motorcycle": round(_current_payment_regular_price("motorcycle"), 2),
         "revenue_basis": "Actual recorded parking payments. Profit is gross because expenses are not tracked.",
     }
     if error:
@@ -1922,7 +1940,7 @@ def _payment_revenue_dashboard():
         ORDER BY bucket_month
     """)
     recent_rows = query("""
-        SELECT payment_id, regular_price_php, discount_type,
+        SELECT payment_id, vehicle_type, regular_price_php, discount_type,
                discount_amount_php, final_amount_php, payment_method, paid_at
         FROM parking_payments
         ORDER BY paid_at DESC
@@ -1969,6 +1987,7 @@ def _payment_revenue_dashboard():
         paid_at = _coerce_datetime(row.get("paid_at"))
         recent.append({
             "payment_id": row.get("payment_id"),
+            "vehicle_type": row.get("vehicle_type") or "car",
             "regular_price_php": _row_float(row, "regular_price_php"),
             "discount_type": row.get("discount_type") or "none",
             "discount_amount_php": _row_float(row, "discount_amount_php"),
@@ -2002,21 +2021,26 @@ def _payment_revenue_dashboard():
         "daily_revenue": daily,
         "monthly_revenue": monthly,
         "recent_payments": recent,
-        "suggested_regular_price_php": round(_current_payment_regular_price(), 2),
+        "suggested_regular_price_php": round(_current_payment_regular_price("car"), 2),
+        "suggested_regular_price_php_car": round(_current_payment_regular_price("car"), 2),
+        "suggested_regular_price_php_motorcycle": round(_current_payment_regular_price("motorcycle"), 2),
         "revenue_basis": "Actual recorded parking payments. Profit is gross because expenses are not tracked.",
     }
 
 
 def _record_parking_payment(payload):
+    vehicle_type = _normalize_vehicle_type(payload.vehicle_type, default="car")
     regular_price = _parse_price(
         payload.regular_price_php
         if payload.regular_price_php is not None
-        else _current_payment_regular_price()
+        else _current_payment_regular_price(vehicle_type)
     )
     discount_type, discount_rate = _discount_rate_for_type(payload.discount_type)
     discount_amount = round(regular_price * discount_rate, 2)
     final_amount = round(max(0.0, regular_price - discount_amount), 2)
-    payment_method = (payload.payment_method or "cash").strip().lower()[:32] or "cash"
+    payment_method = (payload.payment_method or "cash").strip().lower()
+    if payment_method not in _PAYMENT_METHODS:
+        raise HTTPException(400, "payment_method must be one of: " + ", ".join(sorted(_PAYMENT_METHODS)))
     notes = (payload.notes or "").strip()[:500] or None
     paid_at = _coerce_datetime(payload.paid_at) if payload.paid_at else datetime.now(PH_TZ)
 
@@ -2026,16 +2050,16 @@ def _record_parking_payment(payload):
         cur.execute(
             """
             INSERT INTO parking_payments (
-                regular_price_php, discount_type, discount_rate,
+                vehicle_type, regular_price_php, discount_type, discount_rate,
                 discount_amount_php, final_amount_php, payment_method, notes, paid_at, user_id
             )
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            RETURNING payment_id, regular_price_php, discount_type,
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            RETURNING payment_id, vehicle_type, regular_price_php, discount_type,
                       discount_rate, discount_amount_php, final_amount_php,
                       payment_method, notes, paid_at
             """,
             (
-                regular_price, discount_type, discount_rate,
+                vehicle_type, regular_price, discount_type, discount_rate,
                 discount_amount, final_amount, payment_method, notes, paid_at,
                 payload.user_id,
             ),
@@ -2046,6 +2070,7 @@ def _record_parking_payment(payload):
         return {
             "ok": True,
             "payment_id": row["payment_id"],
+            "vehicle_type": row["vehicle_type"],
             "regular_price_php": _row_float(row, "regular_price_php"),
             "discount_type": row["discount_type"],
             "discount_rate": float(row["discount_rate"] or 0.0),
@@ -2063,16 +2088,7 @@ def _record_parking_payment(payload):
         conn.close()
 
 
-def _driver_price_summary(vehicles_hour=None, lot_capacity=None):
-    if vehicles_hour is None:
-        try:
-            df = _db_history()
-            if not df.empty and "vehicles_hour" in df.columns:
-                vehicles_hour = float(df["vehicles_hour"].iloc[-1] or 0.0)
-        except Exception as e:
-            print(f"[driver summary] price history fallback: {e}")
-    result = _dynamic_price_formula(vehicles_hour or 0.0, lot_capacity)
-    price = float(result["recommended_price_php"])
+def _format_price_result(result):
     ctx = result.get("pricing_context", {})
     if result.get("pricing_reason") == "manual_admin_override":
         note = "Admin-set parking rate. Manual pricing is active."
@@ -2081,12 +2097,10 @@ def _driver_price_summary(vehicles_hour=None, lot_capacity=None):
             f"{result.get('price_note') or 'Standard parking rate.'} "
             f"Based on {ctx.get('occupancy_pct', 0):.0f}% occupancy and {ctx.get('day_rule', 'weekday').lower()} factor."
         )
-    confidence = _metric_score_pct("pricing_rf")
-    score_label = _metric_score_label("pricing_rf")
-
     return {
-        "price_php": round(price, 2),
-        "flat_rate_php": result.get("flat_rate_php", _current_flat_rate()),
+        "vehicle_type": result.get("vehicle_type", "car"),
+        "price_php": round(float(result["recommended_price_php"]), 2),
+        "flat_rate_php": result.get("flat_rate_php"),
         "pwd_senior_price_php": result.get("pwd_senior_price_php"),
         "pwd_senior_discount_rate": result.get("pwd_senior_discount_rate", PWD_SENIOR_DISCOUNT_RATE),
         "pwd_senior_discount_pct": result.get("pwd_senior_discount_pct", round(PWD_SENIOR_DISCOUNT_RATE * 100, 1)),
@@ -2096,6 +2110,31 @@ def _driver_price_summary(vehicles_hour=None, lot_capacity=None):
         "price_source": "occupancy_formula",
         "price_formula": result.get("formula"),
         "price_context": result.get("pricing_context"),
+    }
+
+
+def _driver_price_summary(vehicles_hour=None, lot_capacity=None):
+    if vehicles_hour is None:
+        try:
+            df = _db_history()
+            if not df.empty and "vehicles_hour" in df.columns:
+                vehicles_hour = float(df["vehicles_hour"].iloc[-1] or 0.0)
+        except Exception as e:
+            print(f"[driver summary] price history fallback: {e}")
+
+    car_result = _dynamic_price_formula(vehicles_hour or 0.0, lot_capacity, vehicle_type="car")
+    moto_result = _dynamic_price_formula(vehicles_hour or 0.0, lot_capacity, vehicle_type="motorcycle")
+    car = _format_price_result(car_result)
+    moto = _format_price_result(moto_result)
+
+    confidence = _metric_score_pct("pricing_rf")
+    score_label = _metric_score_label("pricing_rf")
+
+    # Top-level fields stay car-based for backward compatibility with older callers.
+    return {
+        **car,
+        "car": car,
+        "motorcycle": moto,
         "confidence_pct": confidence,
         "score_label": score_label,
     }
@@ -2313,6 +2352,7 @@ def api_revenue_dashboard():
 
 
 class PaymentRecordPayload(BaseModel):
+    vehicle_type: Optional[str] = "car"
     regular_price_php: Optional[float] = None
     discount_type: Optional[str] = "none"
     payment_method: Optional[str] = "cash"
@@ -2345,6 +2385,7 @@ def api_driver_history(user_id: int, period: str = "all", limit: int = 50, _auth
         rows = query(f"""
             SELECT
                 payment_id,
+                vehicle_type,
                 regular_price_php,
                 discount_type,
                 discount_amount_php,
@@ -2363,6 +2404,7 @@ def api_driver_history(user_id: int, period: str = "all", limit: int = 50, _auth
             paid_at = r["paid_at_ph"]
             records.append({
                 "payment_id": r["payment_id"],
+                "vehicle_type": r["vehicle_type"] or "car",
                 "regular_price_php": float(r["regular_price_php"]),
                 "discount_type": r["discount_type"],
                 "discount_amount_php": float(r["discount_amount_php"]),
@@ -2388,6 +2430,7 @@ def api_driver_history(user_id: int, period: str = "all", limit: int = 50, _auth
 #  GCash Payment via PayMongo
 # ══════════════════════════════════════════════════════════════════
 class GcashCheckoutPayload(BaseModel):
+    vehicle_type: Optional[str] = "car"
     discount_type: Optional[str] = "none"
     description: Optional[str] = "OccupAI Parking Payment"
     user_id: Optional[int] = None
@@ -2407,7 +2450,8 @@ def gcash_create_checkout(payload: GcashCheckoutPayload, request: Request):
     if not PAYMONGO_SECRET_KEY:
         raise HTTPException(503, "PayMongo is not configured. Set PAYMONGO_SECRET_KEY in .env")
 
-    regular_price = _current_payment_regular_price()
+    vehicle_type = _normalize_vehicle_type(payload.vehicle_type, default="car")
+    regular_price = _current_payment_regular_price(vehicle_type)
     discount_type, discount_rate = _discount_rate_for_type(payload.discount_type)
     discount_amount = round(regular_price * discount_rate, 2)
     final_amount = round(max(1.0, regular_price - discount_amount), 2)
@@ -2421,17 +2465,17 @@ def gcash_create_checkout(payload: GcashCheckoutPayload, request: Request):
     ref = secrets.token_urlsafe(24)
     execute(
         """
-        INSERT INTO gcash_checkouts (ref, user_id, regular_price_php, discount_type, final_amount_php)
-        VALUES (%s,%s,%s,%s,%s)
+        INSERT INTO gcash_checkouts (ref, user_id, vehicle_type, regular_price_php, discount_type, final_amount_php)
+        VALUES (%s,%s,%s,%s,%s,%s)
         """,
-        (ref, payload.user_id, regular_price, discount_type, final_amount),
+        (ref, payload.user_id, vehicle_type, regular_price, discount_type, final_amount),
     )
 
     body = json.dumps({
         "data": {
             "attributes": {
                 "line_items": [{
-                    "name": "Parking Fee",
+                    "name": f"Parking Fee ({vehicle_type.title()})",
                     "amount": amount_centavos,
                     "currency": "PHP",
                     "quantity": 1,
@@ -2612,6 +2656,7 @@ def gcash_success(ref: str, attempt: int = 0):
 
     try:
         payment_payload = PaymentRecordPayload(
+            vehicle_type=checkout["vehicle_type"] or "car",
             regular_price_php=float(checkout["regular_price_php"]),
             discount_type=checkout["discount_type"],
             payment_method="gcash",
@@ -2763,7 +2808,7 @@ def api_insights():
 
 
 @app.post("/api/insights/refresh")
-def api_insights_refresh():
+def api_insights_refresh(_admin=Depends(require_admin)):
     threading.Thread(target=_run_insights_now, daemon=True, name="insight-force").start()
     return {"ok": True, "message": "Recalculating — results ready in a few seconds."}
 
@@ -2800,6 +2845,8 @@ class LayoutModePayload(BaseModel):
 
 class PricingSettingsPayload(BaseModel):
     price_php: Optional[float] = None
+    price_php_car: Optional[float] = None
+    price_php_motorcycle: Optional[float] = None
     enabled: Optional[bool] = None
 
 # Keep last adjustment in memory so dashboard can read it
@@ -2827,18 +2874,23 @@ def _read_env_value(key: str, default: str = "") -> str:
         pass
     return os.getenv(key, default)
 
+_env_write_lock = threading.Lock()
+
 def _write_env_value(key: str, value: str) -> None:
-    env_path = BASE_DIR / ".env"
-    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
-    found = False
-    for i, line in enumerate(lines):
-        if line.strip().startswith(f"{key}="):
-            lines[i] = f"{key}={value}"
-            found = True
-            break
-    if not found:
-        lines.append(f"{key}={value}")
-    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    # Serialize read-modify-write so two concurrent admin saves (e.g. pricing
+    # and layout-mode) can't interleave and silently drop one update.
+    with _env_write_lock:
+        env_path = BASE_DIR / ".env"
+        lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+        found = False
+        for i, line in enumerate(lines):
+            if line.strip().startswith(f"{key}="):
+                lines[i] = f"{key}={value}"
+                found = True
+                break
+        if not found:
+            lines.append(f"{key}={value}")
+        env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 def _parse_price(value, default=None):
     try:
@@ -2851,30 +2903,51 @@ def _parse_price(value, default=None):
         raise HTTPException(400, "price_php must be between 1 and 10000")
     return price
 
-def _current_flat_rate():
-    return _parse_price(_read_env_value("FLAT_RATE", os.getenv("FLAT_RATE", str(FLAT_RATE))), FLAT_RATE)
+def _normalize_vehicle_type(value, default="car"):
+    raw = str(value if value is not None else default).strip().lower()
+    if raw in {"motorcycle", "motor", "moto", "bike", "motorbike"}:
+        return "motorcycle"
+    if raw in {"car", "auto", "automobile", "sedan"}:
+        return "car"
+    raise HTTPException(400, "vehicle_type must be 'car' or 'motorcycle'")
+
+def _current_flat_rate(vehicle_type="car"):
+    vt = _normalize_vehicle_type(vehicle_type)
+    key = "FLAT_RATE_CAR" if vt == "car" else "FLAT_RATE_MOTORCYCLE"
+    default = FLAT_RATE_CAR if vt == "car" else FLAT_RATE_MOTORCYCLE
+    return _parse_price(_read_env_value(key, os.getenv(key, str(default))), default)
 
 def _env_bool(value):
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 def _pricing_settings():
-    flat_rate = _current_flat_rate()
-    manual_price = _parse_price(_read_env_value("PRICE_OVERRIDE_PHP", str(flat_rate)), flat_rate)
+    flat_car = _current_flat_rate("car")
+    flat_moto = _current_flat_rate("motorcycle")
+    manual_car = _parse_price(_read_env_value("PRICE_OVERRIDE_PHP_CAR", str(flat_car)), flat_car)
+    manual_moto = _parse_price(_read_env_value("PRICE_OVERRIDE_PHP_MOTORCYCLE", str(flat_moto)), flat_moto)
     enabled = _env_bool(_read_env_value("PRICE_OVERRIDE_ENABLED", "false"))
     return {
         "enabled": enabled,
         "mode": "manual" if enabled else "dynamic",
-        "price_php": manual_price,
-        "manual_price_php": manual_price,
-        "flat_rate_php": flat_rate,
+        "price_php_car": manual_car,
+        "price_php_motorcycle": manual_moto,
+        "flat_rate_php_car": flat_car,
+        "flat_rate_php_motorcycle": flat_moto,
+        # Backward-compatible aliases (car rate) for older callers.
+        "price_php": manual_car,
+        "manual_price_php": manual_car,
+        "flat_rate_php": flat_car,
         "pwd_senior_discount_rate": PWD_SENIOR_DISCOUNT_RATE,
         "pwd_senior_discount_pct": round(PWD_SENIOR_DISCOUNT_RATE * 100, 1),
         "currency": "PHP",
     }
 
-def _manual_price_override():
+def _manual_price_override(vehicle_type="car"):
     settings = _pricing_settings()
-    return settings["price_php"] if settings["enabled"] else None
+    if not settings["enabled"]:
+        return None
+    vt = _normalize_vehicle_type(vehicle_type)
+    return settings["price_php_car"] if vt == "car" else settings["price_php_motorcycle"]
 
 def _clean_email(email: str) -> str:
     return (email or "").strip().lower()
@@ -2970,8 +3043,7 @@ async def receive_slot_adjustment(
     payload: SlotAdjustmentPayload,
     x_cam_token: str = Header(None),
 ):
-    if x_cam_token != CAM_TOKEN:
-        raise HTTPException(status_code=403, detail="Invalid cam token")
+    _check_cam_token(x_cam_token)
     global _last_slot_adjustment
     _last_slot_adjustment = payload.dict()
     return {"status": "ok"}
@@ -3029,12 +3101,20 @@ def get_pricing_settings():
 def set_pricing_settings(payload: PricingSettingsPayload, _admin=Depends(require_admin)):
     current = _pricing_settings()
     enabled = current["enabled"] if payload.enabled is None else bool(payload.enabled)
-    price = current["price_php"] if payload.price_php is None else _parse_price(payload.price_php)
+    car_input = payload.price_php_car if payload.price_php_car is not None else payload.price_php
+    price_car = current["price_php_car"] if car_input is None else _parse_price(car_input)
+    price_moto = (
+        current["price_php_motorcycle"]
+        if payload.price_php_motorcycle is None
+        else _parse_price(payload.price_php_motorcycle)
+    )
 
     _write_env_value("PRICE_OVERRIDE_ENABLED", "true" if enabled else "false")
-    _write_env_value("PRICE_OVERRIDE_PHP", f"{price:.2f}")
+    _write_env_value("PRICE_OVERRIDE_PHP_CAR", f"{price_car:.2f}")
+    _write_env_value("PRICE_OVERRIDE_PHP_MOTORCYCLE", f"{price_moto:.2f}")
     os.environ["PRICE_OVERRIDE_ENABLED"] = "true" if enabled else "false"
-    os.environ["PRICE_OVERRIDE_PHP"] = f"{price:.2f}"
+    os.environ["PRICE_OVERRIDE_PHP_CAR"] = f"{price_car:.2f}"
+    os.environ["PRICE_OVERRIDE_PHP_MOTORCYCLE"] = f"{price_moto:.2f}"
 
     with _insight_lock:
         _insight_cache.clear()
@@ -3044,7 +3124,7 @@ def set_pricing_settings(payload: PricingSettingsPayload, _admin=Depends(require
     result.update({
         "ok": True,
         "message": (
-            f"Manual parking price saved at PHP {price:.2f}/hr."
+            f"Manual rate saved — Car PHP {price_car:.2f}/hr, Motorcycle PHP {price_moto:.2f}/hr."
             if enabled else "Manual pricing is off. Dynamic pricing is active."
         ),
     })
@@ -3116,11 +3196,13 @@ def login(data: UserLogin):
             "SELECT user_id,first_name,last_name,full_name,email,password_hash,role,is_active "
             "FROM users WHERE LOWER(email)=LOWER(%s)", (email,)
         )
-        if not rows: raise HTTPException(404, "Email not found")
-        u = rows[0]
+        u = rows[0] if rows else None
+        # Check email-not-found and wrong-password together so the response can't be used
+        # to enumerate registered accounts. "Account disabled" is only revealed once the
+        # caller has already proven they know the correct password.
+        if not u or not bcrypt.checkpw(data.password.encode(), u["password_hash"].encode()):
+            raise HTTPException(401, "Invalid email or password")
         if not u["is_active"]: raise HTTPException(403, "Account disabled")
-        if not bcrypt.checkpw(data.password.encode(), u["password_hash"].encode()):
-            raise HTTPException(401, "Incorrect password")
         role = _normalized_auth_role(u["role"], u["email"])
         if role != str(u["role"] or "").strip().lower():
             execute("UPDATE users SET role=%s WHERE user_id=%s", (role, u["user_id"]))

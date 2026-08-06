@@ -1812,8 +1812,15 @@
         </div>
         <div class="payment-form" aria-label="Record parking payment">
           <label>
+            Vehicle
+            <select class="payment-input" id="paymentVehicleType" onchange="onPaymentVehicleTypeChange()">
+              <option value="car">Car</option>
+              <option value="motorcycle">Motorcycle</option>
+            </select>
+          </label>
+          <label>
             Regular PHP
-            <input class="payment-input" id="paymentAmount" type="number" min="1" max="10000" step="1" value="25" />
+            <input class="payment-input" id="paymentAmount" type="number" min="1" max="10000" step="1" value="50" />
           </label>
           <label>
             Discount
@@ -1915,15 +1922,19 @@
             <button class="toggle-switch" id="themeToggle" onclick="toggleTheme()" aria-label="Toggle gray UI" aria-pressed="false"></button>
           </div>
 
-          <div class="setting-row">
+          <div class="setting-row" style="align-items:stretch;flex-direction:column">
             <div class="setting-copy">
               <strong><svg class="icon icon-sm" aria-hidden="true"><use href="#i-dollar"></use></svg>Parking Price</strong>
               <span id="pricingModeHint">Dynamic pricing is active.</span>
             </div>
             <div class="price-setting-controls">
-              <label class="price-input-wrap" aria-label="Manual parking price">
-                <span>PHP</span>
-                <input class="price-input" id="priceInput" type="number" min="1" max="10000" step="1" value="25" />
+              <label class="price-input-wrap" aria-label="Manual car parking price">
+                <span>Car PHP</span>
+                <input class="price-input" id="priceInputCar" type="number" min="1" max="10000" step="1" value="50" />
+              </label>
+              <label class="price-input-wrap" aria-label="Manual motorcycle parking price">
+                <span>Moto PHP</span>
+                <input class="price-input" id="priceInputMoto" type="number" min="1" max="10000" step="1" value="25" />
               </label>
               <button class="setting-save-btn" id="priceSaveBtn" onclick="savePricingSettings()">Save</button>
               <div class="layout-toggle">
@@ -2205,6 +2216,11 @@
 </main>
 
 <script>
+// Gates the data-fetching/polling init block below — stays false (so nothing
+// fires) unless the role check confirms an admin session. window.location.href
+// navigation is asynchronous, so this flag is what actually stops admin-only
+// API calls from firing on a driver's browser, not the redirect alone.
+let isAuthorizedAdmin = false;
 (function() {
   try {
     const raw = localStorage.getItem('occupai_user');
@@ -2221,7 +2237,9 @@
     }
     if (String(u.role || 'driver').toLowerCase() !== 'admin') {
       window.location.href = '/driver';
+      return;
     }
+    isAuthorizedAdmin = true;
   } catch(e) {
     localStorage.removeItem('occupai_user');
     localStorage.removeItem('occupai_token');
@@ -2300,7 +2318,13 @@ const THEME_KEY = 'occupai_theme';
 const LAYOUT_MODES = ['NORMAL', 'BUSY', 'HIGH'];
 let layoutSelectedMode = 'NORMAL';
 let layoutOverrideEnabled = false;
-let pricingSettings = { enabled: false, price_php: 25, flat_rate_php: 25, mode: 'dynamic' };
+let suggestedPrices = { car: 50, motorcycle: 25 };
+let pricingSettings = {
+  enabled: false,
+  price_php_car: 50, price_php_motorcycle: 25,
+  flat_rate_php_car: 50, flat_rate_php_motorcycle: 25,
+  mode: 'dynamic'
+};
 
 function formatPhp(value, options = {}) {
   const n = Number(value);
@@ -2441,16 +2465,24 @@ async function toggleLayoutOverride() {
 function setPricingUi(settings, pending) {
   pricingSettings = {
     enabled: Boolean(settings?.enabled),
-    price_php: Number(settings?.price_php ?? settings?.manual_price_php ?? pricingSettings.price_php ?? 25),
-    flat_rate_php: Number(settings?.flat_rate_php ?? pricingSettings.flat_rate_php ?? 25),
+    price_php_car: Number(settings?.price_php_car ?? settings?.price_php ?? pricingSettings.price_php_car ?? 50),
+    price_php_motorcycle: Number(settings?.price_php_motorcycle ?? pricingSettings.price_php_motorcycle ?? 25),
+    flat_rate_php_car: Number(settings?.flat_rate_php_car ?? settings?.flat_rate_php ?? pricingSettings.flat_rate_php_car ?? 50),
+    flat_rate_php_motorcycle: Number(settings?.flat_rate_php_motorcycle ?? pricingSettings.flat_rate_php_motorcycle ?? 25),
     mode: settings?.mode || (settings?.enabled ? 'manual' : 'dynamic')
   };
 
-  const input = document.getElementById('priceInput');
-  if (input && document.activeElement !== input) {
-    input.value = Number(pricingSettings.price_php || 0).toFixed(pricingSettings.price_php % 1 ? 2 : 0);
+  const carInput = document.getElementById('priceInputCar');
+  if (carInput && document.activeElement !== carInput) {
+    carInput.value = Number(pricingSettings.price_php_car || 0).toFixed(pricingSettings.price_php_car % 1 ? 2 : 0);
   }
-  if (input) input.disabled = Boolean(pending);
+  if (carInput) carInput.disabled = Boolean(pending);
+
+  const motoInput = document.getElementById('priceInputMoto');
+  if (motoInput && document.activeElement !== motoInput) {
+    motoInput.value = Number(pricingSettings.price_php_motorcycle || 0).toFixed(pricingSettings.price_php_motorcycle % 1 ? 2 : 0);
+  }
+  if (motoInput) motoInput.disabled = Boolean(pending);
 
   const saveBtn = document.getElementById('priceSaveBtn');
   if (saveBtn) {
@@ -2471,12 +2503,12 @@ function setPricingUi(settings, pending) {
   const hint = document.getElementById('pricingModeHint');
   if (hint && !pending) {
     hint.textContent = pricingSettings.enabled
-      ? `Manual rate is active at ${formatPhp(pricingSettings.price_php)}/hr.`
-      : `Auto dynamic pricing is active. Base rate ${formatPhp(pricingSettings.flat_rate_php)}/hr.`;
+      ? `Manual rate active — Car ${formatPhp(pricingSettings.price_php_car)}/hr, Motorcycle ${formatPhp(pricingSettings.price_php_motorcycle)}/hr.`
+      : `Auto dynamic pricing is active. Base rate — Car ${formatPhp(pricingSettings.flat_rate_php_car)}/hr, Motorcycle ${formatPhp(pricingSettings.flat_rate_php_motorcycle)}/hr.`;
   }
 
   const flatLabel = document.getElementById('insFlatRateLabel');
-  if (flatLabel) flatLabel.textContent = formatPhp(pricingSettings.flat_rate_php);
+  if (flatLabel) flatLabel.textContent = formatPhp(pricingSettings.flat_rate_php_car);
   renderPricingVisual(document.getElementById('ins-pricing')?.textContent || '');
 }
 
@@ -2492,22 +2524,25 @@ async function fetchPricingSettings() {
 }
 
 async function savePricingSettings(forceEnabled = true) {
-  const input = document.getElementById('priceInput');
-  const price = Number(input?.value);
-  if (!Number.isFinite(price) || price < 1 || price > 10000) {
+  const carInput = document.getElementById('priceInputCar');
+  const motoInput = document.getElementById('priceInputMoto');
+  const priceCar = Number(carInput?.value);
+  const priceMoto = Number(motoInput?.value);
+  if (!Number.isFinite(priceCar) || priceCar < 1 || priceCar > 10000 ||
+      !Number.isFinite(priceMoto) || priceMoto < 1 || priceMoto > 10000) {
     const hint = document.getElementById('pricingModeHint');
-    if (hint) hint.textContent = 'Enter a price from PHP 1 to PHP 10,000.';
+    if (hint) hint.textContent = 'Enter car and motorcycle prices from PHP 1 to PHP 10,000.';
     return;
   }
 
   const enabled = forceEnabled ? true : pricingSettings.enabled;
   const previous = { ...pricingSettings };
-  setPricingUi({ ...pricingSettings, price_php: price, enabled }, true);
+  setPricingUi({ ...pricingSettings, price_php_car: priceCar, price_php_motorcycle: priceMoto, enabled }, true);
   try {
     const r = await fetch('/api/settings/pricing', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ price_php: price, enabled })
+      body: JSON.stringify({ price_php_car: priceCar, price_php_motorcycle: priceMoto, enabled })
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || d.error || r.status);
@@ -2521,16 +2556,16 @@ async function savePricingSettings(forceEnabled = true) {
 }
 
 async function togglePricingOverride() {
-  const input = document.getElementById('priceInput');
-  const price = Number(input?.value || pricingSettings.price_php);
+  const priceCar = Number(document.getElementById('priceInputCar')?.value || pricingSettings.price_php_car);
+  const priceMoto = Number(document.getElementById('priceInputMoto')?.value || pricingSettings.price_php_motorcycle);
   const enabled = !pricingSettings.enabled;
   const previous = { ...pricingSettings };
-  setPricingUi({ ...pricingSettings, price_php: price, enabled }, true);
+  setPricingUi({ ...pricingSettings, price_php_car: priceCar, price_php_motorcycle: priceMoto, enabled }, true);
   try {
     const r = await fetch('/api/settings/pricing', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ price_php: price, enabled })
+      body: JSON.stringify({ price_php_car: priceCar, price_php_motorcycle: priceMoto, enabled })
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || d.error || r.status);
@@ -2567,6 +2602,18 @@ function cleanText(value) {
     .trim() || '--';
 }
 
+// HTML-entity-escape a value before interpolating it into an innerHTML/document.write string.
+// cleanText() only normalizes whitespace/encoding \u2014 it does NOT escape <, >, &, ", ' and is
+// safe for .textContent but not for building HTML strings.
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function setText(id, value) {
   const el = document.getElementById(id);
   if (el) el.textContent = value;
@@ -2593,11 +2640,17 @@ function liveStatusText(stats) {
   return `The parking lot is currently ${load}. ${free} space${free === 1 ? ' is' : 's are'} available out of ${total} total. ${occupied} vehicle${occupied === 1 ? ' is' : 's are'} parked right now.`;
 }
 
+let _statsSeq = 0;
 async function fetchStats() {
+  // Guard against a slow response landing after a newer one already rendered
+  // (interval fires every 3s; a request that takes longer than that would
+  // otherwise overwrite fresh data with stale data).
+  const seq = ++_statsSeq;
   try {
     const r = await fetch('/api/stats');
     if (!r.ok) throw new Error(r.status);
     const d = await r.json();
+    if (seq !== _statsSeq) return;
 
     const total = d.total ?? d.total_slots ?? 0;
     const occupied = d.occupied ?? d.occupied_slots ?? 0;
@@ -2650,19 +2703,24 @@ async function fetchStats() {
     setConnected(true);
     setText('overviewCameraState', detectorOnline ? 'Detector live' : 'Waiting');
   } catch (e) {
+    if (seq !== _statsSeq) return;
     setConnected(false);
     setText('overviewPressure', 'Unknown');
   }
 }
 
+let _historySeq = 0;
 async function fetchHistory() {
+  const seq = ++_historySeq;
   try {
     const r = await fetch('/api/history');
     if (!r.ok) throw new Error(r.status);
     const data = await r.json();
+    if (seq !== _historySeq) return;
     const items = Array.isArray(data) ? data : (data.history || []);
     renderHistory(items);
   } catch (e) {
+    if (seq !== _historySeq) return;
     setText('activityCount', 'Error');
   }
 }
@@ -2793,14 +2851,14 @@ async function fetchFullPredictions() {
     if (busyEl) {
       const busy = Array.isArray(d.busy_days) ? d.busy_days : [];
       busyEl.innerHTML = busy.length
-        ? busy.map(day => `<span class="status-chip warn" style="margin:0 6px 6px 0">${cleanText(day)}</span>`).join('')
+        ? busy.map(day => `<span class="status-chip warn" style="margin:0 6px 6px 0">${escapeHtml(cleanText(day))}</span>`).join('')
         : '<span class="insight-loading">No busy-day data yet.</span>';
     }
     const quietEl = document.getElementById('predFullQuietDays');
     if (quietEl) {
       const quiet = Array.isArray(d.quiet_days) ? d.quiet_days : [];
       quietEl.innerHTML = quiet.length
-        ? quiet.map(day => `<span class="status-chip good" style="margin:0 6px 6px 0">${cleanText(day)}</span>`).join('')
+        ? quiet.map(day => `<span class="status-chip good" style="margin:0 6px 6px 0">${escapeHtml(cleanText(day))}</span>`).join('')
         : '<span class="insight-loading">No quiet-day data yet.</span>';
     }
 
@@ -2830,8 +2888,12 @@ async function fetchFullPredictions() {
 async function fetchRevenueDashboard() {
   try {
     const r = await fetch('/api/revenue/dashboard', { cache: 'no-store' });
+    if (!r.ok) {
+      let detail = r.status;
+      try { const errBody = await r.json(); detail = errBody.detail || errBody.error || detail; } catch (_) {}
+      throw new Error(detail);
+    }
     const d = await r.json();
-    if (!r.ok) throw new Error(d.detail || d.error || r.status);
 
     setText('statMaxCount', d.max_total_count ?? '--');
     setText('statMaxCountSub', `Peak cars ${d.max_occupied_count ?? 0}; ${d.log_count ?? 0} logs`);
@@ -2852,8 +2914,13 @@ async function fetchRevenueDashboard() {
     setText('revenueBasis', cleanText(d.revenue_basis || 'Actual recorded parking payments.'));
     setText('revenueUpdatedAt', d.generated_at_ph ? `Updated ${String(d.generated_at_ph).slice(11, 16)}` : '--');
 
+    suggestedPrices = {
+      car: Number(d.suggested_regular_price_php_car ?? d.suggested_regular_price_php ?? 50),
+      motorcycle: Number(d.suggested_regular_price_php_motorcycle ?? 25),
+    };
     const paymentAmount = document.getElementById('paymentAmount');
-    const suggested = Number(d.suggested_regular_price_php);
+    const vehicleType = document.getElementById('paymentVehicleType')?.value === 'motorcycle' ? 'motorcycle' : 'car';
+    const suggested = suggestedPrices[vehicleType];
     if (paymentAmount && document.activeElement !== paymentAmount && Number.isFinite(suggested) && suggested > 0) {
       paymentAmount.value = suggested.toFixed(suggested % 1 ? 2 : 0);
     }
@@ -2866,10 +2933,10 @@ async function fetchRevenueDashboard() {
         const value = Number(item.revenue_php || 0);
         const pct = Math.max(4, value / maxDaily * 100);
         return `
-          <div class="revenue-bar-item" title="${cleanText(item.date || item.label)} ${formatPhp(value, { forceCents: true })}">
+          <div class="revenue-bar-item" title="${escapeHtml(cleanText(item.date || item.label))} ${escapeHtml(formatPhp(value, { forceCents: true }))}">
             <div class="revenue-bar-track"><div class="revenue-bar-fill" style="--bar-pct:${pct}%"></div></div>
-            <div class="revenue-bar-label">${cleanText(item.label || '--')}</div>
-            <div class="revenue-bar-value">${formatCompactPhp(value)}</div>
+            <div class="revenue-bar-label">${escapeHtml(cleanText(item.label || '--'))}</div>
+            <div class="revenue-bar-value">${escapeHtml(formatCompactPhp(value))}</div>
           </div>`;
       }).join('') : '<div class="empty-state" style="grid-column:1/-1"><strong>No revenue logs yet</strong>Daily revenue will appear after parking logs are saved.</div>';
     }
@@ -2879,8 +2946,8 @@ async function fetchRevenueDashboard() {
     if (monthGrid) {
       monthGrid.innerHTML = monthly.length ? monthly.map(item => `
         <div class="revenue-day">
-          <div class="revenue-day-name">${cleanText(item.label || item.month || '--')}</div>
-          <div class="revenue-day-value">${formatCompactPhp(item.revenue_php || 0)}</div>
+          <div class="revenue-day-name">${escapeHtml(cleanText(item.label || item.month || '--'))}</div>
+          <div class="revenue-day-value">${escapeHtml(formatCompactPhp(item.revenue_php || 0))}</div>
         </div>`).join('') : '';
     }
 
@@ -2888,14 +2955,15 @@ async function fetchRevenueDashboard() {
     const recentList = document.getElementById('recentPaymentsList');
     if (recentList) {
       recentList.innerHTML = recent.length ? recent.map(item => {
-        const discount = item.discount_type && item.discount_type !== 'none' ? ` / ${String(item.discount_type).toUpperCase()}` : '';
+        const discount = item.discount_type && item.discount_type !== 'none' ? ` / ${escapeHtml(String(item.discount_type).toUpperCase())}` : '';
+        const vehicle = item.vehicle_type === 'motorcycle' ? 'MOTO' : 'CAR';
         return `
           <div class="payment-row">
             <div>
-              <strong>${cleanText(item.payment_method || 'cash').toUpperCase()}${discount}</strong>
-              <span>${cleanText(item.paid_at_ph || '')}</span>
+              <strong>${vehicle} · ${escapeHtml(cleanText(item.payment_method || 'cash').toUpperCase())}${discount}</strong>
+              <span>${escapeHtml(cleanText(item.paid_at_ph || ''))}</span>
             </div>
-            <div class="payment-amount">${formatPhp(item.final_amount_php, { forceCents: true })}</div>
+            <div class="payment-amount">${escapeHtml(formatPhp(item.final_amount_php, { forceCents: true }))}</div>
           </div>`;
       }).join('') : '<div class="empty-state"><strong>No payments recorded yet</strong>Use the form above to record paid parking.</div>';
     }
@@ -2905,6 +2973,15 @@ async function fetchRevenueDashboard() {
     setText('weeklyRevenueValue', 'PHP --');
     setText('monthlyRevenueValue', 'PHP --');
     setText('revenueBasis', 'Revenue dashboard unavailable.');
+  }
+}
+
+function onPaymentVehicleTypeChange() {
+  const vehicleType = document.getElementById('paymentVehicleType')?.value === 'motorcycle' ? 'motorcycle' : 'car';
+  const paymentAmount = document.getElementById('paymentAmount');
+  const suggested = suggestedPrices[vehicleType];
+  if (paymentAmount && Number.isFinite(suggested) && suggested > 0) {
+    paymentAmount.value = suggested.toFixed(suggested % 1 ? 2 : 0);
   }
 }
 
@@ -2918,6 +2995,7 @@ async function recordPayment() {
   }
 
   const payload = {
+    vehicle_type: document.getElementById('paymentVehicleType')?.value === 'motorcycle' ? 'motorcycle' : 'car',
     regular_price_php: amount,
     discount_type: document.getElementById('paymentDiscount')?.value || 'none',
     payment_method: document.getElementById('paymentMethod')?.value || 'cash',
@@ -2936,8 +3014,12 @@ async function recordPayment() {
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(payload)
     });
+    if (!r.ok) {
+      let detail = r.status;
+      try { const errBody = await r.json(); detail = errBody.detail || errBody.error || detail; } catch (_) {}
+      throw new Error(detail);
+    }
     const d = await r.json();
-    if (!r.ok) throw new Error(d.detail || d.error || r.status);
     if (status) status.textContent = `Recorded ${formatPhp(d.final_amount_php, { forceCents: true })} payment.`;
     const note = document.getElementById('paymentNote');
     if (note) note.value = '';
@@ -3085,11 +3167,11 @@ function extractRecommendedPrice(text) {
   const explicit = normalized.match(/(?:PHP|P)\s*(\d+(?:\.\d+)?)/i);
   if (explicit) return Number(explicit[1]);
   const nums = normalized.match(/\d+(?:\.\d+)?/g);
-  return nums ? Number(nums[nums.length - 1]) : Number(pricingSettings.price_php || pricingSettings.flat_rate_php || 25);
+  return nums ? Number(nums[nums.length - 1]) : Number(pricingSettings.price_php_car || pricingSettings.flat_rate_php_car || 50);
 }
 
 function renderPricingVisual(pricingText, pricingDetails = null) {
-  const flat = Math.max(1, Number(pricingDetails?.flat_rate_php ?? pricingSettings.flat_rate_php ?? 25));
+  const flat = Math.max(1, Number(pricingDetails?.flat_rate_php ?? pricingSettings.flat_rate_php_car ?? 50));
   const ai = Math.max(0, Number(pricingDetails?.recommended_price_php ?? extractRecommendedPrice(pricingText)));
   const maxVal = Math.max(50, flat, ai);
   const flatBar = document.getElementById('insFlatBar');
@@ -3185,10 +3267,16 @@ async function forceRefreshInsights() {
   const btn = document.querySelector('[onclick="forceRefreshInsights()"]');
   if (btn) { btn.textContent = 'Recalculating...'; btn.disabled = true; }
   try {
-    await fetch('/api/insights/refresh', { method: 'POST' });
+    const r = await fetch('/api/insights/refresh', { method: 'POST', headers: authHeaders() });
+    if (!r.ok) throw new Error('Refresh request failed: ' + r.status);
     setTimeout(async () => {
-      await fetchInsights();
-      if (btn) { btn.textContent = 'Refresh'; btn.disabled = false; }
+      try {
+        await fetchInsights();
+      } catch (e) {
+        console.warn('Insights refresh:', e);
+      } finally {
+        if (btn) { btn.textContent = 'Refresh'; btn.disabled = false; }
+      }
     }, 3000);
   } catch(e) {
     if (btn) { btn.textContent = 'Refresh'; btn.disabled = false; }
@@ -3252,22 +3340,24 @@ function openFullscreen() {
 }
 
 initTheme();
-fetchLayoutMode();
-fetchPricingSettings();
-fetchStats();
-fetchHistory();
-fetchPredictions();
-fetchRevenueDashboard();
+if (isAuthorizedAdmin) {
+  fetchLayoutMode();
+  fetchPricingSettings();
+  fetchStats();
+  fetchHistory();
+  fetchPredictions();
+  fetchRevenueDashboard();
 
-setInterval(fetchStats, 3000);
-setInterval(fetchHistory, 5000);
-setInterval(fetchPredictions, 30000);
-setInterval(fetchRevenueDashboard, 30000);
-setInterval(fetchLayoutMode, 30000);
-setInterval(fetchPricingSettings, 30000);
-setInterval(() => {
-  if (isPanelActive('insights')) fetchInsights();
-}, 10000);
+  setInterval(fetchStats, 3000);
+  setInterval(fetchHistory, 5000);
+  setInterval(fetchPredictions, 30000);
+  setInterval(fetchRevenueDashboard, 30000);
+  setInterval(fetchLayoutMode, 30000);
+  setInterval(fetchPricingSettings, 30000);
+  setInterval(() => {
+    if (isPanelActive('insights')) fetchInsights();
+  }, 10000);
+}
 </script>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -3288,6 +3378,7 @@ function switchReportTab(tab, btn) {
 async function fetchReports() {
   try {
     const res = await fetch('/api/revenue/dashboard');
+    if (!res.ok) throw new Error('Reports request failed: ' + res.status);
     const data = await res.json();
     reportData = data;
     updateReportKpis(data);
@@ -3403,7 +3494,7 @@ function renderReports() {
     if (tbody) tbody.innerHTML = rows.map(row =>
       '<tr>' + cols.map(c => {
         const val = c.fmt ? c.fmt(row[c.key], row) : (row[c.key] ?? '--');
-        return '<td class="' + (c.cls || '') + '">' + val + '</td>';
+        return '<td class="' + (c.cls || '') + '">' + escapeHtml(val) + '</td>';
       }).join('') + '</tr>'
     ).join('');
   }
@@ -3555,11 +3646,11 @@ function downloadReportPDF() {
   const badge = document.getElementById('predAccuracyBadge');
   const accuracyText = badge ? badge.textContent : '';
 
-  const tableRows = rows.map(row => '<tr>' + cols.map(c => { const val = c.fmt ? c.fmt(row[c.key], row) : (row[c.key] ?? '--'); return '<td>' + val + '</td>'; }).join('') + '</tr>').join('');
+  const tableRows = rows.map(row => '<tr>' + cols.map(c => { const val = c.fmt ? c.fmt(row[c.key], row) : (row[c.key] ?? '--'); return '<td>' + escapeHtml(val) + '</td>'; }).join('') + '</tr>').join('');
   const chartSection = chartImg ? '<div class="section-title">Revenue Summary Chart</div><img src="' + chartImg + '" class="chart-img" /><div class="chart-note">Bar chart showing Revenue (green) vs Discounts (orange) for the selected period.</div>' : '';
-  const predSection = predImg ? '<div class="section-title">AI Predicted vs Actual Revenue &nbsp;<span style="font-size:10px;font-weight:400;color:#888">' + accuracyText + '</span></div><img src="' + predImg + '" class="chart-img" /><div class="chart-note">Green solid line = actual average revenue per day | Blue dashed line = AI predicted revenue per day</div>' : '';
+  const predSection = predImg ? '<div class="section-title">AI Predicted vs Actual Revenue &nbsp;<span style="font-size:10px;font-weight:400;color:#888">' + escapeHtml(accuracyText) + '</span></div><img src="' + predImg + '" class="chart-img" /><div class="chart-note">Green solid line = actual average revenue per day | Blue dashed line = AI predicted revenue per day</div>' : '';
 
-  const html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>OccupAI ' + tabLabel + ' Revenue Report</title><style>'
+  const html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>OccupAI ' + escapeHtml(tabLabel) + ' Revenue Report</title><style>'
     + '* { box-sizing: border-box; } body { font-family: Arial, sans-serif; font-size: 12px; color: #111; margin: 28px; }'
     + '.header { display:flex; align-items:center; justify-content:space-between; border-bottom:2px solid #1a7a4a; padding-bottom:10px; margin-bottom:16px; }'
     + '.header-left h1 { font-size: 20px; margin:0 0 2px 0; color:#1a7a4a; } .header-left .sub { color: #666; font-size: 11px; margin:0; }'
@@ -3575,8 +3666,8 @@ function downloadReportPDF() {
     + '.footer { margin-top:24px; border-top:1px solid #eee; padding-top:8px; font-size:10px; color:#aaa; display:flex; justify-content:space-between; }'
     + '@media print { body { margin:12px; } @page { margin:1cm; } }'
     + '</style></head><body>'
-    + '<div class="header"><div class="header-left"><h1>&#128200; OccupAI &mdash; ' + tabLabel + ' Revenue Report</h1><p class="sub">105 Penafrancia Ave, Naga City &nbsp;|&nbsp; Parking Operations Dashboard</p></div>'
-    + '<div class="header-right"><div>Generated: <strong>' + (reportData.generated_at_ph || '--') + '</strong></div><div style="margin-top:4px"><span class="badge">' + tabLabel + ' Report</span></div></div></div>'
+    + '<div class="header"><div class="header-left"><h1>&#128200; OccupAI &mdash; ' + escapeHtml(tabLabel) + ' Revenue Report</h1><p class="sub">105 Penafrancia Ave, Naga City &nbsp;|&nbsp; Parking Operations Dashboard</p></div>'
+    + '<div class="header-right"><div>Generated: <strong>' + escapeHtml(reportData.generated_at_ph || '--') + '</strong></div><div style="margin-top:4px"><span class="badge">' + escapeHtml(tabLabel) + ' Report</span></div></div></div>'
     + '<div class="kpi-row">'
     + '<div class="kpi"><span>Today</span><strong>' + phpFmt(reportData.today_revenue_php) + '</strong><small>' + (reportData.today_transaction_count || 0) + ' transactions</small></div>'
     + '<div class="kpi"><span>This Week</span><strong>' + phpFmt(reportData.week_revenue_php) + '</strong><small>' + (reportData.week_transaction_count || 0) + ' transactions</small></div>'
@@ -3585,14 +3676,14 @@ function downloadReportPDF() {
     + '</div>'
     + chartSection + predSection
     + '<div class="section-title">Detailed Breakdown</div>'
-    + '<table><thead><tr>' + cols.map(c => '<th>' + c.label + '</th>').join('') + '</tr></thead><tbody>' + tableRows + '</tbody></table>'
+    + '<table><thead><tr>' + cols.map(c => '<th>' + escapeHtml(c.label) + '</th>').join('') + '</tr></thead><tbody>' + tableRows + '</tbody></table>'
     + '<div class="summary-box">'
     + '<div class="summary-item"><span>Total Revenue</span><strong>' + phpFmt(totalRev) + '</strong></div>'
     + '<div class="summary-item"><span>Total Discounts</span><strong style="color:#c07000">' + phpFmt(totalDis) + '</strong></div>'
     + '<div class="summary-item"><span>Net Revenue</span><strong>' + phpFmt(totalRev - totalDis) + '</strong></div>'
     + '<div class="summary-item"><span>Total Transactions</span><strong>' + totalTx + '</strong></div>'
     + '</div>'
-    + '<div class="footer"><span>OccupAI Parking Management System &nbsp;|&nbsp; ' + (reportData.revenue_basis || 'Revenue Report') + '</span><span>Confidential &mdash; For Business Use Only</span></div>'
+    + '<div class="footer"><span>OccupAI Parking Management System &nbsp;|&nbsp; ' + escapeHtml(reportData.revenue_basis || 'Revenue Report') + '</span><span>Confidential &mdash; For Business Use Only</span></div>'
     + '<script>window.onload=function(){window.print()}<\/script></body></html>';
 
   const w = window.open('', '_blank');
