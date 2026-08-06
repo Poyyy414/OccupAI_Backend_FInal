@@ -23,7 +23,16 @@
       "Bash(python -m py_compile yolo_service/detector_v7.py)",
       "Bash(git rm *)",
       "Bash(python -m py_compile backend/main.py backend/db.py seed_db.py yolo_service/detector_v7.py)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(python3 -)",
+      "Bash(node --check template_driver.html.js)",
+      "Bash(node --check template_dashboard.html.js)",
+      "Bash(node --check dashboard_check.js)",
+      "Bash(rm -f dashboard_check.js)",
+      "Bash(python -m py_compile backend/main.py backend/db.py backend/models.py backend/slot_adjuster.py yolo_service/detector_v7.py)",
+      "Bash(rm -f template_driver.html.js template_dashboard.html.js)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }
