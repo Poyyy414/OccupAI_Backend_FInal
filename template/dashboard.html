@@ -1694,6 +1694,10 @@
       <span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-sparkles"></use></svg></span>
       <span>Reports</span>
     </button>
+    <button class="nav-item" onclick="switchPanel('settings', this)">
+      <span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-settings"></use></svg></span>
+      <span>Settings</span>
+    </button>
   </nav>
 
   <div class="sidebar-footer">
@@ -2113,76 +2117,6 @@
           </div>
         </section>
 
-        <section class="panel-card settings-panel" style="margin-top:14px">
-          <div class="panel-header">
-            <span class="panel-title">Settings</span>
-            <span class="status-chip" id="layoutStatus">Layout --</span>
-          </div>
-
-          <div class="setting-row">
-            <div class="setting-copy">
-              <strong>Gray UI</strong>
-              <span id="themeModeLabel">Off</span>
-            </div>
-            <button class="toggle-switch" id="themeToggle" onclick="toggleTheme()" aria-label="Toggle gray UI" aria-pressed="false"></button>
-          </div>
-
-          <div class="setting-row" style="align-items:stretch;flex-direction:column">
-            <div class="setting-copy">
-              <strong>Parking Price</strong>
-              <span id="pricingModeHint">Dynamic pricing is active.</span>
-            </div>
-            <div class="price-setting-controls">
-              <label class="price-input-wrap" aria-label="Manual car parking price">
-                <span>Car PHP</span>
-                <input class="price-input" id="priceInputCar" type="number" min="1" max="10000" step="1" value="50" />
-              </label>
-              <label class="price-input-wrap" aria-label="Manual motorcycle parking price">
-                <span>Moto PHP</span>
-                <input class="price-input" id="priceInputMoto" type="number" min="1" max="10000" step="1" value="25" />
-              </label>
-              <button class="setting-save-btn" id="priceSaveBtn" onclick="savePricingSettings()">Save</button>
-              <div class="layout-toggle">
-                <span class="layout-toggle-label" id="pricingOverrideLabel">Auto</span>
-                <button class="toggle-switch" id="pricingOverrideToggle" onclick="togglePricingOverride()" aria-label="Toggle manual pricing" aria-pressed="false"></button>
-              </div>
-            </div>
-          </div>
-
-          <div class="setting-row">
-            <div class="setting-copy">
-              <strong>PWD Discount</strong>
-              <span id="discountPwdHint">20% off the parking rate for PWD.</span>
-            </div>
-            <button class="toggle-switch" id="discountPwdToggle" onclick="toggleDiscountSetting('pwd')" aria-label="Toggle PWD discount" aria-pressed="false"></button>
-          </div>
-
-          <div class="setting-row">
-            <div class="setting-copy">
-              <strong>Senior Discount</strong>
-              <span id="discountSeniorHint">20% off the parking rate for seniors.</span>
-            </div>
-            <button class="toggle-switch" id="discountSeniorToggle" onclick="toggleDiscountSetting('senior')" aria-label="Toggle senior discount" aria-pressed="false"></button>
-          </div>
-
-          <div class="setting-row" style="align-items:stretch;flex-direction:column">
-            <div class="layout-head-row">
-              <div class="setting-copy">
-                <strong>Parking Layout</strong>
-                <span id="layoutModeHint">Automatic mode lets the detector choose the layout.</span>
-              </div>
-              <div class="layout-toggle">
-                <span class="layout-toggle-label" id="layoutOverrideLabel">Auto</span>
-                <button class="toggle-switch" id="layoutOverrideToggle" onclick="toggleLayoutOverride()" aria-label="Toggle manual parking layout" aria-pressed="false"></button>
-              </div>
-            </div>
-            <div class="layout-picker" id="layoutPicker" aria-label="Parking layout">
-              <button class="layout-btn" data-mode="NORMAL" onclick="setLayoutMode('NORMAL')">Normal</button>
-              <button class="layout-btn" data-mode="BUSY" onclick="setLayoutMode('BUSY')">Busy</button>
-              <button class="layout-btn" data-mode="HIGH" onclick="setLayoutMode('HIGH')">High</button>
-            </div>
-          </div>
-        </section>
       </div>
 
       <aside class="zone-panel">
@@ -2205,6 +2139,79 @@
         </div>
       </aside>
     </div>
+  </section>
+
+  <section class="content" id="content-settings">
+    <section class="panel-card settings-panel" style="max-width:640px">
+      <div class="panel-header">
+        <span class="panel-title">Admin Settings</span>
+        <span class="status-chip" id="layoutStatus">Layout --</span>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-copy">
+          <strong>Gray UI</strong>
+          <span id="themeModeLabel">Off</span>
+        </div>
+        <button class="toggle-switch" id="themeToggle" onclick="toggleTheme()" aria-label="Toggle gray UI" aria-pressed="false"></button>
+      </div>
+
+      <div class="setting-row" style="align-items:stretch;flex-direction:column">
+        <div class="setting-copy">
+          <strong>Parking Price</strong>
+          <span id="pricingModeHint">Dynamic pricing is active.</span>
+        </div>
+        <div class="price-setting-controls">
+          <label class="price-input-wrap" aria-label="Manual car parking price">
+            <span>Car PHP</span>
+            <input class="price-input" id="priceInputCar" type="number" min="1" max="10000" step="1" value="50" />
+          </label>
+          <label class="price-input-wrap" aria-label="Manual motorcycle parking price">
+            <span>Moto PHP</span>
+            <input class="price-input" id="priceInputMoto" type="number" min="1" max="10000" step="1" value="25" />
+          </label>
+          <button class="setting-save-btn" id="priceSaveBtn" onclick="savePricingSettings()">Save</button>
+          <div class="layout-toggle">
+            <span class="layout-toggle-label" id="pricingOverrideLabel">Auto</span>
+            <button class="toggle-switch" id="pricingOverrideToggle" onclick="togglePricingOverride()" aria-label="Toggle manual pricing" aria-pressed="false"></button>
+          </div>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-copy">
+          <strong>PWD Discount</strong>
+          <span id="discountPwdHint">20% off the parking rate for PWD.</span>
+        </div>
+        <button class="toggle-switch" id="discountPwdToggle" onclick="toggleDiscountSetting('pwd')" aria-label="Toggle PWD discount" aria-pressed="false"></button>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-copy">
+          <strong>Senior Discount</strong>
+          <span id="discountSeniorHint">20% off the parking rate for seniors.</span>
+        </div>
+        <button class="toggle-switch" id="discountSeniorToggle" onclick="toggleDiscountSetting('senior')" aria-label="Toggle senior discount" aria-pressed="false"></button>
+      </div>
+
+      <div class="setting-row" style="align-items:stretch;flex-direction:column">
+        <div class="layout-head-row">
+          <div class="setting-copy">
+            <strong>Parking Layout</strong>
+            <span id="layoutModeHint">Automatic mode lets the detector choose the layout.</span>
+          </div>
+          <div class="layout-toggle">
+            <span class="layout-toggle-label" id="layoutOverrideLabel">Auto</span>
+            <button class="toggle-switch" id="layoutOverrideToggle" onclick="toggleLayoutOverride()" aria-label="Toggle manual parking layout" aria-pressed="false"></button>
+          </div>
+        </div>
+        <div class="layout-picker" id="layoutPicker" aria-label="Parking layout">
+          <button class="layout-btn" data-mode="NORMAL" onclick="setLayoutMode('NORMAL')">Normal</button>
+          <button class="layout-btn" data-mode="BUSY" onclick="setLayoutMode('BUSY')">Busy</button>
+          <button class="layout-btn" data-mode="HIGH" onclick="setLayoutMode('HIGH')">High</button>
+        </div>
+      </div>
+    </section>
   </section>
 
   <section class="content" id="content-insights">
@@ -2566,6 +2573,11 @@ const PANEL_META = {
     eyebrow: 'Business reports',
     title: 'Revenue Reports',
     sub: 'Daily, weekly, monthly and yearly revenue summaries — downloadable as CSV or PDF'
+  },
+  settings: {
+    eyebrow: 'Admin controls',
+    title: 'Settings',
+    sub: 'Theme, parking price, discounts, and layout mode'
   }
 };
 

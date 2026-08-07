@@ -72,7 +72,7 @@
     .page {
       min-height: 100vh;
       display: grid;
-      grid-template-rows: auto 1fr auto;
+      grid-template-rows: auto 1fr;
       padding: clamp(18px, 3vw, 34px);
       gap: 18px;
     }
@@ -109,31 +109,6 @@
     .brand-name { font-size: 20px; font-weight: 800; text-shadow: 0 2px 12px rgba(0,0,0,.3); }
     .brand-meta { margin-top: 2px; color: rgba(246, 249, 251, .68); font-size: 11px; text-transform: uppercase; letter-spacing: .16em; }
 
-    .status-chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 9px;
-      min-height: 34px;
-      padding: 7px 12px;
-      border: 1px solid rgba(139, 242, 203, .22);
-      border-radius: 999px;
-      background: rgba(42, 180, 133, .2);
-      color: #d9fff0;
-      font-size: 12px;
-      font-weight: 800;
-      box-shadow: 0 14px 30px rgba(0, 0, 0, .18);
-      backdrop-filter: blur(16px);
-    }
-
-    .status-chip::before {
-      content: "";
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--green);
-      box-shadow: 0 0 0 5px rgba(69, 223, 173, .14);
-    }
-
     .hero {
       position: relative;
       display: grid;
@@ -159,26 +134,6 @@
       text-transform: uppercase;
       letter-spacing: .18em;
     }
-
-    .headline p {
-      width: min(590px, 100%);
-      margin: 8px auto 0;
-      color: rgba(246, 249, 251, .78);
-      font-size: 15px;
-      line-height: 1.45;
-      text-shadow: 0 3px 16px rgba(0,0,0,.55);
-    }
-
-    h1 {
-      margin-top: 8px;
-      font-size: clamp(42px, 7vw, 80px);
-      line-height: .92;
-      font-weight: 800;
-      letter-spacing: 0;
-      text-shadow: 0 7px 24px rgba(0,0,0,.56);
-    }
-
-    h1 span { font-weight: 500; color: rgba(246, 249, 251, .62); }
 
     .stage {
       position: relative;
@@ -292,7 +247,7 @@
 
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    .lot-plate, .data-plate {
+    .lot-plate {
       position: absolute;
       z-index: 1;
       border: 1px solid rgba(255,255,255,.16);
@@ -301,9 +256,6 @@
       box-shadow: 0 26px 70px rgba(0,0,0,.32);
       backdrop-filter: blur(14px);
       pointer-events: none;
-    }
-
-    .lot-plate {
       left: 4%;
       top: 22%;
       width: 250px;
@@ -329,61 +281,17 @@
       box-shadow: 0 0 28px rgba(69,223,173,.2);
     }
 
-    .data-plate {
-      right: 8%;
-      bottom: 15%;
-      width: 185px;
-      padding: 13px;
-    }
-
-    .data-head {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      color: rgba(246,249,251,.74);
-      font-size: 10px;
-      font-weight: 800;
-      margin-bottom: 12px;
-    }
-
-    .bars { display: flex; align-items: flex-end; gap: 7px; height: 72px; }
-    .bars span { flex: 1; min-width: 8px; border-radius: 999px 999px 3px 3px; background: linear-gradient(180deg, #86f4cf, rgba(69,223,173,.25)); }
-
-    .bottom-strip {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 18px;
-      width: min(1000px, 100%);
-      margin: 0 auto;
-      color: rgba(246,249,251,.78);
-      font-size: 13px;
-      position: relative;
-      z-index: 3;
-    }
-
-    .strip-item {
-      min-height: 54px;
-      padding-left: 14px;
-      border-left: 3px solid rgba(69,223,173,.55);
-      text-shadow: 0 3px 14px rgba(0,0,0,.5);
-    }
-
     @media (max-width: 860px) {
       .page { padding: 18px; }
       .hero { min-height: auto; align-content: start; padding-top: 28px; }
       .stage { min-height: auto; }
-      .lot-plate, .data-plate { display: none; }
-      .bottom-strip { grid-template-columns: 1fr; }
-      h1 { font-size: 44px; }
+      .lot-plate { display: none; }
     }
 
     @media (max-width: 520px) {
       .topbar { align-items: flex-start; flex-direction: column; }
-      .status-chip { align-self: flex-end; }
       .auth-card { padding: 22px; }
       .headline { text-align: left; justify-self: stretch; }
-      .headline p { margin-left: 0; }
-      h1 { font-size: 38px; }
     }
   </style>
 </head>
@@ -397,24 +305,15 @@
           <div class="brand-meta">Parking Ops</div>
         </div>
       </div>
-      <div class="status-chip">Live ready</div>
     </header>
 
     <section class="hero">
       <div class="headline">
         <div class="eyebrow">105 Penafrancia Ave</div>
-        <p>Monitor occupancy, live camera status, forecasts, and pricing recommendations from one focused operations dashboard.</p>
-        <h1>Real-time parking <span>intelligence.</span></h1>
       </div>
 
       <div class="stage">
         <div class="lot-plate" aria-hidden="true"></div>
-        <div class="data-plate" aria-hidden="true">
-          <div class="data-head"><span>Real-time occupancy</span><span>Data</span></div>
-          <div class="bars">
-            <span style="height:34%"></span><span style="height:38%"></span><span style="height:50%"></span><span style="height:47%"></span><span style="height:62%"></span><span style="height:82%"></span><span style="height:58%"></span>
-          </div>
-        </div>
 
         <div class="auth-card">
           <div class="card-title">Welcome back</div>
@@ -438,12 +337,6 @@
         </div>
       </div>
     </section>
-
-    <div class="bottom-strip" aria-hidden="true">
-      <div class="strip-item">Real-time occupancy, live camera forecasts, and pricing.</div>
-      <div class="strip-item">Harness data to refine urban mobility.</div>
-      <div class="strip-item">Occupancy trends for driver-facing availability.</div>
-    </div>
   </main>
 
   <script>
