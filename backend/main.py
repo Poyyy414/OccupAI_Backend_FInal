@@ -7,7 +7,7 @@ CHANGES in v2.2:
   - /api/predictions now includes weekday_revenue and today_revenue_forecast
   - Revenue forecast added to predictions endpoint
 """
-import os, math, bcrypt, uvicorn, joblib, threading, warnings, time, json, base64, secrets, hmac, hashlib
+import os, re, math, bcrypt, uvicorn, joblib, threading, warnings, time, json, base64, secrets, hmac, hashlib
 import psycopg2
 import numpy as np
 import pandas as pd
@@ -79,7 +79,8 @@ def _sign_auth_token(user_id: int, role: str) -> str:
     return f"{raw}.{sig}"
 
 
-def _verify_auth_token(token: str):
+def _decode_auth_token(token: str):
+    """Signature + expiry check only — does not consider revocation."""
     try:
         raw, sig = token.split(".", 1)
         expected = hmac.new(AUTH_SECRET_KEY.encode(), raw.encode(), hashlib.sha256).hexdigest()
@@ -92,6 +93,99 @@ def _verify_auth_token(token: str):
         return payload
     except Exception:
         return None
+
+
+_revoked_tokens_lock = threading.Lock()
+_revoked_tokens = {}  # token string -> exp unix timestamp, so "logout" can actually invalidate a token early
+
+
+def _prune_revoked_tokens():
+    now = int(time.time())
+    with _revoked_tokens_lock:
+        for t in [t for t, exp in _revoked_tokens.items() if exp < now]:
+            _revoked_tokens.pop(t, None)
+
+
+def _revoke_token(token: str):
+    payload = _decode_auth_token(token)
+    if not payload:
+        return
+    with _revoked_tokens_lock:
+        _revoked_tokens[token] = int(payload.get("exp", 0))
+    _prune_revoked_tokens()
+
+
+def _verify_auth_token(token: str):
+    payload = _decode_auth_token(token)
+    if not payload:
+        return None
+    with _revoked_tokens_lock:
+        if token in _revoked_tokens:
+            return None
+    return payload
+
+
+_LOGIN_MAX_ATTEMPTS = 5
+_LOGIN_WINDOW_SECONDS = 15 * 60    # failures older than this don't count toward the limit
+_LOGIN_LOCKOUT_SECONDS = 5 * 60    # how long an account stays locked once the limit is hit
+
+_login_attempts_lock = threading.Lock()
+_login_attempts = {}  # email -> {"count": int, "window_start": float, "locked_until": float}
+
+
+def _login_lockout_seconds_left(email: str):
+    now = time.time()
+    with _login_attempts_lock:
+        entry = _login_attempts.get(email)
+        if not entry:
+            return 0
+        if entry["locked_until"] and entry["locked_until"] > now:
+            return int(entry["locked_until"] - now)
+        if entry["locked_until"] and entry["locked_until"] <= now:
+            _login_attempts.pop(email, None)
+        return 0
+
+
+def _login_record_failure(email: str):
+    now = time.time()
+    with _login_attempts_lock:
+        entry = _login_attempts.get(email)
+        if not entry or now - entry["window_start"] > _LOGIN_WINDOW_SECONDS:
+            entry = {"count": 0, "window_start": now, "locked_until": 0.0}
+        entry["count"] += 1
+        if entry["count"] >= _LOGIN_MAX_ATTEMPTS:
+            entry["locked_until"] = now + _LOGIN_LOCKOUT_SECONDS
+        _login_attempts[email] = entry
+
+
+def _login_record_success(email: str):
+    with _login_attempts_lock:
+        _login_attempts.pop(email, None)
+
+
+_rate_limit_lock = threading.Lock()
+_rate_limit_buckets = {}  # (bucket_name, client_key) -> [timestamps]
+
+
+def _client_key(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _rate_limit(request: Request, bucket_name: str, max_calls: int, window_seconds: int):
+    key = (bucket_name, _client_key(request))
+    now = time.time()
+    cutoff = now - window_seconds
+    with _rate_limit_lock:
+        bucket = _rate_limit_buckets.get(key, [])
+        bucket = [t for t in bucket if t > cutoff]
+        if len(bucket) >= max_calls:
+            _rate_limit_buckets[key] = bucket
+            raise HTTPException(429, "Too many requests. Please slow down and try again shortly.")
+        bucket.append(now)
+        _rate_limit_buckets[key] = bucket
 
 
 def _auth_payload_from_header(authorization: Optional[str]):
@@ -953,6 +1047,7 @@ def _ensure_payment_table():
         )
         execute("ALTER TABLE parking_payments ADD COLUMN IF NOT EXISTS user_id INTEGER")
         execute("ALTER TABLE parking_payments ADD COLUMN IF NOT EXISTS vehicle_type TEXT NOT NULL DEFAULT 'car'")
+        execute("ALTER TABLE parking_payments ADD COLUMN IF NOT EXISTS discount_id_number TEXT")
     except Exception as e:
         print(f"[DB] payment table setup warning: {e}")
 
@@ -973,6 +1068,8 @@ def _ensure_gcash_checkout_table():
             )
         """)
         execute("ALTER TABLE gcash_checkouts ADD COLUMN IF NOT EXISTS vehicle_type TEXT NOT NULL DEFAULT 'car'")
+        execute("ALTER TABLE gcash_checkouts ADD COLUMN IF NOT EXISTS discount_id_number TEXT")
+        execute("ALTER TABLE gcash_checkouts ADD COLUMN IF NOT EXISTS error_message TEXT")
     except Exception as e:
         print(f"[DB] gcash checkout table setup warning: {e}")
 
@@ -1005,7 +1102,22 @@ async def lifespan(app: FastAPI):
 # ══════════════════════════════════════════════════════════════════
 app = FastAPI(title="OccupAI API", version="2.2.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(TEMPLATE_DIR)), name="static")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+_configured_origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+if _configured_origins:
+    _cors_origins = _configured_origins
+elif DEPLOY_MODE == "local":
+    # Local dev: keep it permissive so testing from any localhost port just works.
+    _cors_origins = ["*"]
+else:
+    print(
+        "[SECURITY WARNING] ALLOWED_ORIGINS is not set outside local dev — falling back to "
+        "the app's own BACKEND_URL only. Set ALLOWED_ORIGINS (comma-separated) in your "
+        "environment to control this explicitly."
+    )
+    _cors_origins = [os.getenv("BACKEND_URL", "").strip()] if os.getenv("BACKEND_URL") else ["*"]
+
+app.add_middleware(CORSMiddleware, allow_origins=_cors_origins, allow_methods=["*"], allow_headers=["*"])
 
 @app.exception_handler(Exception)
 async def _err(request: Request, exc: Exception):
@@ -1021,6 +1133,7 @@ state = {
     "occupied": 0, "free": 0, "total": 0, "occupancy_pct": 0.0,
     "lot_full": False, "fps": 0.0, "timestamp": "",
     "yolo_count": 0, "yolo_boxes": [], "slots": [], "zones": {},
+    "car_count": 0, "motorcycle_count": 0,
 }
 history    = deque(maxlen=200)
 state_lock = threading.Lock()
@@ -1244,6 +1357,8 @@ def yolo_update(data: YoloUpdate, x_cam_token: str = Header(...)):
             "fps":           data.fps,
             "timestamp":     ts,
             "yolo_count":    data.yolo_count,
+            "car_count":     data.car_count,
+            "motorcycle_count": data.motorcycle_count,
             "yolo_boxes":    data.yolo_boxes,
             "slots":         data.slots,
             "zones":         data.zones,
@@ -1629,176 +1744,27 @@ def _recent_month_keys(now, count=6):
     return list(reversed(keys))
 
 
-def _empty_revenue_dashboard(error=None):
-    now = datetime.now(PH_TZ)
-    active_capacity = max(1, int(_active_slot_capacity(LOT_CAPACITY)))
-    with state_lock:
-        live_total = int(state.get("total") or 0)
-        live_occupied = int(state.get("occupied") or 0)
-    max_total = max(active_capacity, live_total, int(LOT_CAPACITY))
-
-    daily = []
-    for i in range(6, -1, -1):
-        day = now.date() - timedelta(days=i)
-        daily.append({
-            "date": day.isoformat(),
-            "label": day.strftime("%a"),
-            "revenue_php": 0.0,
-            "vehicle_count": 0.0,
-            "entry_count": 0,
-        })
-
-    monthly = []
-    for key in _recent_month_keys(now, 6):
-        month_dt = datetime.strptime(key + "-01", "%Y-%m-%d")
-        monthly.append({
-            "month": key,
-            "label": month_dt.strftime("%b"),
-            "revenue_php": 0.0,
-            "vehicle_count": 0.0,
-            "entry_count": 0,
-        })
-
-    out = {
-        "generated_at_ph": now.strftime("%Y-%m-%d %H:%M:%S"),
-        "active_slot_capacity": active_capacity,
-        "max_total_count": max_total,
-        "max_occupied_count": live_occupied,
-        "today_revenue_php": 0.0,
-        "month_revenue_php": 0.0,
-        "today_vehicle_count": 0.0,
-        "month_vehicle_count": 0.0,
-        "today_entry_count": 0,
-        "month_entry_count": 0,
-        "log_count": 0,
-        "daily_revenue": daily,
-        "monthly_revenue": monthly,
-        "revenue_basis": "Logged parking snapshots multiplied by the active regular parking rate.",
-    }
-    if error:
-        out["error"] = str(error)
-    return out
-
-
-def _parking_revenue_dashboard():
-    now = datetime.now(PH_TZ)
-    active_capacity = max(1, int(_active_slot_capacity(LOT_CAPACITY)))
-    with state_lock:
-        live_total = int(state.get("total") or 0)
-        live_occupied = int(state.get("occupied") or 0)
-
-    sample_limit = max(100, min(int(os.getenv("REVENUE_DASHBOARD_LOG_LIMIT", "2500")), 20000))
-    rows = query(
-        """
-        SELECT occupied, total, logged_at
-        FROM parking_logs
-        ORDER BY logged_at DESC
-        LIMIT %s
-        """,
-        (sample_limit,),
-    )
-    max_total = max(active_capacity, live_total, int(LOT_CAPACITY))
-    max_occupied = live_occupied
-    log_count = len(rows)
-
-    daily_keys = [(now.date() - timedelta(days=i)).isoformat() for i in range(6, -1, -1)]
-    daily = {
-        key: {
-            "date": key,
-            "label": datetime.strptime(key, "%Y-%m-%d").strftime("%a"),
-            "revenue_php": 0.0,
-            "vehicle_count": 0.0,
-            "entry_count": 0,
-        }
-        for key in daily_keys
-    }
-    monthly_keys = _recent_month_keys(now, 6)
-    monthly = {
-        key: {
-            "month": key,
-            "label": datetime.strptime(key + "-01", "%Y-%m-%d").strftime("%b"),
-            "revenue_php": 0.0,
-            "vehicle_count": 0.0,
-            "entry_count": 0,
-        }
-        for key in monthly_keys
-    }
-
-    today_key = now.date().isoformat()
-    current_month_key = _month_key(now)
-    today_revenue = 0.0
-    month_revenue = 0.0
-    today_vehicles = 0.0
-    month_vehicles = 0.0
-    today_entries = 0
-    month_entries = 0
-
-    for row in reversed(rows):
-        when = _coerce_datetime(row.get("logged_at"))
-        vehicles = max(0.0, float(row.get("occupied") or 0.0))
-        capacity = max(1, int(row.get("total") or active_capacity))
-        max_total = max(max_total, capacity)
-        max_occupied = max(max_occupied, int(vehicles))
-        price = float(_dynamic_price_formula(vehicles, capacity, when)["recommended_price_php"])
-        revenue = round(vehicles * price, 2)
-        day_key = when.date().isoformat()
-        month_key = _month_key(when)
-        if day_key in daily:
-            daily[day_key]["revenue_php"] += revenue
-            daily[day_key]["vehicle_count"] += vehicles
-            daily[day_key]["entry_count"] += 1
-
-        if day_key == today_key:
-            today_revenue += revenue
-            today_vehicles += vehicles
-            today_entries += 1
-
-        if month_key in monthly:
-            monthly[month_key]["revenue_php"] += revenue
-            monthly[month_key]["vehicle_count"] += vehicles
-            monthly[month_key]["entry_count"] += 1
-        if month_key == current_month_key:
-            month_revenue += revenue
-            month_vehicles += vehicles
-            month_entries += 1
-
-    daily_list = []
-    for item in daily.values():
-        item["revenue_php"] = round(float(item["revenue_php"]), 2)
-        item["vehicle_count"] = round(float(item["vehicle_count"]), 2)
-        daily_list.append(item)
-
-    monthly_list = []
-    for item in monthly.values():
-        item["revenue_php"] = round(float(item["revenue_php"]), 2)
-        item["vehicle_count"] = round(float(item["vehicle_count"]), 2)
-        monthly_list.append(item)
-
-    return {
-        "generated_at_ph": now.strftime("%Y-%m-%d %H:%M:%S"),
-        "active_slot_capacity": active_capacity,
-        "max_total_count": max_total,
-        "max_occupied_count": max_occupied,
-        "today_revenue_php": round(today_revenue, 2),
-        "month_revenue_php": round(month_revenue, 2),
-        "today_vehicle_count": round(today_vehicles, 2),
-        "month_vehicle_count": round(month_vehicles, 2),
-        "today_entry_count": today_entries,
-        "month_entry_count": month_entries,
-        "log_count": log_count,
-        "sample_limit": sample_limit,
-        "daily_revenue": daily_list,
-        "monthly_revenue": monthly_list,
-        "revenue_basis": f"Most recent {log_count} parking logs multiplied by the active regular parking rate.",
-    }
-
-
 _PAYMENT_METHODS = {"cash", "gcash", "card", "other"}
 
 
-def _discount_rate_for_type(discount_type):
+_DISCOUNT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 \-]{3,63}$")
+
+
+def _discount_rate_for_type(discount_type, id_number=None):
     kind = str(discount_type or "none").strip().lower()
     if kind in {"pwd", "senior"}:
+        settings = _discount_settings()
+        if not settings[f"{kind}_enabled"]:
+            raise HTTPException(400, f"{kind.upper()} discount is currently turned off by the admin.")
+        cleaned = str(id_number or "").strip()
+        if not cleaned:
+            raise HTTPException(400, f"{kind.upper()} ID number is required to apply this discount.")
+        if not _DISCOUNT_ID_RE.match(cleaned) or not any(c.isdigit() for c in cleaned):
+            raise HTTPException(
+                400,
+                f"{kind.upper()} ID number looks invalid — use at least 4 characters "
+                "(letters, numbers, spaces or dashes) and include at least one digit.",
+            )
         return kind, max(0.0, min(1.0, float(PWD_SENIOR_DISCOUNT_RATE)))
     if kind in {"none", "", "regular"}:
         return "none", 0.0
@@ -1971,7 +1937,8 @@ def _payment_revenue_dashboard():
     """)
     recent_rows = query("""
         SELECT payment_id, vehicle_type, regular_price_php, discount_type,
-               discount_amount_php, final_amount_php, payment_method, paid_at
+               discount_amount_php, final_amount_php, payment_method, paid_at,
+               discount_id_number
         FROM parking_payments
         ORDER BY paid_at DESC
         LIMIT 10
@@ -2023,6 +1990,7 @@ def _payment_revenue_dashboard():
             "discount_amount_php": _row_float(row, "discount_amount_php"),
             "final_amount_php": _row_float(row, "final_amount_php"),
             "payment_method": row.get("payment_method") or "cash",
+            "discount_id_number": row.get("discount_id_number"),
             "paid_at_ph": paid_at.strftime("%Y-%m-%d %H:%M:%S"),
         })
 
@@ -2095,7 +2063,8 @@ def _record_parking_payment(payload):
         if payload.regular_price_php is not None
         else _current_payment_regular_price(vehicle_type)
     )
-    discount_type, discount_rate = _discount_rate_for_type(payload.discount_type)
+    discount_id_number = (getattr(payload, "discount_id_number", None) or "").strip()[:64] or None
+    discount_type, discount_rate = _discount_rate_for_type(payload.discount_type, discount_id_number)
     discount_amount = round(regular_price * discount_rate, 2)
     final_amount = round(max(0.0, regular_price - discount_amount), 2)
     payment_method = (payload.payment_method or "cash").strip().lower()
@@ -2111,17 +2080,18 @@ def _record_parking_payment(payload):
             """
             INSERT INTO parking_payments (
                 vehicle_type, regular_price_php, discount_type, discount_rate,
-                discount_amount_php, final_amount_php, payment_method, notes, paid_at, user_id
+                discount_amount_php, final_amount_php, payment_method, notes, paid_at, user_id,
+                discount_id_number
             )
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             RETURNING payment_id, vehicle_type, regular_price_php, discount_type,
                       discount_rate, discount_amount_php, final_amount_php,
-                      payment_method, notes, paid_at
+                      payment_method, notes, paid_at, discount_id_number
             """,
             (
                 vehicle_type, regular_price, discount_type, discount_rate,
                 discount_amount, final_amount, payment_method, notes, paid_at,
-                payload.user_id,
+                payload.user_id, discount_id_number,
             ),
         )
         row = cur.fetchone()
@@ -2138,6 +2108,7 @@ def _record_parking_payment(payload):
             "final_amount_php": _row_float(row, "final_amount_php"),
             "payment_method": row["payment_method"],
             "notes": row["notes"],
+            "discount_id_number": row["discount_id_number"],
             "paid_at_ph": paid_at_ph,
         }
     except Exception as e:
@@ -2411,10 +2382,48 @@ def api_revenue_dashboard():
         return _empty_payment_dashboard(e)
 
 
+@app.get("/api/payments/recent")
+def api_payments_recent(limit: int = 10, offset: int = 0, _admin=Depends(require_admin)):
+    safe_limit = max(1, min(int(limit), 100))
+    safe_offset = max(0, int(offset))
+
+    total_rows = query("SELECT COUNT(*) AS total FROM parking_payments")
+    total = _row_int(total_rows[0], "total") if total_rows else 0
+
+    rows = query(
+        """
+        SELECT payment_id, vehicle_type, regular_price_php, discount_type,
+               discount_amount_php, final_amount_php, payment_method, paid_at,
+               discount_id_number
+        FROM parking_payments
+        ORDER BY paid_at DESC
+        LIMIT %s OFFSET %s
+        """,
+        (safe_limit, safe_offset),
+    )
+    items = []
+    for row in rows:
+        paid_at = _coerce_datetime(row.get("paid_at"))
+        items.append({
+            "payment_id": row.get("payment_id"),
+            "vehicle_type": row.get("vehicle_type") or "car",
+            "regular_price_php": _row_float(row, "regular_price_php"),
+            "discount_type": row.get("discount_type") or "none",
+            "discount_amount_php": _row_float(row, "discount_amount_php"),
+            "final_amount_php": _row_float(row, "final_amount_php"),
+            "payment_method": row.get("payment_method") or "cash",
+            "discount_id_number": row.get("discount_id_number"),
+            "paid_at_ph": paid_at.strftime("%Y-%m-%d %H:%M:%S"),
+        })
+
+    return {"items": items, "total": total, "limit": safe_limit, "offset": safe_offset}
+
+
 class PaymentRecordPayload(BaseModel):
     vehicle_type: Optional[str] = "car"
     regular_price_php: Optional[float] = None
     discount_type: Optional[str] = "none"
+    discount_id_number: Optional[str] = None
     payment_method: Optional[str] = "cash"
     notes: Optional[str] = None
     paid_at: Optional[str] = None
@@ -2422,7 +2431,8 @@ class PaymentRecordPayload(BaseModel):
 
 
 @app.post("/api/payments")
-def api_record_payment(payload: PaymentRecordPayload, _admin=Depends(require_admin)):
+def api_record_payment(payload: PaymentRecordPayload, request: Request, _admin=Depends(require_admin)):
+    _rate_limit(request, "payments", max_calls=30, window_seconds=60)
     return _record_parking_payment(payload)
 
 
@@ -2492,6 +2502,7 @@ def api_driver_history(user_id: int, period: str = "all", limit: int = 50, _auth
 class GcashCheckoutPayload(BaseModel):
     vehicle_type: Optional[str] = "car"
     discount_type: Optional[str] = "none"
+    discount_id_number: Optional[str] = None
     description: Optional[str] = "OccupAI Parking Payment"
     user_id: Optional[int] = None
 
@@ -2507,12 +2518,14 @@ def _paymongo_headers():
 
 @app.post("/api/gcash/create-checkout")
 def gcash_create_checkout(payload: GcashCheckoutPayload, request: Request):
+    _rate_limit(request, "gcash-checkout", max_calls=10, window_seconds=60)
     if not PAYMONGO_SECRET_KEY:
         raise HTTPException(503, "PayMongo is not configured. Set PAYMONGO_SECRET_KEY in .env")
 
     vehicle_type = _normalize_vehicle_type(payload.vehicle_type, default="car")
     regular_price = _current_payment_regular_price(vehicle_type)
-    discount_type, discount_rate = _discount_rate_for_type(payload.discount_type)
+    discount_id_number = (payload.discount_id_number or "").strip()[:64] or None
+    discount_type, discount_rate = _discount_rate_for_type(payload.discount_type, discount_id_number)
     discount_amount = round(regular_price * discount_rate, 2)
     final_amount = round(max(1.0, regular_price - discount_amount), 2)
     amount_centavos = round(final_amount * 100)
@@ -2525,10 +2538,10 @@ def gcash_create_checkout(payload: GcashCheckoutPayload, request: Request):
     ref = secrets.token_urlsafe(24)
     execute(
         """
-        INSERT INTO gcash_checkouts (ref, user_id, vehicle_type, regular_price_php, discount_type, final_amount_php)
-        VALUES (%s,%s,%s,%s,%s,%s)
+        INSERT INTO gcash_checkouts (ref, user_id, vehicle_type, regular_price_php, discount_type, final_amount_php, discount_id_number)
+        VALUES (%s,%s,%s,%s,%s,%s,%s)
         """,
-        (ref, payload.user_id, vehicle_type, regular_price, discount_type, final_amount),
+        (ref, payload.user_id, vehicle_type, regular_price, discount_type, final_amount, discount_id_number),
     )
 
     body = json.dumps({
@@ -2719,6 +2732,7 @@ def gcash_success(ref: str, attempt: int = 0):
             vehicle_type=checkout["vehicle_type"] or "car",
             regular_price_php=float(checkout["regular_price_php"]),
             discount_type=checkout["discount_type"],
+            discount_id_number=checkout["discount_id_number"],
             payment_method="gcash",
             notes="Paid via GCash (PayMongo)",
             user_id=checkout["user_id"],
@@ -2727,6 +2741,12 @@ def gcash_success(ref: str, attempt: int = 0):
         execute("UPDATE gcash_checkouts SET status='paid' WHERE ref=%s", (ref,))
     except Exception as e:
         print(f"[GCash] Could not auto-record payment: {e}")
+        # PayMongo already charged the customer at this point — flag it so an admin
+        # can find and manually reconcile it, instead of the money silently vanishing.
+        execute(
+            "UPDATE gcash_checkouts SET status='error', error_message=%s WHERE ref=%s",
+            (str(e)[:500], ref),
+        )
         return _gcash_result_page(False, "Payment was confirmed by PayMongo, but we couldn't save the record. Please contact support.")
 
     return _gcash_result_page(
@@ -2737,6 +2757,33 @@ def gcash_success(ref: str, attempt: int = 0):
 @app.get("/api/gcash/status")
 def gcash_status():
     return {"enabled": bool(PAYMONGO_SECRET_KEY)}
+
+
+@app.get("/api/gcash/issues")
+def gcash_issues(_admin=Depends(require_admin)):
+    """
+    Checkouts PayMongo confirmed as paid but that OccupAI failed to save as a
+    parking_payments row — the customer was charged and nothing is recorded.
+    Needs manual reconciliation.
+    """
+    rows = query("""
+        SELECT ref, user_id, vehicle_type, final_amount_php, discount_type,
+               error_message, created_at
+        FROM gcash_checkouts
+        WHERE status = 'error'
+        ORDER BY created_at DESC
+        LIMIT 50
+    """)
+    items = [{
+        "ref": r.get("ref"),
+        "user_id": r.get("user_id"),
+        "vehicle_type": r.get("vehicle_type") or "car",
+        "final_amount_php": _row_float(r, "final_amount_php"),
+        "discount_type": r.get("discount_type") or "none",
+        "error_message": r.get("error_message"),
+        "created_at_ph": _coerce_datetime(r.get("created_at")).strftime("%Y-%m-%d %H:%M:%S"),
+    } for r in rows]
+    return {"items": items, "count": len(items)}
 
 
 @app.get("/api/predictions/hourly-by-day")
@@ -2904,6 +2951,10 @@ class LayoutModePayload(BaseModel):
     mode: Optional[str] = None
     enabled: Optional[bool] = None
 
+class DiscountSettingsPayload(BaseModel):
+    pwd_enabled: Optional[bool] = None
+    senior_enabled: Optional[bool] = None
+
 class PricingSettingsPayload(BaseModel):
     price_php: Optional[float] = None
     price_php_car: Optional[float] = None
@@ -3001,6 +3052,14 @@ def _pricing_settings():
         "pwd_senior_discount_rate": PWD_SENIOR_DISCOUNT_RATE,
         "pwd_senior_discount_pct": round(PWD_SENIOR_DISCOUNT_RATE * 100, 1),
         "currency": "PHP",
+    }
+
+def _discount_settings():
+    return {
+        "pwd_enabled": _env_bool(_read_env_value("DISCOUNT_PWD_ENABLED", "true")),
+        "senior_enabled": _env_bool(_read_env_value("DISCOUNT_SENIOR_ENABLED", "true")),
+        "pwd_senior_discount_rate": PWD_SENIOR_DISCOUNT_RATE,
+        "pwd_senior_discount_pct": round(PWD_SENIOR_DISCOUNT_RATE * 100, 1),
     }
 
 def _manual_price_override(vehicle_type="car"):
@@ -3191,6 +3250,28 @@ def set_pricing_settings(payload: PricingSettingsPayload, _admin=Depends(require
     })
     return result
 
+@app.get("/api/settings/discounts")
+def get_discount_settings():
+    return _discount_settings()
+
+@app.post("/api/settings/discounts")
+def set_discount_settings(payload: DiscountSettingsPayload, _admin=Depends(require_admin)):
+    current = _discount_settings()
+    pwd_enabled = current["pwd_enabled"] if payload.pwd_enabled is None else bool(payload.pwd_enabled)
+    senior_enabled = current["senior_enabled"] if payload.senior_enabled is None else bool(payload.senior_enabled)
+
+    _write_env_value("DISCOUNT_PWD_ENABLED", "true" if pwd_enabled else "false")
+    _write_env_value("DISCOUNT_SENIOR_ENABLED", "true" if senior_enabled else "false")
+    os.environ["DISCOUNT_PWD_ENABLED"] = "true" if pwd_enabled else "false"
+    os.environ["DISCOUNT_SENIOR_ENABLED"] = "true" if senior_enabled else "false"
+
+    result = _discount_settings()
+    result.update({
+        "ok": True,
+        "message": f"PWD discount {'on' if pwd_enabled else 'off'}, Senior discount {'on' if senior_enabled else 'off'}.",
+    })
+    return result
+
 def _validate_password_strength(password: str) -> None:
     pw = password or ""
     if len(pw) < 8:
@@ -3247,8 +3328,12 @@ def register(data: UserRegister):
 
 
 @app.post("/auth/login")
-def login(data: UserLogin):
+def login(data: UserLogin, request: Request):
+    _rate_limit(request, "login", max_calls=10, window_seconds=60)
     email = _clean_email(data.email)
+    wait = _login_lockout_seconds_left(email)
+    if wait > 0:
+        raise HTTPException(429, f"Too many failed attempts. Try again in {max(1, wait // 60 + 1)} minute(s).")
     try:
         if _is_reserved_admin_credentials(email, data.password):
             _ensure_default_admin()
@@ -3262,8 +3347,10 @@ def login(data: UserLogin):
         # to enumerate registered accounts. "Account disabled" is only revealed once the
         # caller has already proven they know the correct password.
         if not u or not bcrypt.checkpw(data.password.encode(), u["password_hash"].encode()):
+            _login_record_failure(email)
             raise HTTPException(401, "Invalid email or password")
         if not u["is_active"]: raise HTTPException(403, "Account disabled")
+        _login_record_success(email)
         role = _normalized_auth_role(u["role"], u["email"])
         if role != str(u["role"] or "").strip().lower():
             execute("UPDATE users SET role=%s WHERE user_id=%s", (role, u["user_id"]))
@@ -3281,7 +3368,9 @@ def login(data: UserLogin):
 
 
 @app.post("/auth/logout")
-def logout():
+def logout(authorization: str = Header(None)):
+    if authorization and authorization.lower().startswith("bearer "):
+        _revoke_token(authorization.split(" ", 1)[1].strip())
     return {"ok": True}
 
 

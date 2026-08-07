@@ -107,6 +107,12 @@ TOY_MAX_F = _ef("TOY_MAX_AREA_FRAC", 0.10)
 TOY_MIN_FILL_RATIO = _ef("TOY_MIN_FILL_RATIO", 0.22)
 TOY_MIN_W = _ei("TOY_MIN_W", 12)
 TOY_MIN_H = _ei("TOY_MIN_H", 12)
+# Blobs with contour area (as a fraction of frame area) below this are
+# classified "motorcycle", at/above it "car". Toy motorcycles need to be
+# visibly smaller than toy cars on camera for this to work — point the
+# camera at your actual toy set and check debug_zones.jpg / the live feed
+# to pick a value between TOY_MIN_AREA_FRAC and TOY_MAX_AREA_FRAC.
+TOY_MOTO_MAX_AREA_FRAC = _ef("TOY_MOTO_MAX_AREA_FRAC", 0.02)
 TOY_COLOR_RANGES = [
     (np.array([35,  100,  80]), np.array([85,  255, 255])),
     (np.array([90,  100,  80]), np.array([130, 255, 255])),
@@ -338,6 +344,8 @@ def assign_occupancy(zones, fg, boxes, use_bg=False):
     return zone_status, candidates
 
 def find_toy_boxes(frame):
+    """Returns (boxes, types) — two parallel lists. types[i] is "car" or
+    "motorcycle" for boxes[i], classified purely by blob size."""
     h,w=frame.shape[:2]; fa=h*w
     hsv=cv2.cvtColor(frame,cv2.COLOR_BGR2HSV)
     mask=np.zeros((h,w),dtype=np.uint8)
@@ -347,7 +355,7 @@ def find_toy_boxes(frame):
     mask=cv2.morphologyEx(mask,cv2.MORPH_OPEN, k,iterations=1)
     mask=cv2.morphologyEx(mask,cv2.MORPH_CLOSE,k,iterations=2)
     cnts,_=cv2.findContours(mask,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
-    boxes=[]
+    boxes=[]; types=[]
     for cnt in cnts:
         ca=cv2.contourArea(cnt)
         if not(fa*TOY_MIN_F<ca<fa*TOY_MAX_F): continue
@@ -359,15 +367,20 @@ def find_toy_boxes(frame):
             continue
         if 0.20<bw/max(bh,1)<5.0:
             boxes.append([x,y,x+bw,y+bh])
-    return boxes
+            types.append("motorcycle" if ca < fa*TOY_MOTO_MAX_AREA_FRAC else "car")
+    return boxes, types
 
 def yolo_boxes(model, frame):
+    """Returns (boxes, types) — two parallel lists, types[i] from the COCO
+    class id ("motorcycle" for class 3, "car" for everything else kept by
+    YOLO_VEHICLE_CLASS_IDS — i.e. bus/truck are bucketed with "car")."""
     res=model(frame,imgsz=IMGSZ,verbose=False)[0]
-    out=[]
+    out=[]; types=[]
     if res.boxes is not None:
         for r in res.boxes:
             if float(r.conf[0]) <= CONF_THRESH:
                 continue
+            cls_id = None
             try:
                 cls_id = int(r.cls[0])
                 if YOLO_VEHICLE_CLASS_IDS and cls_id not in YOLO_VEHICLE_CLASS_IDS:
@@ -376,7 +389,8 @@ def yolo_boxes(model, frame):
                 pass
             x1,y1,x2,y2=map(int,r.xyxy[0])
             out.append([x1,y1,x2,y2])
-    return out
+            types.append("motorcycle" if cls_id == 3 else "car")
+    return out, types
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -535,11 +549,13 @@ def detector_worker(model, in_q, result, stop_event):
         except queue.Empty:
             continue
         try:
-            yolo_b = [] if TOY_ONLY_DETECTION else yolo_boxes(model, frame)
-            toy_b = find_toy_boxes(frame)
+            yolo_b, yolo_t = ([], []) if TOY_ONLY_DETECTION else yolo_boxes(model, frame)
+            toy_b, toy_t = find_toy_boxes(frame)
             with result["lock"]:
                 result["yolo"] = yolo_b
+                result["yolo_types"] = yolo_t
                 result["toy"] = toy_b
+                result["toy_types"] = toy_t
                 result["ts"] = time.time()
         except Exception as e:
             print(f"[detector-worker] {e}")
@@ -588,7 +604,7 @@ def encode_frame(frame):
     _,buf=cv2.imencode('.jpg',frame,[cv2.IMWRITE_JPEG_QUALITY,JPEG_Q])
     return base64.b64encode(buf.tobytes()).decode()
 
-def push_to_backend(occupied,free,total,pct,fps,zone_status,snapshot_frame):
+def push_to_backend(occupied,free,total,pct,fps,zone_status,snapshot_frame,car_count=0,moto_count=0):
     global _pushing
     with _push_lock:
         if _pushing: return
@@ -600,6 +616,7 @@ def push_to_backend(occupied,free,total,pct,fps,zone_status,snapshot_frame):
             "occupied":occupied,"free":free,"total":total,
             "occupancy_pct":pct,"lot_full":total>0 and free==0,
             "fps":fps,"yolo_count":occupied,
+            "car_count":car_count,"motorcycle_count":moto_count,
             "timestamp":time.strftime("%Y-%m-%d %H:%M:%S"),
             "snapshot_b64":fb64,"yolo_boxes":[],"slots":[],"zones":zone_status,
             "demand_level":adj.get("demand","NORMAL"),
@@ -691,7 +708,7 @@ def detection_loop():
 
         det_q = queue.Queue(maxsize=1)
         det_stop = threading.Event()
-        det_result = {"lock": threading.Lock(), "yolo": [], "toy": [], "ts": 0.0}
+        det_result = {"lock": threading.Lock(), "yolo": [], "yolo_types": [], "toy": [], "toy_types": [], "ts": 0.0}
         last_yolo_submit = 0.0
         if YOLO_ASYNC:
             threading.Thread(target=detector_worker,
@@ -702,7 +719,7 @@ def detection_loop():
         cap.release()
         raise
 
-    frame_idx=0; yolo_b=[]; toy_b=[]
+    frame_idx=0; yolo_b=[]; toy_b=[]; yolo_t=[]; toy_t=[]
     fps_t=time.time(); fps_n=0; fps_val=0.0
     prev_gray=None; rescanning=False; rewarming=False
     last_check_t=time.time(); last_n_slots=len(slot_state.active_slots)
@@ -789,10 +806,12 @@ def detection_loop():
                     except queue.Full: pass
                 with det_result["lock"]:
                     yolo_b = list(det_result["yolo"])
+                    yolo_t = list(det_result["yolo_types"])
                     toy_b = list(det_result["toy"])
+                    toy_t = list(det_result["toy_types"])
             elif frame_idx%YOLO_SKIP==0 and cam_ok and not rescanning and not rewarming:
-                yolo_b=[] if TOY_ONLY_DETECTION else yolo_boxes(model,frame)
-                toy_b=find_toy_boxes(frame)
+                yolo_b, yolo_t = ([], []) if TOY_ONLY_DETECTION else yolo_boxes(model,frame)
+                toy_b, toy_t = find_toy_boxes(frame)
 
             # ── Active slots (AI may have updated) ────────────────────────────────
             active=slot_state.active_slots
@@ -805,12 +824,17 @@ def detection_loop():
             # ── Occupancy ─────────────────────────────────────────────────────────
             if cam_ok and not rescanning and not rewarming and active:
                 all_b = toy_b if TOY_ONLY_DETECTION else (yolo_b + toy_b)
+                all_t = toy_t if TOY_ONLY_DETECTION else (yolo_t + toy_t)
                 zone_status, assigned_boxes = assign_occupancy(
                     active, fg, all_b, use_bg=USE_BG_OCCUPANCY
                 )
             else:
                 zone_status={name:False for name in active}
                 assigned_boxes=[]
+                all_t=[]
+
+            car_count = all_t.count("car")
+            moto_count = all_t.count("motorcycle")
 
             occupied=sum(1 for v in zone_status.values() if v)
             free=n_slots-occupied
@@ -845,7 +869,7 @@ def detection_loop():
                 last_sent_total=n_slots
                 last_sent_zones=dict(zone_status)
                 threading.Thread(target=push_to_backend,
-                    args=(occupied,free,n_slots,pct,round(fps_val,1),zone_status,ann.copy()),
+                    args=(occupied,free,n_slots,pct,round(fps_val,1),zone_status,ann.copy(),car_count,moto_count),
                     daemon=True).start()
 
             consecutive_errors=0

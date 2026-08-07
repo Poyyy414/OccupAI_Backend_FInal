@@ -719,11 +719,15 @@
               <label>Paying for</label>
               <div class="gcash-vehicle-label" id="gcashVehicleLabel">Car</div>
               <label>Discount</label>
-              <select class="gcash-select" id="gcashDiscount">
+              <select class="gcash-select" id="gcashDiscount" onchange="onGcashDiscountChange()">
                 <option value="none">None</option>
                 <option value="pwd">PWD (20% off)</option>
                 <option value="senior">Senior (20% off)</option>
               </select>
+              <div id="gcashDiscountIdWrap" style="display:none">
+                <label>PWD / Senior ID Number</label>
+                <input class="gcash-select" id="gcashDiscountId" type="text" placeholder="Required to apply this discount" maxlength="64" />
+              </div>
               <button class="gcash-btn" id="gcashBtn" onclick="payWithGcash()">
                 Pay with GCash
               </button>
@@ -774,7 +778,39 @@
       hydrateUser(user);
       renderSpaceMap(0, null, null);
       fetchSummary();
+      fetchDiscountAvailability();
       setInterval(fetchSummary, 3000);
+      setInterval(fetchDiscountAvailability, 30000);
+    }
+
+    function onGcashDiscountChange() {
+      const wrap = document.getElementById('gcashDiscountIdWrap');
+      const needsId = document.getElementById('gcashDiscount')?.value !== 'none';
+      if (wrap) wrap.style.display = needsId ? 'block' : 'none';
+      if (!needsId) {
+        const idInput = document.getElementById('gcashDiscountId');
+        if (idInput) idInput.value = '';
+      }
+    }
+
+    async function fetchDiscountAvailability() {
+      try {
+        const r = await fetch('/api/settings/discounts');
+        if (!r.ok) throw new Error(r.status);
+        const d = await r.json();
+        const select = document.getElementById('gcashDiscount');
+        if (!select) return;
+        const pwdOption = select.querySelector('option[value="pwd"]');
+        const seniorOption = select.querySelector('option[value="senior"]');
+        if (pwdOption) pwdOption.disabled = !d.pwd_enabled;
+        if (seniorOption) seniorOption.disabled = !d.senior_enabled;
+        if ((select.value === 'pwd' && !d.pwd_enabled) || (select.value === 'senior' && !d.senior_enabled)) {
+          select.value = 'none';
+        }
+        onGcashDiscountChange();
+      } catch (e) {
+        console.warn('Could not load discount availability:', e);
+      }
     }
 
     function getUser() {
@@ -915,9 +951,13 @@
     }
 
     function signOut() {
+      const token = localStorage.getItem('occupai_token');
       localStorage.removeItem('occupai_user');
       localStorage.removeItem('occupai_token');
-      fetch('/auth/logout', { method: 'POST' }).catch(() => {});
+      fetch('/auth/logout', {
+        method: 'POST',
+        headers: token ? { 'Authorization': 'Bearer ' + token } : {},
+      }).catch(() => {});
       window.location.href = '/login';
     }
 
@@ -942,6 +982,13 @@
         return;
       }
 
+      const discountType = document.getElementById('gcashDiscount')?.value || 'none';
+      const discountId = document.getElementById('gcashDiscountId')?.value.trim() || '';
+      if (discountType !== 'none' && !discountId) {
+        status.textContent = `Enter your ${discountType.toUpperCase()} ID number to apply this discount.`;
+        return;
+      }
+
       btn.disabled = true;
       btn.textContent = 'Redirecting to GCash...';
       status.textContent = '';
@@ -952,7 +999,8 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             vehicle_type: selectedVehicleType,
-            discount_type: document.getElementById('gcashDiscount')?.value || 'none',
+            discount_type: discountType,
+            discount_id_number: discountId || null,
             description: 'OccupAI Parking (' + (selectedVehicleType === 'motorcycle' ? 'Motorcycle' : 'Car') + ') - ' + (document.getElementById('driverName')?.textContent || 'Driver'),
             user_id: getUser()?.user_id ?? null,
           })

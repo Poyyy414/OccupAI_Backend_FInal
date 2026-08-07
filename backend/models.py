@@ -20,6 +20,8 @@ class YoloUpdate(BaseModel):
     lot_full:      bool     = False
     fps:           float    = Field(default=0.0, ge=0.0, le=240.0)
     yolo_count:    int      = Field(default=0, ge=0)
+    car_count:        int  = Field(default=0, ge=0)
+    motorcycle_count: int  = Field(default=0, ge=0)
     timestamp:     str      = ""
     snapshot_b64:  str      = ""
     yolo_boxes:    list     = []

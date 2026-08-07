@@ -164,7 +164,6 @@
       height: 40px;
       border-radius: var(--radius);
       font-size: 14px;
-      box-shadow: 0 10px 25px rgba(39, 212, 151, .23);
     }
 
     .logo-text {
@@ -407,72 +406,39 @@
       margin-bottom: 16px;
     }
 
-    .stat-card, .panel-card, .zone-panel, .insight-card, .insight-summary-card {
-      border: 1px solid rgba(50, 230, 173, .12);
+    /* Type scale — every stat number on the page should use one of these
+       instead of an inline font-size, so sizing stays consistent and is
+       changeable in one place. */
+    .stat-value.sz-lg { font-size: 32px; }
+    .stat-value.sz-md { font-size: 24px; }
+    .stat-value.sz-sm { font-size: 20px; }
+
+    .panel-card, .zone-panel, .insight-card, .insight-summary-card {
+      border: 1px solid var(--border-soft);
       border-radius: var(--radius);
-      background:
-        linear-gradient(180deg, rgba(255, 255, 255, .06), rgba(255, 255, 255, .018)),
-        var(--glass);
-      box-shadow: 0 16px 44px rgba(0, 0, 0, .20);
+      background: var(--glass);
+      box-shadow: 0 12px 32px rgba(0, 0, 0, .16);
       backdrop-filter: blur(14px);
     }
 
     .stat-card {
       position: relative;
       min-height: 150px;
-      overflow: hidden;
       padding: 18px;
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text);
     }
 
-    .stat-card::before {
-      content: "";
-      position: absolute;
-      inset: -40% -40% auto auto;
-      width: 140px;
-      height: 140px;
-      border-radius: 50%;
-      background: currentColor;
-      opacity: .10;
-      filter: blur(2px);
-    }
-
-    .stat-card::after {
-      content: "";
-      position: absolute;
-      inset: auto 16px 0;
-      height: 3px;
-      border-radius: 3px 3px 0 0;
-      background: currentColor;
-      opacity: .9;
-    }
-
+    /* Color is reserved for cards that actually signal a status — most
+       stat cards are plain metrics and stay neutral (no modifier class). */
     .stat-card.green { color: var(--green); }
-    .stat-card.red { color: var(--red); }
-    .stat-card.blue { color: var(--blue); }
+    .stat-card.red   { color: var(--red); }
+    .stat-card.blue  { color: var(--blue); }
     .stat-card.orange { color: var(--orange); }
-
-    .stat-card.green {
-      background:
-        linear-gradient(145deg, rgba(50, 230, 173, .14), rgba(16, 27, 23, .74) 55%),
-        var(--glass);
-    }
-
-    .stat-card.red {
-      background:
-        linear-gradient(145deg, rgba(255, 92, 122, .12), rgba(16, 27, 23, .74) 55%),
-        var(--glass);
-    }
-
-    .stat-card.blue {
-      background:
-        linear-gradient(145deg, rgba(97, 173, 255, .13), rgba(16, 27, 23, .74) 55%),
-        var(--glass);
-    }
-
-    .stat-card.orange {
-      background:
-        linear-gradient(145deg, rgba(255, 173, 102, .13), rgba(16, 27, 23, .74) 55%),
-        var(--glass);
+    .stat-card.green, .stat-card.red, .stat-card.blue, .stat-card.orange {
+      border-color: color-mix(in srgb, currentColor 35%, var(--border-soft));
     }
 
     .stat-top {
@@ -485,12 +451,16 @@
     .stat-icon {
       display: grid;
       place-items: center;
-      width: 34px;
-      height: 34px;
-      border: 1px solid currentColor;
+      width: 32px;
+      height: 32px;
+      border: 1px solid var(--border-soft);
       border-radius: var(--radius);
-      background: color-mix(in srgb, currentColor 15%, transparent);
-      box-shadow: inset 0 0 16px color-mix(in srgb, currentColor 10%, transparent);
+      color: var(--muted);
+    }
+    .stat-card.green .stat-icon, .stat-card.red .stat-icon,
+    .stat-card.blue .stat-icon, .stat-card.orange .stat-icon {
+      border-color: currentColor;
+      color: currentColor;
     }
 
     .stat-label {
@@ -503,12 +473,15 @@
 
     .stat-value {
       margin-top: 15px;
-      color: currentColor;
+      color: var(--text);
       font-family: "Space Mono", monospace;
-      font-size: 38px;
+      font-size: 32px;
       font-weight: 700;
       line-height: .95;
-      text-shadow: 0 0 18px color-mix(in srgb, currentColor 30%, transparent);
+    }
+    .stat-card.green .stat-value, .stat-card.red .stat-value,
+    .stat-card.blue .stat-value, .stat-card.orange .stat-value {
+      color: currentColor;
     }
 
     .stat-sub { margin-top: 9px; color: var(--muted); font-size: 12px; }
@@ -1260,7 +1233,7 @@
 
     .metric-row {
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
       gap: 10px;
     }
 
@@ -1552,6 +1525,31 @@
     .lot-cell.occ { background: var(--red-soft); border-color: rgba(255, 92, 122, .38); }
     .lot-legend { display: flex; align-items: center; gap: 8px; }
 
+    .gcash-alert-banner {
+      margin-bottom: 14px;
+      padding: 12px 14px;
+      border: 1px solid rgba(255, 92, 122, .4);
+      border-radius: var(--radius);
+      background: var(--red-soft);
+    }
+    .gcash-alert-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--red);
+      font-weight: 700;
+      font-size: 13px;
+    }
+    .gcash-alert-head button { margin-left: auto; }
+    .gcash-alert-item {
+      padding: 8px 0;
+      border-top: 1px solid rgba(255, 92, 122, .2);
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .gcash-alert-item strong { color: var(--text); }
+    .gcash-alert-item .mono { color: var(--text); }
+
     .heatmap-grid {
       display: grid;
       grid-template-columns: 46px repeat(24, minmax(22px, 1fr));
@@ -1728,17 +1726,26 @@
   </header>
 
   <section class="content active" id="content-overview">
+    <div class="gcash-alert-banner" id="gcashAlertBanner" style="display:none">
+      <div class="gcash-alert-head">
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-alert"></use></svg>
+        <span id="gcashAlertText">GCash payments need manual reconciliation</span>
+        <button class="ghost-btn" onclick="toggleGcashAlertDetails()" id="gcashAlertToggle">Details</button>
+      </div>
+      <div id="gcashAlertDetails" style="display:none"></div>
+    </div>
+
     <div class="summary-strip" aria-label="Operations summary">
       <div class="summary-item">
-        <span><svg class="icon icon-sm" aria-hidden="true"><use href="#i-camera"></use></svg>Camera state</span>
+        <span>Camera state</span>
         <strong id="overviewCameraState">Connecting</strong>
       </div>
       <div class="summary-item">
-        <span><svg class="icon icon-sm" aria-hidden="true"><use href="#i-gauge"></use></svg>Lot pressure</span>
+        <span>Lot pressure</span>
         <strong id="overviewPressure">Waiting</strong>
       </div>
       <div class="summary-item">
-        <span><svg class="icon icon-sm" aria-hidden="true"><use href="#i-clock"></use></svg>Last detector update</span>
+        <span>Last detector update</span>
         <strong id="overviewLastUpdate">--</strong>
       </div>
     </div>
@@ -1753,7 +1760,7 @@
         <div class="stat-sub" id="statFreeSub">Available right now</div>
         <div class="stat-meter" aria-hidden="true"><span id="freeMeter"></span></div>
       </article>
-      <article class="stat-card red">
+      <article class="stat-card">
         <div class="stat-top">
           <div class="stat-label">Occupied</div>
           <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-car"></use></svg></div>
@@ -1762,7 +1769,7 @@
         <div class="stat-sub" id="statOccSub">Cars detected</div>
         <div class="stat-meter" aria-hidden="true"><span id="occMeter"></span></div>
       </article>
-      <article class="stat-card blue">
+      <article class="stat-card">
         <div class="stat-top">
           <div class="stat-label">Capacity</div>
           <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-grid"></use></svg></div>
@@ -1771,7 +1778,7 @@
         <div class="stat-sub" id="statTotalSub">Tracked parking zones</div>
         <div class="stat-meter" aria-hidden="true"><span id="totalMeter"></span></div>
       </article>
-      <article class="stat-card blue">
+      <article class="stat-card">
         <div class="stat-top">
           <div class="stat-label">Max Count</div>
           <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-chart"></use></svg></div>
@@ -1780,7 +1787,7 @@
         <div class="stat-sub" id="statMaxCountSub">Maximum tracked capacity</div>
         <div class="stat-meter" aria-hidden="true"><span id="maxCountMeter"></span></div>
       </article>
-      <article class="stat-card orange">
+      <article class="stat-card">
         <div class="stat-top">
           <div class="stat-label">Occupancy Rate</div>
           <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-gauge"></use></svg></div>
@@ -1789,20 +1796,20 @@
         <div class="stat-sub" id="statRateSub">Share of total capacity</div>
         <div class="stat-meter" aria-hidden="true"><span id="rateMeter"></span></div>
       </article>
-      <article class="stat-card blue">
+      <article class="stat-card">
         <div class="stat-top">
           <div class="stat-label">Peak Vehicles Today</div>
           <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-car"></use></svg></div>
         </div>
-        <div class="stat-value" id="statPeakVehicles" style="font-size:30px">--</div>
+        <div class="stat-value sz-lg" id="statPeakVehicles">--</div>
         <div class="stat-sub" id="statPeakVehiclesSub">Highest count recorded today</div>
       </article>
-      <article class="stat-card orange">
+      <article class="stat-card">
         <div class="stat-top">
           <div class="stat-label">Today's Revenue</div>
           <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-dollar"></use></svg></div>
         </div>
-        <div class="stat-value" id="statTodayRevenue" style="font-size:24px">PHP --</div>
+        <div class="stat-value sz-md" id="statTodayRevenue">PHP --</div>
         <div class="stat-sub" id="statTodayRevenueSub">0 payments recorded</div>
       </article>
       <article class="stat-card green" id="statPricingCard">
@@ -1810,7 +1817,7 @@
           <div class="stat-label">Dynamic Pricing</div>
           <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-gauge"></use></svg></div>
         </div>
-        <div class="stat-value" id="statPricingStatus" style="font-size:26px">--</div>
+        <div class="stat-value sz-md" id="statPricingStatus">--</div>
         <div class="stat-sub" id="statPricingStatusSub">Waiting for pricing data</div>
       </article>
     </div>
@@ -1818,7 +1825,7 @@
     <div class="overview-grid">
       <section class="panel-card feature">
         <div class="panel-header">
-          <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-activity"></use></svg>Parking Occupancy Trend</span>
+          <span class="panel-title">Parking Occupancy Trend</span>
           <span class="status-chip good" id="trendRangeLabel">Recent activity</span>
         </div>
         <div class="trend-chart-wrap">
@@ -1828,20 +1835,20 @@
 
       <section class="panel-card">
         <div class="panel-header">
-          <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-sparkles"></use></svg>AI Forecast</span>
+          <span class="panel-title">AI Forecast</span>
           <button class="ghost-btn" onclick="forceRefreshInsights()" aria-label="Refresh AI forecast"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"></use></svg></button>
         </div>
         <div class="forecast-list">
           <div class="forecast-row">
-            <span class="forecast-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-gauge"></use></svg>Next hour occupancy</span>
+            <span class="forecast-label">Next hour occupancy</span>
             <span class="forecast-value highlight" id="aiNextHour">--</span>
           </div>
           <div class="forecast-row">
-            <span class="forecast-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-clock"></use></svg>Predicted peak time</span>
+            <span class="forecast-label">Predicted peak time</span>
             <span class="forecast-value" id="aiPeakTime">--</span>
           </div>
           <div class="forecast-row">
-            <span class="forecast-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-chart"></use></svg>Trend</span>
+            <span class="forecast-label">Trend</span>
             <span class="forecast-value" id="aiTrendText" style="font-family:inherit;font-size:12px;font-weight:600;max-width:60%">--</span>
           </div>
         </div>
@@ -1853,7 +1860,7 @@
     <div class="overview-bottom-grid">
       <section class="panel-card">
         <div class="panel-header">
-          <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-clock"></use></svg>Recent Detection Events</span>
+          <span class="panel-title">Recent Detection Events</span>
           <div class="panel-actions">
             <span class="status-chip" id="activityCount">0 events</span>
             <button class="refresh-btn" onclick="fetchHistory()" aria-label="Refresh recent activity"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"></use></svg></button>
@@ -1869,7 +1876,7 @@
 
       <section class="panel-card">
         <div class="panel-header">
-          <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-dollar"></use></svg>Revenue Trend</span>
+          <span class="panel-title">Revenue Trend</span>
           <span class="revenue-total" id="todayRevenueForecast">--</span>
         </div>
         <div class="weekday-grid" id="weekdayRevenueGrid"></div>
@@ -1877,7 +1884,7 @@
 
       <section class="panel-card">
         <div class="panel-header">
-          <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-grid"></use></svg>Parking Lot Status</span>
+          <span class="panel-title">Parking Lot Status</span>
           <div class="panel-actions">
             <span class="lot-legend status-chip"><span class="lot-cell free" style="width:9px;height:9px;border-radius:3px"></span>Free</span>
             <span class="lot-legend status-chip"><span class="lot-cell occ" style="width:9px;height:9px;border-radius:3px"></span>Occupied</span>
@@ -1892,59 +1899,59 @@
 
   <section class="content" id="content-revenue">
     <div class="stat-grid">
-      <article class="stat-card orange">
+      <article class="stat-card">
         <div class="stat-top">
           <div class="stat-label">Today's Revenue</div>
           <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-dollar"></use></svg></div>
         </div>
-        <div class="stat-value" id="dailyRevenueValue" style="font-size:22px">PHP --</div>
+        <div class="stat-value sz-md" id="dailyRevenueValue">PHP --</div>
         <div class="stat-sub" id="dailyRevenueMeta">0 recorded payments</div>
       </article>
-      <article class="stat-card green">
+      <article class="stat-card">
         <div class="stat-top">
           <div class="stat-label">This Week</div>
           <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-dollar"></use></svg></div>
         </div>
-        <div class="stat-value" id="weeklyRevenueValue" style="font-size:22px">PHP --</div>
+        <div class="stat-value sz-md" id="weeklyRevenueValue">PHP --</div>
         <div class="stat-sub" id="weeklyRevenueMeta">0 recorded payments</div>
       </article>
-      <article class="stat-card blue">
+      <article class="stat-card">
         <div class="stat-top">
           <div class="stat-label">This Month</div>
           <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-dollar"></use></svg></div>
         </div>
-        <div class="stat-value" id="monthlyRevenueValue" style="font-size:22px">PHP --</div>
+        <div class="stat-value sz-md" id="monthlyRevenueValue">PHP --</div>
         <div class="stat-sub" id="monthlyRevenueMeta">0 recorded payments</div>
       </article>
-      <article class="stat-card orange">
+      <article class="stat-card">
         <div class="stat-top">
           <div class="stat-label">Avg Transaction</div>
           <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-chart"></use></svg></div>
         </div>
-        <div class="stat-value" id="avgTransactionValue" style="font-size:22px">PHP --</div>
+        <div class="stat-value sz-md" id="avgTransactionValue">PHP --</div>
         <div class="stat-sub">Average amount per payment</div>
       </article>
-      <article class="stat-card blue">
+      <article class="stat-card">
         <div class="stat-top">
           <div class="stat-label">Transactions</div>
           <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-activity"></use></svg></div>
         </div>
-        <div class="stat-value" id="revenueLogCount" style="font-size:28px">--</div>
+        <div class="stat-value sz-lg" id="revenueLogCount">--</div>
         <div class="stat-sub" id="revenueBasis">Actual recorded parking payments.</div>
       </article>
-      <article class="stat-card green">
+      <article class="stat-card">
         <div class="stat-top">
           <div class="stat-label">GCash Payments</div>
           <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-dollar"></use></svg></div>
         </div>
-        <div class="stat-value" id="gcashCount" style="font-size:28px">--</div>
+        <div class="stat-value sz-lg" id="gcashCount">--</div>
         <div class="stat-sub" id="gcashSub">of total payments</div>
       </article>
     </div>
 
     <section class="panel-card feature" style="margin-bottom:16px">
       <div class="panel-header">
-        <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-dollar"></use></svg>Monthly Revenue Trend</span>
+        <span class="panel-title">Monthly Revenue Trend</span>
         <span class="revenue-total" id="revenueUpdatedAt">--</span>
       </div>
       <div class="trend-chart-wrap">
@@ -1954,22 +1961,22 @@
 
     <div class="overview-bottom-grid" style="margin-bottom:16px">
       <section class="panel-card">
-        <div class="panel-header"><span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-car"></use></svg>Revenue by Vehicle Type</span></div>
+        <div class="panel-header"><span class="panel-title">Revenue by Vehicle Type</span></div>
         <div class="trend-chart-wrap" style="height:200px"><canvas id="vehicleRevenueChart"></canvas></div>
       </section>
       <section class="panel-card">
-        <div class="panel-header"><span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-dollar"></use></svg>Payment Method</span></div>
+        <div class="panel-header"><span class="panel-title">Payment Method</span></div>
         <div class="trend-chart-wrap" style="height:200px"><canvas id="paymentMethodChart"></canvas></div>
       </section>
       <section class="panel-card">
-        <div class="panel-header"><span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-gauge"></use></svg>Discount Analysis</span></div>
+        <div class="panel-header"><span class="panel-title">Discount Analysis</span></div>
         <div class="trend-chart-wrap" style="height:200px"><canvas id="discountChart"></canvas></div>
       </section>
     </div>
 
     <section class="panel-card" style="margin-bottom:16px">
       <div class="panel-header">
-        <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-dollar"></use></svg>Record Parking Payment</span>
+        <span class="panel-title">Record Parking Payment</span>
       </div>
       <div class="payment-form" aria-label="Record parking payment">
         <label>
@@ -1985,11 +1992,15 @@
         </label>
         <label>
           Discount
-          <select class="payment-input" id="paymentDiscount">
+          <select class="payment-input" id="paymentDiscount" onchange="onPaymentDiscountChange()">
             <option value="none">None</option>
             <option value="pwd">PWD 20%</option>
             <option value="senior">Senior 20%</option>
           </select>
+        </label>
+        <label id="paymentDiscountIdWrap" style="display:none; grid-column:1/-1">
+          PWD / Senior ID Number
+          <input class="payment-input" id="paymentDiscountId" type="text" placeholder="Required to apply this discount" maxlength="64" />
         </label>
         <label>
           Method
@@ -2012,8 +2023,8 @@
 
     <section class="panel-card">
       <div class="panel-header">
-        <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-clock"></use></svg>Transaction Logs</span>
-        <span class="status-chip">Last 10 payments</span>
+        <span class="panel-title">Transaction Logs</span>
+        <span class="status-chip" id="txLogsRangeLabel">--</span>
       </div>
       <div class="report-table-wrap">
         <table class="report-table">
@@ -2022,6 +2033,10 @@
             <tr><td colspan="5" class="report-empty">No payments recorded yet.</td></tr>
           </tbody>
         </table>
+      </div>
+      <div class="panel-actions" style="justify-content:flex-end; margin-top:12px">
+        <button class="ghost-btn" id="txLogsPrevBtn" onclick="txLogsPrevPage()" disabled>&larr; Prev</button>
+        <button class="ghost-btn" id="txLogsNextBtn" onclick="txLogsNextPage()" disabled>Next &rarr;</button>
       </div>
     </section>
   </section>
@@ -2070,20 +2085,22 @@
 
         <section class="panel-card" style="margin-top:14px">
           <div class="panel-header">
-            <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-camera"></use></svg>Camera Health</span>
+            <span class="panel-title">Camera Health</span>
             <span class="panel-note mono" id="streamPortInfo"></span>
           </div>
           <div class="metric-row">
             <div class="camera-metric"><span>FPS</span><strong id="camFps">--</strong></div>
             <div class="camera-metric"><span>Zones</span><strong id="camZones">--</strong></div>
             <div class="camera-metric"><span>Occupied</span><strong id="camOcc">--</strong></div>
+            <div class="camera-metric"><span>Cars</span><strong id="camCars">--</strong></div>
+            <div class="camera-metric"><span>Motorcycles</span><strong id="camMotos">--</strong></div>
             <div class="camera-metric"><span>Status</span><strong id="camStatus" style="color:var(--green)">--</strong></div>
           </div>
         </section>
 
         <section class="panel-card" style="margin-top:14px">
           <div class="panel-header">
-            <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-clock"></use></svg>Detection Log</span>
+            <span class="panel-title">Detection Log</span>
             <span class="status-chip" id="feedActivityCount">0 events</span>
           </div>
           <div class="report-table-wrap">
@@ -2098,13 +2115,13 @@
 
         <section class="panel-card settings-panel" style="margin-top:14px">
           <div class="panel-header">
-            <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-settings"></use></svg>Settings</span>
+            <span class="panel-title">Settings</span>
             <span class="status-chip" id="layoutStatus">Layout --</span>
           </div>
 
           <div class="setting-row">
             <div class="setting-copy">
-              <strong><svg class="icon icon-sm" aria-hidden="true"><use href="#i-palette"></use></svg>Gray UI</strong>
+              <strong>Gray UI</strong>
               <span id="themeModeLabel">Off</span>
             </div>
             <button class="toggle-switch" id="themeToggle" onclick="toggleTheme()" aria-label="Toggle gray UI" aria-pressed="false"></button>
@@ -2112,7 +2129,7 @@
 
           <div class="setting-row" style="align-items:stretch;flex-direction:column">
             <div class="setting-copy">
-              <strong><svg class="icon icon-sm" aria-hidden="true"><use href="#i-dollar"></use></svg>Parking Price</strong>
+              <strong>Parking Price</strong>
               <span id="pricingModeHint">Dynamic pricing is active.</span>
             </div>
             <div class="price-setting-controls">
@@ -2132,10 +2149,26 @@
             </div>
           </div>
 
+          <div class="setting-row">
+            <div class="setting-copy">
+              <strong>PWD Discount</strong>
+              <span id="discountPwdHint">20% off the parking rate for PWD.</span>
+            </div>
+            <button class="toggle-switch" id="discountPwdToggle" onclick="toggleDiscountSetting('pwd')" aria-label="Toggle PWD discount" aria-pressed="false"></button>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-copy">
+              <strong>Senior Discount</strong>
+              <span id="discountSeniorHint">20% off the parking rate for seniors.</span>
+            </div>
+            <button class="toggle-switch" id="discountSeniorToggle" onclick="toggleDiscountSetting('senior')" aria-label="Toggle senior discount" aria-pressed="false"></button>
+          </div>
+
           <div class="setting-row" style="align-items:stretch;flex-direction:column">
             <div class="layout-head-row">
               <div class="setting-copy">
-                <strong><svg class="icon icon-sm" aria-hidden="true"><use href="#i-grid"></use></svg>Parking Layout</strong>
+                <strong>Parking Layout</strong>
                 <span id="layoutModeHint">Automatic mode lets the detector choose the layout.</span>
               </div>
               <div class="layout-toggle">
@@ -2153,7 +2186,7 @@
       </div>
 
       <aside class="zone-panel">
-        <div class="zone-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-grid"></use></svg>Zone Status</div>
+        <div class="zone-title">Zone Status</div>
         <div class="zone-summary">
           <div class="zone-stat">
             <span>Free</span>
@@ -2188,17 +2221,17 @@
 
     <div class="insight-overview" aria-label="AI insight summary">
       <article class="insight-summary-card">
-        <span><svg class="icon icon-sm" aria-hidden="true"><use href="#i-gauge"></use></svg>Current load</span>
+        <span>Current load</span>
         <strong id="insSummaryLoad">--</strong>
         <small id="insSummaryLoadSub">Waiting for detector state.</small>
       </article>
       <article class="insight-summary-card">
-        <span><svg class="icon icon-sm" aria-hidden="true"><use href="#i-chart"></use></svg>Forecast peak</span>
+        <span>Forecast peak</span>
         <strong id="insSummaryPeak">--</strong>
         <small id="insSummaryPeakSub">Next 6-hour prediction window.</small>
       </article>
       <article class="insight-summary-card">
-        <span><svg class="icon icon-sm" aria-hidden="true"><use href="#i-dollar"></use></svg>AI rate</span>
+        <span>AI rate</span>
         <strong id="insSummaryPrice">--</strong>
         <small id="insSummaryPriceSub">Compared with the configured flat rate.</small>
       </article>
@@ -2206,7 +2239,7 @@
 
     <section class="panel-card" style="margin-bottom:16px">
       <div class="panel-header">
-        <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-alert"></use></svg>Recommendation Cards</span>
+        <span class="panel-title">Recommendation Cards</span>
       </div>
       <div class="insight-grid" id="insRecommendationCards" style="grid-template-columns:repeat(auto-fit, minmax(260px, 1fr))">
         <div class="empty-state"><strong>Analyzing...</strong>Recommendations will appear once insights are computed.</div>
@@ -2215,7 +2248,7 @@
 
     <section class="panel-card" style="margin-bottom:16px">
       <div class="panel-header">
-        <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-sparkles"></use></svg>Model Confidence</span>
+        <span class="panel-title">Model Confidence</span>
         <span class="panel-note">From your trained ML models</span>
       </div>
       <div class="compare-bars">
@@ -2226,7 +2259,7 @@
 
     <div class="insight-grid">
       <article class="insight-card">
-        <div class="insight-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-gauge"></use></svg>Current Status</div>
+        <div class="insight-label">Current Status</div>
         <div class="insight-gauge-wrap">
           <div class="insight-gauge" id="insOccGauge">
             <span class="insight-gauge-value" id="insOccGaugeValue">0%</span>
@@ -2242,7 +2275,7 @@
       </article>
 
       <article class="insight-card">
-        <div class="insight-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-activity"></use></svg>Recent Trend</div>
+        <div class="insight-label">Recent Trend</div>
         <div class="insight-visual">
           <div class="mini-bars" id="insTrendBars"></div>
           <div class="mini-caption"><span>Recent updates</span><span id="insTrendDelta">--</span></div>
@@ -2253,7 +2286,7 @@
       </article>
 
       <article class="insight-card">
-        <div class="insight-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-car"></use></svg>Vehicle Forecast</div>
+        <div class="insight-label">Vehicle Forecast</div>
         <div class="insight-visual">
           <div class="mini-bars" id="insForecastBars"></div>
           <div class="mini-caption"><span>Next 6 hours</span><span id="insForecastPeak">--</span></div>
@@ -2264,7 +2297,7 @@
       </article>
 
       <article class="insight-card">
-        <div class="insight-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-parking"></use></svg>Occupancy Forecast</div>
+        <div class="insight-label">Occupancy Forecast</div>
         <div class="insight-visual">
           <div class="mini-meter"><div class="mini-meter-fill" id="insOccMeter"></div></div>
           <div class="mini-caption"><span id="insOccMeterLabel">Current load</span><span id="insOccMeterValue">0%</span></div>
@@ -2275,7 +2308,7 @@
       </article>
 
       <article class="insight-card">
-        <div class="insight-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-dollar"></use></svg>Dynamic Pricing</div>
+        <div class="insight-label">Dynamic Pricing</div>
         <div class="compare-bars">
           <span>Flat</span><div class="compare-track"><div class="compare-fill" id="insFlatBar"></div></div><span id="insFlatRateLabel">PHP 25</span>
           <span>AI</span><div class="compare-track"><div class="compare-fill" id="insPriceBar"></div></div><span id="insPriceValue">--</span>
@@ -2286,7 +2319,7 @@
       </article>
 
       <article class="insight-card">
-        <div class="insight-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-chart"></use></svg>Peak Hours</div>
+        <div class="insight-label">Peak Hours</div>
         <div class="insight-visual">
           <div class="hour-bars" id="insHourBars"></div>
           <div class="mini-caption"><span>24-hour pattern</span><span id="insPeakLabel">--</span></div>
@@ -2312,27 +2345,27 @@
 
     <div class="insight-overview cols-5" aria-label="Prediction summary">
       <article class="insight-summary-card">
-        <span><svg class="icon icon-sm" aria-hidden="true"><use href="#i-gauge"></use></svg>Current occupancy</span>
+        <span>Current occupancy</span>
         <strong id="predFullCurrentOcc">--</strong>
         <small>Live reading from the detector.</small>
       </article>
       <article class="insight-summary-card">
-        <span><svg class="icon icon-sm" aria-hidden="true"><use href="#i-chart"></use></svg>Peak hour</span>
+        <span>Peak hour</span>
         <strong id="predFullPeak">--</strong>
         <small id="predFullPeakSub">Highest expected occupancy hour.</small>
       </article>
       <article class="insight-summary-card">
-        <span><svg class="icon icon-sm" aria-hidden="true"><use href="#i-sparkles"></use></svg>Forecast accuracy</span>
+        <span>Forecast accuracy</span>
         <strong id="predFullAccuracy">--</strong>
         <small>Trained model confidence score.</small>
       </article>
       <article class="insight-summary-card">
-        <span><svg class="icon icon-sm" aria-hidden="true"><use href="#i-grid"></use></svg>Active capacity</span>
+        <span>Active capacity</span>
         <strong id="predFullCapacity">--</strong>
         <small>Slots currently counted by the model.</small>
       </article>
       <article class="insight-summary-card">
-        <span><svg class="icon icon-sm" aria-hidden="true"><use href="#i-dollar"></use></svg>Today's forecast</span>
+        <span>Today's forecast</span>
         <strong id="predFullTodayRevenue">--</strong>
         <small>Projected revenue for today.</small>
       </article>
@@ -2340,7 +2373,7 @@
 
     <section class="panel-card">
       <div class="panel-header">
-        <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-chart"></use></svg>24-hour occupancy forecast</span>
+        <span class="panel-title">24-hour occupancy forecast</span>
         <span class="panel-note" id="predFullHourNote">--</span>
       </div>
       <div class="hour-bars" id="predFullHourBars" style="height:110px"></div>
@@ -2354,7 +2387,7 @@
 
     <section class="panel-card" style="margin-top:14px">
       <div class="panel-header">
-        <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-grid"></use></svg>Weekly Occupancy Heatmap</span>
+        <span class="panel-title">Weekly Occupancy Heatmap</span>
         <span class="panel-note">Average occupancy by hour, last 30 days</span>
       </div>
       <div id="heatmapWrap" style="overflow-x:auto">
@@ -2364,13 +2397,13 @@
 
     <div class="insight-grid" style="grid-template-columns:repeat(2, minmax(0, 1fr)); margin-top:14px">
       <article class="insight-card">
-        <div class="insight-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-activity"></use></svg>Busy days</div>
+        <div class="insight-label">Busy days</div>
         <div class="insight-text" id="predFullBusyDays">
           <span class="insight-loading">Loading...</span>
         </div>
       </article>
       <article class="insight-card">
-        <div class="insight-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-clock"></use></svg>Quiet days</div>
+        <div class="insight-label">Quiet days</div>
         <div class="insight-text" id="predFullQuietDays">
           <span class="insight-loading">Loading...</span>
         </div>
@@ -2380,7 +2413,7 @@
     <section class="panel-card" style="margin-top:14px">
       <div class="revenue-panel" style="margin-top:0; padding-top:0; border-top:none">
         <div class="revenue-head">
-          <span class="revenue-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-dollar"></use></svg>Weekday revenue forecast</span>
+          <span class="revenue-title">Weekday revenue forecast</span>
         </div>
         <div class="weekday-grid" id="predFullWeekdayGrid"></div>
       </div>
@@ -2496,9 +2529,10 @@ if (user) {
 }
 
 function signOut() {
+  const headers = authHeaders();
   localStorage.removeItem('occupai_user');
   localStorage.removeItem('occupai_token');
-  fetch('/auth/logout', { method: 'POST' }).catch(() => {});
+  fetch('/auth/logout', { method: 'POST', headers }).catch(() => {});
   window.location.href = '/login';
 }
 
@@ -2546,6 +2580,7 @@ let pricingSettings = {
   flat_rate_php_car: 50, flat_rate_php_motorcycle: 25,
   mode: 'dynamic'
 };
+let discountSettings = { pwd_enabled: true, senior_enabled: true };
 
 function formatPhp(value, options = {}) {
   const n = Number(value);
@@ -2744,6 +2779,68 @@ async function fetchPricingSettings() {
   }
 }
 
+function setDiscountUi(settings, pending) {
+  discountSettings = {
+    pwd_enabled: settings?.pwd_enabled ?? discountSettings.pwd_enabled,
+    senior_enabled: settings?.senior_enabled ?? discountSettings.senior_enabled,
+  };
+
+  const pwdToggle = document.getElementById('discountPwdToggle');
+  if (pwdToggle) {
+    pwdToggle.classList.toggle('active', discountSettings.pwd_enabled);
+    pwdToggle.disabled = Boolean(pending);
+    pwdToggle.setAttribute('aria-pressed', String(discountSettings.pwd_enabled));
+  }
+  setText('discountPwdHint', discountSettings.pwd_enabled
+    ? '20% off the parking rate for PWD.' : 'Turned off — PWD discount cannot be selected.');
+
+  const seniorToggle = document.getElementById('discountSeniorToggle');
+  if (seniorToggle) {
+    seniorToggle.classList.toggle('active', discountSettings.senior_enabled);
+    seniorToggle.disabled = Boolean(pending);
+    seniorToggle.setAttribute('aria-pressed', String(discountSettings.senior_enabled));
+  }
+  setText('discountSeniorHint', discountSettings.senior_enabled
+    ? '20% off the parking rate for seniors.' : 'Turned off — senior discount cannot be selected.');
+
+  const pwdOption = document.querySelector('#paymentDiscount option[value="pwd"]');
+  if (pwdOption) pwdOption.disabled = !discountSettings.pwd_enabled;
+  const seniorOption = document.querySelector('#paymentDiscount option[value="senior"]');
+  if (seniorOption) seniorOption.disabled = !discountSettings.senior_enabled;
+  const paymentDiscount = document.getElementById('paymentDiscount');
+  if (paymentDiscount && ((paymentDiscount.value === 'pwd' && !discountSettings.pwd_enabled) ||
+      (paymentDiscount.value === 'senior' && !discountSettings.senior_enabled))) {
+    paymentDiscount.value = 'none';
+  }
+}
+
+async function fetchDiscountSettings() {
+  try {
+    const r = await fetch('/api/settings/discounts');
+    if (!r.ok) throw new Error(r.status);
+    setDiscountUi(await r.json(), false);
+  } catch (e) {
+    console.warn('Could not load discount settings:', e);
+  }
+}
+
+async function toggleDiscountSetting(kind) {
+  const key = kind === 'senior' ? 'senior_enabled' : 'pwd_enabled';
+  const nextValue = !discountSettings[key];
+  setDiscountUi({ ...discountSettings, [key]: nextValue }, true);
+  try {
+    const r = await fetch('/api/settings/discounts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ [key]: nextValue })
+    });
+    if (!r.ok) throw new Error(r.status);
+    setDiscountUi(await r.json(), false);
+  } catch (e) {
+    setDiscountUi({ ...discountSettings, [key]: !nextValue }, false);
+  }
+}
+
 async function savePricingSettings(forceEnabled = true) {
   const carInput = document.getElementById('priceInputCar');
   const motoInput = document.getElementById('priceInputMoto');
@@ -2811,7 +2908,7 @@ function switchPanel(name, btn) {
   document.getElementById('pageSub').textContent = meta.sub;
 
   if (name === 'insights') { fetchInsights(); fetchMlConfidence(); }
-  if (name === 'revenue') fetchRevenueDashboard();
+  if (name === 'revenue') { fetchRevenueDashboard(); fetchTransactionLogs(); }
   if (name === 'predictions') { fetchFullPredictions(); fetchMlConfidence(); fetchHeatmap(); }
 }
 
@@ -2883,7 +2980,11 @@ async function fetchStats() {
     document.getElementById('statFree').textContent = free;
     document.getElementById('statRate').textContent = Math.round(pct) + '%';
     setText('statFreeSub', total ? `${free} of ${total} spaces available` : 'Waiting for detector data');
-    setText('statOccSub', total ? `${occupied} cars in tracked spaces` : 'No cars detected yet');
+    const carCount = d.car_count ?? 0;
+    const motoCount = d.motorcycle_count ?? 0;
+    setText('statOccSub', !total ? 'No cars detected yet'
+      : (carCount + motoCount) > 0 ? `${carCount} car(s), ${motoCount} motorcycle(s)`
+      : `${occupied} in tracked spaces`);
     setText('statTotalSub', total ? `${Object.keys(d.zones || {}).length || total} tracked zones` : 'Camera has not reported capacity');
     setText('statRateSub', pct >= 90 ? 'Lot is near full' : pct >= 70 ? 'Demand is rising' : 'Share of total capacity');
 
@@ -2908,6 +3009,8 @@ async function fetchStats() {
     }
     document.getElementById('camZones').textContent = total;
     document.getElementById('camOcc').textContent = occupied + ' / ' + total;
+    setText('camCars', carCount);
+    setText('camMotos', motoCount);
     const detectorOnline = Boolean(d.timestamp) || Number(d.fps) > 0 || total > 0;
     document.getElementById('camStatus').textContent = !detectorOnline ? 'WAITING' : d.lot_full ? 'FULL' : 'OK';
     document.getElementById('camStatus').style.color = !detectorOnline ? 'var(--orange)' : d.lot_full ? 'var(--red)' : 'var(--green)';
@@ -3182,6 +3285,110 @@ async function fetchFullPredictions() {
   }
 }
 
+let gcashIssuesCache = [];
+
+async function fetchGcashIssues() {
+  try {
+    const r = await fetch('/api/gcash/issues', { headers: authHeaders() });
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    gcashIssuesCache = Array.isArray(d.items) ? d.items : [];
+
+    const banner = document.getElementById('gcashAlertBanner');
+    const text = document.getElementById('gcashAlertText');
+    if (!banner || !text) return;
+
+    if (gcashIssuesCache.length === 0) {
+      banner.style.display = 'none';
+      return;
+    }
+    banner.style.display = 'block';
+    const totalAmount = gcashIssuesCache.reduce((s, it) => s + (it.final_amount_php || 0), 0);
+    text.textContent = `${gcashIssuesCache.length} GCash payment(s) confirmed by PayMongo but not recorded — PHP ${totalAmount.toLocaleString('en-PH', { minimumFractionDigits: 2 })} needs manual reconciliation.`;
+  } catch (e) {
+    console.warn('Could not load GCash issues:', e);
+  }
+}
+
+function toggleGcashAlertDetails() {
+  const details = document.getElementById('gcashAlertDetails');
+  const btn = document.getElementById('gcashAlertToggle');
+  if (!details) return;
+  const showing = details.style.display !== 'none';
+  if (showing) {
+    details.style.display = 'none';
+    if (btn) btn.textContent = 'Details';
+    return;
+  }
+  details.innerHTML = gcashIssuesCache.map(it => `
+    <div class="gcash-alert-item">
+      <strong>${escapeHtml(cleanText(it.vehicle_type === 'motorcycle' ? 'Motorcycle' : 'Car'))}</strong>
+      · PHP ${Number(it.final_amount_php || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}
+      · ref <span class="mono">${escapeHtml(it.ref || '')}</span>
+      · ${escapeHtml(cleanText(it.created_at_ph || ''))}<br>
+      ${escapeHtml(cleanText(it.error_message || 'Unknown error'))}
+    </div>`).join('') || '<div class="gcash-alert-item">No details available.</div>';
+  details.style.display = 'block';
+  if (btn) btn.textContent = 'Hide';
+}
+
+let txLogsOffset = 0;
+const txLogsLimit = 10;
+let txLogsTotal = 0;
+
+async function fetchTransactionLogs() {
+  const body = document.getElementById('transactionLogsBody');
+  try {
+    const r = await fetch(`/api/payments/recent?limit=${txLogsLimit}&offset=${txLogsOffset}`, { headers: authHeaders() });
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    txLogsTotal = d.total || 0;
+    const items = Array.isArray(d.items) ? d.items : [];
+
+    if (body) {
+      body.innerHTML = items.length ? items.map(item => {
+        const discount = item.discount_type && item.discount_type !== 'none'
+          ? String(item.discount_type).toUpperCase() + (item.discount_id_number ? ` · ${escapeHtml(cleanText(item.discount_id_number))}` : '')
+          : '—';
+        const vehicle = item.vehicle_type === 'motorcycle' ? 'Motorcycle' : 'Car';
+        return `
+          <tr>
+            <td>${escapeHtml(cleanText(item.paid_at_ph || ''))}</td>
+            <td>${vehicle}</td>
+            <td class="col-money">${escapeHtml(formatPhp(item.final_amount_php, { forceCents: true }))}</td>
+            <td>${escapeHtml(cleanText(item.payment_method || 'cash').toUpperCase())}</td>
+            <td class="col-discount">${discount}</td>
+          </tr>`;
+      }).join('') : '<tr><td colspan="5" class="report-empty">No payments recorded yet.</td></tr>';
+    }
+
+    const rangeLabel = document.getElementById('txLogsRangeLabel');
+    if (rangeLabel) {
+      const start = txLogsTotal === 0 ? 0 : txLogsOffset + 1;
+      const end = Math.min(txLogsOffset + txLogsLimit, txLogsTotal);
+      rangeLabel.textContent = `${start}-${end} of ${txLogsTotal}`;
+    }
+    const prevBtn = document.getElementById('txLogsPrevBtn');
+    const nextBtn = document.getElementById('txLogsNextBtn');
+    if (prevBtn) prevBtn.disabled = txLogsOffset <= 0;
+    if (nextBtn) nextBtn.disabled = txLogsOffset + txLogsLimit >= txLogsTotal;
+  } catch (e) {
+    if (body) body.innerHTML = '<tr><td colspan="5" class="report-empty">Could not load transaction logs.</td></tr>';
+  }
+}
+
+function txLogsPrevPage() {
+  txLogsOffset = Math.max(0, txLogsOffset - txLogsLimit);
+  fetchTransactionLogs();
+}
+
+function txLogsNextPage() {
+  if (txLogsOffset + txLogsLimit < txLogsTotal) {
+    txLogsOffset += txLogsLimit;
+    fetchTransactionLogs();
+  }
+}
+
 let monthlyRevenueChartInstance = null, vehicleRevenueChartInstance = null,
     paymentMethodChartInstance = null, discountChartInstance = null;
 
@@ -3377,22 +3584,6 @@ async function fetchRevenueDashboard() {
     setText('gcashSub', totalPayments ? `${Math.round((gcash.transaction_count || 0) / totalPayments * 100)}% of ${totalPayments} total` : 'of total payments');
 
     renderRevenueCharts(d);
-
-    const txBody = document.getElementById('transactionLogsBody');
-    if (txBody) {
-      txBody.innerHTML = recent.length ? recent.map(item => {
-        const discount = item.discount_type && item.discount_type !== 'none' ? String(item.discount_type).toUpperCase() : '—';
-        const vehicle = item.vehicle_type === 'motorcycle' ? 'Motorcycle' : 'Car';
-        return `
-          <tr>
-            <td>${escapeHtml(cleanText(item.paid_at_ph || ''))}</td>
-            <td>${vehicle}</td>
-            <td class="col-money">${escapeHtml(formatPhp(item.final_amount_php, { forceCents: true }))}</td>
-            <td>${escapeHtml(cleanText(item.payment_method || 'cash').toUpperCase())}</td>
-            <td class="col-discount">${discount}</td>
-          </tr>`;
-      }).join('') : '<tr><td colspan="5" class="report-empty">No payments recorded yet.</td></tr>';
-    }
   } catch (e) {
     console.error('fetchRevenueDashboard error:', e);
     setText('dailyRevenueValue', 'PHP --');
@@ -3411,6 +3602,16 @@ function onPaymentVehicleTypeChange() {
   }
 }
 
+function onPaymentDiscountChange() {
+  const wrap = document.getElementById('paymentDiscountIdWrap');
+  const needsId = document.getElementById('paymentDiscount')?.value !== 'none';
+  if (wrap) wrap.style.display = needsId ? 'grid' : 'none';
+  if (!needsId) {
+    const idInput = document.getElementById('paymentDiscountId');
+    if (idInput) idInput.value = '';
+  }
+}
+
 async function recordPayment() {
   const btn = document.getElementById('paymentRecordBtn');
   const status = document.getElementById('paymentStatus');
@@ -3420,10 +3621,18 @@ async function recordPayment() {
     return;
   }
 
+  const discountType = document.getElementById('paymentDiscount')?.value || 'none';
+  const discountId = document.getElementById('paymentDiscountId')?.value.trim() || '';
+  if (discountType !== 'none' && !discountId) {
+    if (status) status.textContent = `Enter the ${discountType.toUpperCase()} ID number to apply this discount.`;
+    return;
+  }
+
   const payload = {
     vehicle_type: document.getElementById('paymentVehicleType')?.value === 'motorcycle' ? 'motorcycle' : 'car',
     regular_price_php: amount,
-    discount_type: document.getElementById('paymentDiscount')?.value || 'none',
+    discount_type: discountType,
+    discount_id_number: discountId || null,
     payment_method: document.getElementById('paymentMethod')?.value || 'cash',
     notes: document.getElementById('paymentNote')?.value || ''
   };
@@ -3449,7 +3658,12 @@ async function recordPayment() {
     if (status) status.textContent = `Recorded ${formatPhp(d.final_amount_php, { forceCents: true })} payment.`;
     const note = document.getElementById('paymentNote');
     if (note) note.value = '';
-    await fetchRevenueDashboard();
+    const discountId = document.getElementById('paymentDiscountId');
+    if (discountId) discountId.value = '';
+    document.getElementById('paymentDiscount').value = 'none';
+    onPaymentDiscountChange();
+    txLogsOffset = 0;
+    await Promise.all([fetchRevenueDashboard(), fetchTransactionLogs()]);
   } catch (e) {
     if (status) status.textContent = cleanText(e.message || 'Could not record payment.');
   } finally {
@@ -3726,7 +3940,7 @@ function renderRecommendationCards(items) {
   }
   wrap.innerHTML = list.map(text => `
     <article class="insight-card action">
-      <div class="insight-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-alert"></use></svg>Recommended</div>
+      <div class="insight-label">Recommended</div>
       <div class="insight-text action-text">${escapeHtml(cleanText(text))}</div>
     </article>`).join('');
 }
@@ -3883,18 +4097,23 @@ initTheme();
 if (isAuthorizedAdmin) {
   fetchLayoutMode();
   fetchPricingSettings();
+  fetchDiscountSettings();
   fetchStats();
   fetchHistory();
   fetchPredictions();
   fetchRevenueDashboard();
+  fetchTransactionLogs();
   fetchInsights();
+  fetchGcashIssues();
 
+  setInterval(fetchGcashIssues, 60000);
   setInterval(fetchStats, 3000);
   setInterval(fetchHistory, 5000);
   setInterval(fetchPredictions, 30000);
   setInterval(fetchRevenueDashboard, 30000);
   setInterval(fetchLayoutMode, 30000);
   setInterval(fetchPricingSettings, 30000);
+  setInterval(fetchDiscountSettings, 30000);
   setInterval(fetchInsights, 10000);
 }
 </script>
