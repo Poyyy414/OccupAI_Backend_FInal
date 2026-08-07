@@ -853,6 +853,7 @@ def _run_insights_now():
     except Exception:
         pass
 
+    out["admin_action_items"] = actions
     out["admin_action"] = (
         " ".join(actions) if actions
         else "✅ No immediate action needed. The lot is operating normally."
@@ -1863,6 +1864,11 @@ def _empty_payment_dashboard(error=None):
         "week_transaction_count": 0,
         "month_transaction_count": 0,
         "log_count": 0,
+        "total_revenue_php": 0.0,
+        "avg_transaction_php": 0.0,
+        "revenue_by_vehicle_type": {},
+        "revenue_by_payment_method": {},
+        "revenue_by_discount_type": {},
         "daily_revenue": daily,
         "monthly_revenue": monthly,
         "recent_payments": [],
@@ -1912,10 +1918,34 @@ def _payment_revenue_dashboard():
             COUNT(*) FILTER (
                 WHERE DATE_TRUNC('month', paid_at AT TIME ZONE 'Asia/Manila') = DATE_TRUNC('month', NOW() AT TIME ZONE 'Asia/Manila')
             ) AS month_count,
-            COUNT(*) AS total_count
+            COUNT(*) AS total_count,
+            COALESCE(SUM(final_amount_php), 0) AS total_revenue
         FROM parking_payments
     """)
     summary = summary_rows[0] if summary_rows else {}
+
+    vehicle_rows = query("""
+        SELECT vehicle_type,
+               COALESCE(SUM(final_amount_php), 0) AS revenue,
+               COUNT(*) AS transaction_count
+        FROM parking_payments
+        GROUP BY vehicle_type
+    """)
+    payment_method_rows = query("""
+        SELECT payment_method,
+               COALESCE(SUM(final_amount_php), 0) AS revenue,
+               COUNT(*) AS transaction_count
+        FROM parking_payments
+        GROUP BY payment_method
+    """)
+    discount_rows = query("""
+        SELECT discount_type,
+               COALESCE(SUM(final_amount_php), 0) AS revenue,
+               COALESCE(SUM(discount_amount_php), 0) AS discount,
+               COUNT(*) AS transaction_count
+        FROM parking_payments
+        GROUP BY discount_type
+    """)
 
     daily_rows = query("""
         SELECT
@@ -1999,6 +2029,31 @@ def _payment_revenue_dashboard():
     today_revenue = _row_float(summary, "today_revenue")
     week_revenue = _row_float(summary, "week_revenue")
     month_revenue = _row_float(summary, "month_revenue")
+    total_revenue = _row_float(summary, "total_revenue")
+    total_count = _row_int(summary, "total_count")
+
+    by_vehicle = {
+        (row.get("vehicle_type") or "car"): {
+            "revenue_php": _row_float(row, "revenue"),
+            "transaction_count": _row_int(row, "transaction_count"),
+        }
+        for row in vehicle_rows
+    }
+    by_payment_method = {
+        (row.get("payment_method") or "cash"): {
+            "revenue_php": _row_float(row, "revenue"),
+            "transaction_count": _row_int(row, "transaction_count"),
+        }
+        for row in payment_method_rows
+    }
+    by_discount = {
+        (row.get("discount_type") or "none"): {
+            "revenue_php": _row_float(row, "revenue"),
+            "discount_php": _row_float(row, "discount"),
+            "transaction_count": _row_int(row, "transaction_count"),
+        }
+        for row in discount_rows
+    }
 
     return {
         "generated_at_ph": now.strftime("%Y-%m-%d %H:%M:%S"),
@@ -2017,7 +2072,12 @@ def _payment_revenue_dashboard():
         "today_transaction_count": _row_int(summary, "today_count"),
         "week_transaction_count": _row_int(summary, "week_count"),
         "month_transaction_count": _row_int(summary, "month_count"),
-        "log_count": _row_int(summary, "total_count"),
+        "log_count": total_count,
+        "total_revenue_php": total_revenue,
+        "avg_transaction_php": round(total_revenue / total_count, 2) if total_count else 0.0,
+        "revenue_by_vehicle_type": by_vehicle,
+        "revenue_by_payment_method": by_payment_method,
+        "revenue_by_discount_type": by_discount,
         "daily_revenue": daily,
         "monthly_revenue": monthly,
         "recent_payments": recent,
@@ -2780,6 +2840,7 @@ def api_insights():
                 "revenue_forecast":   "—",
                 "peak_hours":         "—",
                 "admin_action":       "Please wait — the system is initializing.",
+                "admin_action_items": [],
                 "generated_at":       datetime.now(PH_TZ).strftime("%Y-%m-%d %H:%M:%S"),
                 "next_refresh":       "~15 seconds",
             }

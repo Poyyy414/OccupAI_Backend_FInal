@@ -7,6 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
     * { margin: 0; padding: 0; }
@@ -401,7 +402,7 @@
 
     .stat-grid {
       display: grid;
-      grid-template-columns: repeat(5, minmax(0, 1fr));
+      grid-template-columns: repeat(6, minmax(0, 1fr));
       gap: 14px;
       margin-bottom: 16px;
     }
@@ -1325,6 +1326,7 @@
       gap: 14px;
       margin-bottom: 14px;
     }
+    .insight-overview.cols-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 
     .insight-summary-card {
       padding: 15px;
@@ -1499,15 +1501,78 @@
     .compare-track { height: 9px; }
     .compare-fill { width: 0%; height: 100%; border-radius: inherit; background: var(--orange); transition: width .35s ease, background .2s ease; }
 
+    .trend-chart-wrap { position: relative; height: 260px; }
+
+    .overview-bottom-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+      align-items: start;
+    }
+
+    .forecast-list { display: flex; flex-direction: column; }
+    .forecast-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border-soft);
+    }
+    .forecast-row:last-of-type { border-bottom: 0; padding-bottom: 6px; }
+    .forecast-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .forecast-value {
+      color: var(--text);
+      font-family: "Space Mono", monospace;
+      font-size: 13px;
+      font-weight: 700;
+      text-align: right;
+    }
+    .forecast-value.highlight { color: var(--green); font-size: 16px; }
+
+    .lot-status-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(26px, 1fr));
+      gap: 6px;
+    }
+    .lot-cell {
+      aspect-ratio: 1;
+      border-radius: 5px;
+      border: 1px solid var(--border-soft);
+      background: rgba(255, 255, 255, .04);
+      transition: background .2s ease, border-color .2s ease;
+    }
+    .lot-cell.free { background: var(--green-soft); border-color: rgba(50, 230, 173, .35); }
+    .lot-cell.occ { background: var(--red-soft); border-color: rgba(255, 92, 122, .38); }
+    .lot-legend { display: flex; align-items: center; gap: 8px; }
+
+    .heatmap-grid {
+      display: grid;
+      grid-template-columns: 46px repeat(24, minmax(22px, 1fr));
+      gap: 3px;
+      min-width: 640px;
+      font-family: "Space Mono", monospace;
+      font-size: 10px;
+    }
+    .heatmap-row-label { display: flex; align-items: center; color: var(--muted); }
+    .heatmap-hour-label { text-align: center; color: var(--muted-2); padding-bottom: 3px; }
+    .heatmap-cell { aspect-ratio: 1; border-radius: 3px; background: rgba(50, 230, 173, .06); }
+
     ::-webkit-scrollbar { width: 8px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: #293445; border-radius: 999px; }
 
     @media (max-width: 1120px) {
       .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .overview-grid, .feed-grid { grid-template-columns: 1fr; }
+      .overview-grid, .feed-grid, .overview-bottom-grid { grid-template-columns: 1fr; }
       .zone-panel { order: -1; position: static; }
-      .summary-strip, .insight-overview { grid-template-columns: 1fr; }
+      .summary-strip, .insight-overview, .insight-overview.cols-5 { grid-template-columns: 1fr; }
       .payment-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
 
@@ -1724,51 +1789,74 @@
         <div class="stat-sub" id="statRateSub">Share of total capacity</div>
         <div class="stat-meter" aria-hidden="true"><span id="rateMeter"></span></div>
       </article>
+      <article class="stat-card blue">
+        <div class="stat-top">
+          <div class="stat-label">Peak Vehicles Today</div>
+          <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-car"></use></svg></div>
+        </div>
+        <div class="stat-value" id="statPeakVehicles" style="font-size:30px">--</div>
+        <div class="stat-sub" id="statPeakVehiclesSub">Highest count recorded today</div>
+      </article>
+      <article class="stat-card orange">
+        <div class="stat-top">
+          <div class="stat-label">Today's Revenue</div>
+          <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-dollar"></use></svg></div>
+        </div>
+        <div class="stat-value" id="statTodayRevenue" style="font-size:24px">PHP --</div>
+        <div class="stat-sub" id="statTodayRevenueSub">0 payments recorded</div>
+      </article>
+      <article class="stat-card green" id="statPricingCard">
+        <div class="stat-top">
+          <div class="stat-label">Dynamic Pricing</div>
+          <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-gauge"></use></svg></div>
+        </div>
+        <div class="stat-value" id="statPricingStatus" style="font-size:26px">--</div>
+        <div class="stat-sub" id="statPricingStatusSub">Waiting for pricing data</div>
+      </article>
     </div>
 
     <div class="overview-grid">
-      <div>
-        <section class="panel-card feature">
-          <div class="panel-header">
-            <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-activity"></use></svg>Live Occupancy</span>
-            <span class="occ-pct" id="occPct">0%</span>
-          </div>
-          <div class="bar-track">
-            <div class="bar-fill" id="occBar" style="width:0%"></div>
-          </div>
-          <div class="bar-labels">
-            <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
-          </div>
-        </section>
-
-        <section class="panel-card">
-          <div class="panel-header">
-            <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-chart"></use></svg>Predictions</span>
-            <span class="panel-note" id="predNote">Based on last 7 days</span>
-          </div>
-          <div class="pred-grid" id="predGrid">
-            <div class="empty-state" style="grid-column:1/-1">
-              <strong>Waiting for prediction data</strong>
-              Forecasts will appear when the API responds.
-            </div>
-          </div>
-
-          <div class="revenue-panel">
-            <div class="revenue-head">
-              <span class="revenue-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-dollar"></use></svg>Revenue forecast</span>
-              <span class="revenue-total" id="todayRevenueForecast">--</span>
-            </div>
-            <div class="weekday-grid" id="weekdayRevenueGrid"></div>
-          </div>
-        </section>
-      </div>
+      <section class="panel-card feature">
+        <div class="panel-header">
+          <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-activity"></use></svg>Parking Occupancy Trend</span>
+          <span class="status-chip good" id="trendRangeLabel">Recent activity</span>
+        </div>
+        <div class="trend-chart-wrap">
+          <canvas id="trendChart"></canvas>
+        </div>
+      </section>
 
       <section class="panel-card">
         <div class="panel-header">
-          <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-clock"></use></svg>Recent Activity</span>
+          <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-sparkles"></use></svg>AI Forecast</span>
+          <button class="ghost-btn" onclick="forceRefreshInsights()" aria-label="Refresh AI forecast"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"></use></svg></button>
+        </div>
+        <div class="forecast-list">
+          <div class="forecast-row">
+            <span class="forecast-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-gauge"></use></svg>Next hour occupancy</span>
+            <span class="forecast-value highlight" id="aiNextHour">--</span>
+          </div>
+          <div class="forecast-row">
+            <span class="forecast-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-clock"></use></svg>Predicted peak time</span>
+            <span class="forecast-value" id="aiPeakTime">--</span>
+          </div>
+          <div class="forecast-row">
+            <span class="forecast-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-chart"></use></svg>Trend</span>
+            <span class="forecast-value" id="aiTrendText" style="font-family:inherit;font-size:12px;font-weight:600;max-width:60%">--</span>
+          </div>
+        </div>
+        <div class="insight-label" style="margin-top:14px">Recommended</div>
+        <div class="insight-text action-text" id="aiActionText">Waiting for insight data...</div>
+      </section>
+    </div>
+
+    <div class="overview-bottom-grid">
+      <section class="panel-card">
+        <div class="panel-header">
+          <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-clock"></use></svg>Recent Detection Events</span>
           <div class="panel-actions">
             <span class="status-chip" id="activityCount">0 events</span>
-            <button class="refresh-btn" onclick="fetchHistory()" aria-label="Refresh recent activity"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"></use></svg>Refresh</button>
+            <button class="refresh-btn" onclick="fetchHistory()" aria-label="Refresh recent activity"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"></use></svg></button>
           </div>
         </div>
         <div class="activity-list" id="activityList">
@@ -1778,77 +1866,162 @@
           </div>
         </div>
       </section>
+
+      <section class="panel-card">
+        <div class="panel-header">
+          <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-dollar"></use></svg>Revenue Trend</span>
+          <span class="revenue-total" id="todayRevenueForecast">--</span>
+        </div>
+        <div class="weekday-grid" id="weekdayRevenueGrid"></div>
+      </section>
+
+      <section class="panel-card">
+        <div class="panel-header">
+          <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-grid"></use></svg>Parking Lot Status</span>
+          <div class="panel-actions">
+            <span class="lot-legend status-chip"><span class="lot-cell free" style="width:9px;height:9px;border-radius:3px"></span>Free</span>
+            <span class="lot-legend status-chip"><span class="lot-cell occ" style="width:9px;height:9px;border-radius:3px"></span>Occupied</span>
+          </div>
+        </div>
+        <div class="lot-status-grid" id="lotStatusGrid">
+          <div class="empty-state"><strong>Waiting for zone data</strong>Lot status will appear here.</div>
+        </div>
+      </section>
     </div>
   </section>
 
   <section class="content" id="content-revenue">
-    <section class="panel-card revenue-page">
-      <div class="revenue-dashboard">
-        <div class="revenue-head">
-          <span class="revenue-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-dollar"></use></svg>Parking revenue dashboard</span>
-          <span class="revenue-total" id="revenueUpdatedAt">--</span>
+    <div class="stat-grid">
+      <article class="stat-card orange">
+        <div class="stat-top">
+          <div class="stat-label">Today's Revenue</div>
+          <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-dollar"></use></svg></div>
         </div>
-        <div class="revenue-kpis">
-          <div class="revenue-kpi">
-            <span>Today</span>
-            <strong id="dailyRevenueValue">PHP --</strong>
-            <small id="dailyRevenueMeta">0 recorded payments</small>
-          </div>
-          <div class="revenue-kpi">
-            <span>This week</span>
-            <strong id="weeklyRevenueValue">PHP --</strong>
-            <small id="weeklyRevenueMeta">0 recorded payments</small>
-          </div>
-          <div class="revenue-kpi">
-            <span>This month</span>
-            <strong id="monthlyRevenueValue">PHP --</strong>
-            <small id="monthlyRevenueMeta">0 recorded payments</small>
-          </div>
-          <div class="revenue-kpi">
-            <span>Revenue basis</span>
-            <strong id="revenueLogCount">-- payments</strong>
-            <small id="revenueBasis">Actual recorded parking payments.</small>
-          </div>
+        <div class="stat-value" id="dailyRevenueValue" style="font-size:22px">PHP --</div>
+        <div class="stat-sub" id="dailyRevenueMeta">0 recorded payments</div>
+      </article>
+      <article class="stat-card green">
+        <div class="stat-top">
+          <div class="stat-label">This Week</div>
+          <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-dollar"></use></svg></div>
         </div>
-        <div class="payment-form" aria-label="Record parking payment">
-          <label>
-            Vehicle
-            <select class="payment-input" id="paymentVehicleType" onchange="onPaymentVehicleTypeChange()">
-              <option value="car">Car</option>
-              <option value="motorcycle">Motorcycle</option>
-            </select>
-          </label>
-          <label>
-            Regular PHP
-            <input class="payment-input" id="paymentAmount" type="number" min="1" max="10000" step="1" value="50" />
-          </label>
-          <label>
-            Discount
-            <select class="payment-input" id="paymentDiscount">
-              <option value="none">None</option>
-              <option value="pwd">PWD 20%</option>
-              <option value="senior">Senior 20%</option>
-            </select>
-          </label>
-          <label>
-            Method
-            <select class="payment-input" id="paymentMethod">
-              <option value="cash">Cash</option>
-              <option value="gcash">GCash</option>
-              <option value="card">Card</option>
-              <option value="other">Other</option>
-            </select>
-          </label>
-          <label>
-            Note
-            <input class="payment-input" id="paymentNote" type="text" placeholder="Optional" maxlength="120" />
-          </label>
-          <button class="setting-save-btn" id="paymentRecordBtn" onclick="recordPayment()">Record</button>
-          <div class="payment-status" id="paymentStatus">Records actual paid parking money for daily, weekly, and monthly profit.</div>
+        <div class="stat-value" id="weeklyRevenueValue" style="font-size:22px">PHP --</div>
+        <div class="stat-sub" id="weeklyRevenueMeta">0 recorded payments</div>
+      </article>
+      <article class="stat-card blue">
+        <div class="stat-top">
+          <div class="stat-label">This Month</div>
+          <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-dollar"></use></svg></div>
         </div>
-        <div class="revenue-bars" id="dailyRevenueBars" aria-label="Daily parking revenue"></div>
-        <div class="monthly-revenue-grid" id="monthlyRevenueGrid"></div>
-        <div class="payment-list" id="recentPaymentsList"></div>
+        <div class="stat-value" id="monthlyRevenueValue" style="font-size:22px">PHP --</div>
+        <div class="stat-sub" id="monthlyRevenueMeta">0 recorded payments</div>
+      </article>
+      <article class="stat-card orange">
+        <div class="stat-top">
+          <div class="stat-label">Avg Transaction</div>
+          <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-chart"></use></svg></div>
+        </div>
+        <div class="stat-value" id="avgTransactionValue" style="font-size:22px">PHP --</div>
+        <div class="stat-sub">Average amount per payment</div>
+      </article>
+      <article class="stat-card blue">
+        <div class="stat-top">
+          <div class="stat-label">Transactions</div>
+          <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-activity"></use></svg></div>
+        </div>
+        <div class="stat-value" id="revenueLogCount" style="font-size:28px">--</div>
+        <div class="stat-sub" id="revenueBasis">Actual recorded parking payments.</div>
+      </article>
+      <article class="stat-card green">
+        <div class="stat-top">
+          <div class="stat-label">GCash Payments</div>
+          <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-dollar"></use></svg></div>
+        </div>
+        <div class="stat-value" id="gcashCount" style="font-size:28px">--</div>
+        <div class="stat-sub" id="gcashSub">of total payments</div>
+      </article>
+    </div>
+
+    <section class="panel-card feature" style="margin-bottom:16px">
+      <div class="panel-header">
+        <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-dollar"></use></svg>Monthly Revenue Trend</span>
+        <span class="revenue-total" id="revenueUpdatedAt">--</span>
+      </div>
+      <div class="trend-chart-wrap">
+        <canvas id="monthlyRevenueChart"></canvas>
+      </div>
+    </section>
+
+    <div class="overview-bottom-grid" style="margin-bottom:16px">
+      <section class="panel-card">
+        <div class="panel-header"><span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-car"></use></svg>Revenue by Vehicle Type</span></div>
+        <div class="trend-chart-wrap" style="height:200px"><canvas id="vehicleRevenueChart"></canvas></div>
+      </section>
+      <section class="panel-card">
+        <div class="panel-header"><span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-dollar"></use></svg>Payment Method</span></div>
+        <div class="trend-chart-wrap" style="height:200px"><canvas id="paymentMethodChart"></canvas></div>
+      </section>
+      <section class="panel-card">
+        <div class="panel-header"><span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-gauge"></use></svg>Discount Analysis</span></div>
+        <div class="trend-chart-wrap" style="height:200px"><canvas id="discountChart"></canvas></div>
+      </section>
+    </div>
+
+    <section class="panel-card" style="margin-bottom:16px">
+      <div class="panel-header">
+        <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-dollar"></use></svg>Record Parking Payment</span>
+      </div>
+      <div class="payment-form" aria-label="Record parking payment">
+        <label>
+          Vehicle
+          <select class="payment-input" id="paymentVehicleType" onchange="onPaymentVehicleTypeChange()">
+            <option value="car">Car</option>
+            <option value="motorcycle">Motorcycle</option>
+          </select>
+        </label>
+        <label>
+          Regular PHP
+          <input class="payment-input" id="paymentAmount" type="number" min="1" max="10000" step="1" value="50" />
+        </label>
+        <label>
+          Discount
+          <select class="payment-input" id="paymentDiscount">
+            <option value="none">None</option>
+            <option value="pwd">PWD 20%</option>
+            <option value="senior">Senior 20%</option>
+          </select>
+        </label>
+        <label>
+          Method
+          <select class="payment-input" id="paymentMethod">
+            <option value="cash">Cash</option>
+            <option value="gcash">GCash</option>
+            <option value="card">Card</option>
+            <option value="other">Other</option>
+          </select>
+        </label>
+        <label>
+          Note
+          <input class="payment-input" id="paymentNote" type="text" placeholder="Optional" maxlength="120" />
+        </label>
+        <button class="setting-save-btn" id="paymentRecordBtn" onclick="recordPayment()">Record</button>
+        <div class="payment-status" id="paymentStatus">Records actual paid parking money for daily, weekly, and monthly profit.</div>
+      </div>
+      <div class="revenue-bars" id="dailyRevenueBars" aria-label="Daily parking revenue" style="margin-top:14px"></div>
+    </section>
+
+    <section class="panel-card">
+      <div class="panel-header">
+        <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-clock"></use></svg>Transaction Logs</span>
+        <span class="status-chip">Last 10 payments</span>
+      </div>
+      <div class="report-table-wrap">
+        <table class="report-table">
+          <thead><tr><th>Date / Time</th><th>Vehicle</th><th>Amount</th><th>Payment</th><th>Discount</th></tr></thead>
+          <tbody id="transactionLogsBody">
+            <tr><td colspan="5" class="report-empty">No payments recorded yet.</td></tr>
+          </tbody>
+        </table>
       </div>
     </section>
   </section>
@@ -1897,7 +2070,7 @@
 
         <section class="panel-card" style="margin-top:14px">
           <div class="panel-header">
-            <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-camera"></use></svg>Camera Info</span>
+            <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-camera"></use></svg>Camera Health</span>
             <span class="panel-note mono" id="streamPortInfo"></span>
           </div>
           <div class="metric-row">
@@ -1905,6 +2078,21 @@
             <div class="camera-metric"><span>Zones</span><strong id="camZones">--</strong></div>
             <div class="camera-metric"><span>Occupied</span><strong id="camOcc">--</strong></div>
             <div class="camera-metric"><span>Status</span><strong id="camStatus" style="color:var(--green)">--</strong></div>
+          </div>
+        </section>
+
+        <section class="panel-card" style="margin-top:14px">
+          <div class="panel-header">
+            <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-clock"></use></svg>Detection Log</span>
+            <span class="status-chip" id="feedActivityCount">0 events</span>
+          </div>
+          <div class="report-table-wrap">
+            <table class="report-table">
+              <thead><tr><th>Timestamp</th><th>Occupied / Total</th><th>Occupancy</th></tr></thead>
+              <tbody id="feedDetectionLogBody">
+                <tr><td colspan="3" class="report-empty">Waiting for detector data.</td></tr>
+              </tbody>
+            </table>
           </div>
         </section>
 
@@ -2016,10 +2204,23 @@
       </article>
     </div>
 
-    <section class="insight-card action" id="ins-action-card">
-      <div class="insight-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-alert"></use></svg>Admin Recommendation</div>
-      <div class="insight-text action-text" id="ins-action">
-        <span class="insight-loading">Analyzing...</span>
+    <section class="panel-card" style="margin-bottom:16px">
+      <div class="panel-header">
+        <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-alert"></use></svg>Recommendation Cards</span>
+      </div>
+      <div class="insight-grid" id="insRecommendationCards" style="grid-template-columns:repeat(auto-fit, minmax(260px, 1fr))">
+        <div class="empty-state"><strong>Analyzing...</strong>Recommendations will appear once insights are computed.</div>
+      </div>
+    </section>
+
+    <section class="panel-card" style="margin-bottom:16px">
+      <div class="panel-header">
+        <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-sparkles"></use></svg>Model Confidence</span>
+        <span class="panel-note">From your trained ML models</span>
+      </div>
+      <div class="compare-bars">
+        <span>Vehicle count</span><div class="compare-track"><div class="compare-fill" id="confVehiclesBar"></div></div><span id="confVehiclesValue">--</span>
+        <span>Occupancy</span><div class="compare-track"><div class="compare-fill" id="confOccupancyBar"></div></div><span id="confOccupancyValue">--</span>
       </div>
     </section>
 
@@ -2109,11 +2310,21 @@
       </div>
     </div>
 
-    <div class="insight-overview" aria-label="Prediction summary">
+    <div class="insight-overview cols-5" aria-label="Prediction summary">
+      <article class="insight-summary-card">
+        <span><svg class="icon icon-sm" aria-hidden="true"><use href="#i-gauge"></use></svg>Current occupancy</span>
+        <strong id="predFullCurrentOcc">--</strong>
+        <small>Live reading from the detector.</small>
+      </article>
       <article class="insight-summary-card">
         <span><svg class="icon icon-sm" aria-hidden="true"><use href="#i-chart"></use></svg>Peak hour</span>
         <strong id="predFullPeak">--</strong>
         <small id="predFullPeakSub">Highest expected occupancy hour.</small>
+      </article>
+      <article class="insight-summary-card">
+        <span><svg class="icon icon-sm" aria-hidden="true"><use href="#i-sparkles"></use></svg>Forecast accuracy</span>
+        <strong id="predFullAccuracy">--</strong>
+        <small>Trained model confidence score.</small>
       </article>
       <article class="insight-summary-card">
         <span><svg class="icon icon-sm" aria-hidden="true"><use href="#i-grid"></use></svg>Active capacity</span>
@@ -2141,7 +2352,17 @@
       </div>
     </section>
 
-    <div class="insight-grid" style="grid-template-columns:repeat(2, minmax(0, 1fr))">
+    <section class="panel-card" style="margin-top:14px">
+      <div class="panel-header">
+        <span class="panel-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-grid"></use></svg>Weekly Occupancy Heatmap</span>
+        <span class="panel-note">Average occupancy by hour, last 30 days</span>
+      </div>
+      <div id="heatmapWrap" style="overflow-x:auto">
+        <div class="empty-state"><strong>Loading heatmap...</strong></div>
+      </div>
+    </section>
+
+    <div class="insight-grid" style="grid-template-columns:repeat(2, minmax(0, 1fr)); margin-top:14px">
       <article class="insight-card">
         <div class="insight-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-activity"></use></svg>Busy days</div>
         <div class="insight-text" id="predFullBusyDays">
@@ -2589,9 +2810,9 @@ function switchPanel(name, btn) {
   document.getElementById('pageTitle').textContent = meta.title;
   document.getElementById('pageSub').textContent = meta.sub;
 
-  if (name === 'insights') fetchInsights();
+  if (name === 'insights') { fetchInsights(); fetchMlConfidence(); }
   if (name === 'revenue') fetchRevenueDashboard();
-  if (name === 'predictions') fetchFullPredictions();
+  if (name === 'predictions') { fetchFullPredictions(); fetchMlConfidence(); fetchHeatmap(); }
 }
 
 function cleanText(value) {
@@ -2676,9 +2897,10 @@ async function fetchStats() {
     if (rateMeter) rateMeter.style.width = `${Math.min(100, Math.max(0, pct))}%`;
 
     const bar = document.getElementById('occBar');
-    bar.style.width = Math.min(pct, 100) + '%';
-    bar.className = 'bar-fill' + (pct >= 90 ? ' crit' : pct >= 70 ? ' warn' : '');
-    document.getElementById('occPct').textContent = Math.round(pct) + '%';
+    if (bar) {
+      bar.style.width = Math.min(pct, 100) + '%';
+      bar.className = 'bar-fill' + (pct >= 90 ? ' crit' : pct >= 70 ? ' warn' : '');
+    }
 
     if (d.fps != null) {
       document.getElementById('fpsLabel').textContent = d.fps + ' fps';
@@ -2709,6 +2931,57 @@ async function fetchStats() {
   }
 }
 
+let trendChartInstance = null;
+function updateTrendChart(items) {
+  const canvas = document.getElementById('trendChart');
+  if (!canvas || typeof Chart === 'undefined') return;
+  const ordered = [...items].slice(-30);
+  const labels = ordered.map(h => {
+    const raw = h.time || h.timestamp || '';
+    return raw ? new Date(raw).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+  });
+  const values = ordered.map(h => Number(h.pct ?? 0));
+  const label = document.getElementById('trendRangeLabel');
+  if (label) label.textContent = ordered.length ? `Last ${ordered.length} readings` : 'Waiting for data';
+
+  if (trendChartInstance) {
+    trendChartInstance.data.labels = labels;
+    trendChartInstance.data.datasets[0].data = values;
+    trendChartInstance.update();
+    return;
+  }
+  trendChartInstance = new Chart(canvas.getContext('2d'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Occupancy %',
+        data: values,
+        borderColor: 'rgba(50,230,173,1)',
+        backgroundColor: 'rgba(50,230,173,0.14)',
+        borderWidth: 2.5,
+        pointRadius: 0,
+        pointHoverRadius: 4,
+        fill: true,
+        tension: 0.35,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: ctx => ' ' + ctx.parsed.y + '% occupied' } }
+      },
+      scales: {
+        x: { ticks: { color: '#7d8aa0', maxTicksLimit: 8 }, grid: { display: false } },
+        y: { min: 0, max: 100, ticks: { color: '#7d8aa0', callback: v => v + '%' }, grid: { color: 'rgba(255,255,255,.05)' } }
+      }
+    }
+  });
+}
+
 let _historySeq = 0;
 async function fetchHistory() {
   const seq = ++_historySeq;
@@ -2728,6 +3001,21 @@ async function fetchHistory() {
 function renderHistory(items) {
   const list = document.getElementById('activityList');
   setText('activityCount', `${items && items.length ? items.length : 0} events`);
+  setText('feedActivityCount', `${items && items.length ? items.length : 0} events`);
+  updateTrendChart(items || []);
+
+  const logBody = document.getElementById('feedDetectionLogBody');
+  if (logBody) {
+    logBody.innerHTML = (items && items.length)
+      ? [...items].reverse().slice(0, 20).map(h => {
+          const rawTime = h.time || h.timestamp || '';
+          const time = rawTime ? new Date(rawTime).toLocaleString() : '--';
+          const occ = h.occupied != null ? `${h.occupied} / ${h.total ?? '?'}` : '--';
+          return `<tr><td>${escapeHtml(time)}</td><td>${escapeHtml(occ)}</td><td class="col-money">${h.pct ?? 0}%</td></tr>`;
+        }).join('')
+      : '<tr><td colspan="3" class="report-empty">Waiting for detector data.</td></tr>';
+  }
+
   if (!items || items.length === 0) {
     list.innerHTML = '<div class="empty-state"><strong>No activity recorded yet</strong>Detection updates will show here.</div>';
     return;
@@ -2766,12 +3054,12 @@ async function fetchPredictions() {
     }
 
     if (Object.keys(hourly).length === 0) {
-      grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><strong>Not enough data yet</strong>Predictions need more logged activity.</div>';
+      if (grid) grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><strong>Not enough data yet</strong>Predictions need more logged activity.</div>';
       return;
     }
 
-    note.textContent = d.peak_label ? 'Peak: ' + cleanText(d.peak_label) : 'Next 6 hours';
-    grid.innerHTML = next6.map(p => `
+    if (note) note.textContent = d.peak_label ? 'Peak: ' + cleanText(d.peak_label) : 'Next 6 hours';
+    if (grid) grid.innerHTML = next6.map(p => `
       <div class="pred-card">
         <div class="pred-time">${String(p.hour).padStart(2, '0')}:00</div>
         <div class="pred-val">${p.pct}%</div>
@@ -2820,6 +3108,15 @@ async function fetchFullPredictions() {
     setText('predFullTodayRevenue', d.today_revenue_forecast != null
       ? formatPhp(d.today_revenue_forecast) : '--');
     setText('predFullTs', d.generated_at_ph ? `Generated ${cleanText(d.generated_at_ph)}` : '--');
+
+    try {
+      const statsR = await fetch('/api/stats');
+      if (statsR.ok) {
+        const s = await statsR.json();
+        const pct = s.occupancy_pct ?? (s.total ? Math.round((s.occupied || 0) / s.total * 100) : 0);
+        setText('predFullCurrentOcc', `${Math.round(pct)}%`);
+      }
+    } catch (_) {}
 
     const bars = document.getElementById('predFullHourBars');
     const note = document.getElementById('predFullHourNote');
@@ -2885,6 +3182,105 @@ async function fetchFullPredictions() {
   }
 }
 
+let monthlyRevenueChartInstance = null, vehicleRevenueChartInstance = null,
+    paymentMethodChartInstance = null, discountChartInstance = null;
+
+function renderRevenueCharts(d) {
+  if (typeof Chart === 'undefined') return;
+
+  const monthlyCanvas = document.getElementById('monthlyRevenueChart');
+  if (monthlyCanvas) {
+    const monthly = Array.isArray(d.monthly_revenue) ? d.monthly_revenue : [];
+    if (monthlyRevenueChartInstance) monthlyRevenueChartInstance.destroy();
+    monthlyRevenueChartInstance = new Chart(monthlyCanvas.getContext('2d'), {
+      type: 'line',
+      data: {
+        labels: monthly.map(m => m.label || m.month || '--'),
+        datasets: [{
+          label: 'Revenue (PHP)',
+          data: monthly.map(m => Number(m.revenue_php || 0)),
+          borderColor: 'rgba(50,230,173,1)',
+          backgroundColor: 'rgba(50,230,173,0.14)',
+          borderWidth: 2.5,
+          pointRadius: 3,
+          fill: true,
+          tension: 0.35,
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ' ' + formatPhp(ctx.parsed.y) } } },
+        scales: {
+          x: { ticks: { color: '#7d8aa0' }, grid: { display: false } },
+          y: { ticks: { color: '#7d8aa0', callback: v => 'PHP ' + Number(v).toLocaleString() }, grid: { color: 'rgba(255,255,255,.05)' } }
+        }
+      }
+    });
+  }
+
+  const doughnutOpts = {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { position: 'bottom', labels: { color: '#aaa', font: { size: 11 }, boxWidth: 10 } } }
+  };
+
+  const vehicleCanvas = document.getElementById('vehicleRevenueChart');
+  if (vehicleCanvas) {
+    const byVehicle = d.revenue_by_vehicle_type || {};
+    const labels = Object.keys(byVehicle);
+    if (vehicleRevenueChartInstance) vehicleRevenueChartInstance.destroy();
+    vehicleRevenueChartInstance = labels.length ? new Chart(vehicleCanvas.getContext('2d'), {
+      type: 'doughnut',
+      data: {
+        labels: labels.map(l => l === 'motorcycle' ? 'Motorcycle' : 'Car'),
+        datasets: [{
+          data: labels.map(l => byVehicle[l].revenue_php || 0),
+          backgroundColor: ['rgba(72,199,142,.8)', 'rgba(97,173,255,.8)', 'rgba(244,162,97,.8)'],
+          borderWidth: 0,
+        }]
+      },
+      options: { ...doughnutOpts, plugins: { ...doughnutOpts.plugins, tooltip: { callbacks: { label: ctx => ' ' + ctx.label + ': ' + formatPhp(ctx.parsed) } } } }
+    }) : null;
+  }
+
+  const paymentCanvas = document.getElementById('paymentMethodChart');
+  if (paymentCanvas) {
+    const byMethod = d.revenue_by_payment_method || {};
+    const labels = Object.keys(byMethod);
+    if (paymentMethodChartInstance) paymentMethodChartInstance.destroy();
+    paymentMethodChartInstance = labels.length ? new Chart(paymentCanvas.getContext('2d'), {
+      type: 'doughnut',
+      data: {
+        labels: labels.map(l => l.toUpperCase()),
+        datasets: [{
+          data: labels.map(l => byMethod[l].transaction_count || 0),
+          backgroundColor: ['rgba(72,199,142,.8)', 'rgba(97,173,255,.8)', 'rgba(244,162,97,.8)', 'rgba(255,92,122,.8)'],
+          borderWidth: 0,
+        }]
+      },
+      options: { ...doughnutOpts, plugins: { ...doughnutOpts.plugins, tooltip: { callbacks: { label: ctx => ' ' + ctx.label + ': ' + ctx.parsed + ' payments' } } } }
+    }) : null;
+  }
+
+  const discountCanvas = document.getElementById('discountChart');
+  if (discountCanvas) {
+    const byDiscount = d.revenue_by_discount_type || {};
+    const labels = Object.keys(byDiscount);
+    if (discountChartInstance) discountChartInstance.destroy();
+    discountChartInstance = labels.length ? new Chart(discountCanvas.getContext('2d'), {
+      type: 'doughnut',
+      data: {
+        labels: labels.map(l => l === 'none' ? 'Regular' : l.toUpperCase()),
+        datasets: [{
+          data: labels.map(l => byDiscount[l].transaction_count || 0),
+          backgroundColor: ['rgba(97,173,255,.8)', 'rgba(72,199,142,.8)', 'rgba(244,162,97,.8)'],
+          borderWidth: 0,
+        }]
+      },
+      options: { ...doughnutOpts, plugins: { ...doughnutOpts.plugins, tooltip: { callbacks: { label: ctx => ' ' + ctx.label + ': ' + ctx.parsed + ' payments' } } } }
+    }) : null;
+  }
+}
+
 async function fetchRevenueDashboard() {
   try {
     const r = await fetch('/api/revenue/dashboard', { cache: 'no-store' });
@@ -2903,6 +3299,11 @@ async function fetchRevenueDashboard() {
       const peakOcc = Number(d.max_occupied_count || 0);
       maxMeter.style.width = `${maxTotal ? Math.min(100, peakOcc / maxTotal * 100) : 0}%`;
     }
+
+    setText('statPeakVehicles', d.max_occupied_count ?? '--');
+    setText('statPeakVehiclesSub', `Highest count today · ${d.log_count ?? 0} logs`);
+    setText('statTodayRevenue', formatPhp(d.today_revenue_php, { forceCents: false }));
+    setText('statTodayRevenueSub', `${d.today_transaction_count || d.today_entry_count || 0} payments recorded`);
 
     setText('dailyRevenueValue', formatPhp(d.today_revenue_php, { forceCents: true }));
     setText('weeklyRevenueValue', formatPhp(d.week_revenue_php, { forceCents: true }));
@@ -2966,6 +3367,31 @@ async function fetchRevenueDashboard() {
             <div class="payment-amount">${escapeHtml(formatPhp(item.final_amount_php, { forceCents: true }))}</div>
           </div>`;
       }).join('') : '<div class="empty-state"><strong>No payments recorded yet</strong>Use the form above to record paid parking.</div>';
+    }
+
+    setText('avgTransactionValue', formatPhp(d.avg_transaction_php, { forceCents: true }));
+    const byPayment = d.revenue_by_payment_method || {};
+    const gcash = byPayment.gcash || { transaction_count: 0 };
+    const totalPayments = Object.values(byPayment).reduce((s, v) => s + (v.transaction_count || 0), 0);
+    setText('gcashCount', gcash.transaction_count || 0);
+    setText('gcashSub', totalPayments ? `${Math.round((gcash.transaction_count || 0) / totalPayments * 100)}% of ${totalPayments} total` : 'of total payments');
+
+    renderRevenueCharts(d);
+
+    const txBody = document.getElementById('transactionLogsBody');
+    if (txBody) {
+      txBody.innerHTML = recent.length ? recent.map(item => {
+        const discount = item.discount_type && item.discount_type !== 'none' ? String(item.discount_type).toUpperCase() : '—';
+        const vehicle = item.vehicle_type === 'motorcycle' ? 'Motorcycle' : 'Car';
+        return `
+          <tr>
+            <td>${escapeHtml(cleanText(item.paid_at_ph || ''))}</td>
+            <td>${vehicle}</td>
+            <td class="col-money">${escapeHtml(formatPhp(item.final_amount_php, { forceCents: true }))}</td>
+            <td>${escapeHtml(cleanText(item.payment_method || 'cash').toUpperCase())}</td>
+            <td class="col-discount">${discount}</td>
+          </tr>`;
+      }).join('') : '<tr><td colspan="5" class="report-empty">No payments recorded yet.</td></tr>';
     }
   } catch (e) {
     console.error('fetchRevenueDashboard error:', e);
@@ -3040,6 +3466,7 @@ function renderZones(zones, total, occupied) {
   const entries = Object.entries(zones);
   const freeCountEl = document.getElementById('zoneFreeCount');
   const occCountEl = document.getElementById('zoneOccCount');
+  const lotGrid = document.getElementById('lotStatusGrid');
 
   if (entries.length === 0) {
     if (freeCountEl) freeCountEl.textContent = total > 0 ? Math.max(0, total - occupied) : '--';
@@ -3051,8 +3478,14 @@ function renderZones(zones, total, occupied) {
           <span class="zone-name">Main Lot</span>
           <span class="zone-badge ${occupied > 0 ? 'occ' : 'free'}">${total - occupied} free / ${occupied} occ</span>
         </div>`;
+      if (lotGrid) {
+        lotGrid.innerHTML = Array.from({ length: total }, (_, i) =>
+          `<div class="lot-cell ${i < occupied ? 'occ' : 'free'}" title="Spot ${i + 1}: ${i < occupied ? 'Occupied' : 'Free'}"></div>`
+        ).join('');
+      }
     } else {
       list.innerHTML = '<div class="empty-state"><strong>No zones yet</strong>Zone states will appear after detection starts.</div>';
+      if (lotGrid) lotGrid.innerHTML = '<div class="empty-state"><strong>Waiting for zone data</strong>Lot status will appear here.</div>';
     }
     return;
   }
@@ -3073,6 +3506,13 @@ function renderZones(zones, total, occupied) {
         <span class="zone-badge ${cls}">${label}</span>
       </div>`;
   }).join('');
+
+  if (lotGrid) {
+    lotGrid.innerHTML = entries.map(([name, isOccupied]) => {
+      const cls = isOccupied === true ? 'occ' : isOccupied === false ? 'free' : '';
+      return `<div class="lot-cell ${cls}" title="${name}: ${isOccupied === true ? 'Occupied' : isOccupied === false ? 'Free' : 'Unknown'}"></div>`;
+    }).join('');
+  }
 }
 
 function clampPct(v) {
@@ -3213,6 +3653,84 @@ function renderPeakVisual(hourlyByDay) {
   if (label) label.textContent = max > 0 ? `Peak ${hourLabel24(peakHour)}` : '--';
 }
 
+async function fetchMlConfidence() {
+  try {
+    const r = await fetch('/api/ml/dashboard');
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    const vehConf = d?.vehicles?.confidence_pct;
+    const occConf = d?.occupancy?.confidence_pct;
+    const nums = [vehConf, occConf].filter(v => Number.isFinite(v));
+    const avgConf = nums.length ? Math.round(nums.reduce((a, b) => a + b, 0) / nums.length) : null;
+
+    setText('predFullAccuracy', avgConf != null ? `${avgConf}%` : '--');
+
+    const setBar = (barId, valueId, pct) => {
+      const bar = document.getElementById(barId);
+      if (bar) bar.style.width = Number.isFinite(pct) ? `${Math.min(100, Math.max(0, pct))}%` : '0%';
+      setText(valueId, Number.isFinite(pct) ? `${Math.round(pct)}%` : 'n/a');
+    };
+    setBar('confVehiclesBar', 'confVehiclesValue', vehConf);
+    setBar('confOccupancyBar', 'confOccupancyValue', occConf);
+  } catch (e) {
+    console.warn('ML confidence fetch failed:', e);
+  }
+}
+
+async function fetchHeatmap() {
+  const wrap = document.getElementById('heatmapWrap');
+  if (!wrap) return;
+  try {
+    const r = await fetch('/api/predictions/hourly-by-day');
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    const dayLabels = d.day_labels || ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    const byDow = d.hourly_by_dow || {};
+
+    let maxPct = 1;
+    for (let dow = 0; dow < 7; dow++) {
+      const hours = byDow[dow] || byDow[String(dow)] || {};
+      for (let h = 0; h < 24; h++) {
+        const v = Number((hours[h] || hours[String(h)] || {}).occ_pct || 0);
+        if (v > maxPct) maxPct = v;
+      }
+    }
+
+    const hourHeader = ['<div></div>'].concat(
+      Array.from({ length: 24 }, (_, h) => `<div class="heatmap-hour-label">${h % 3 === 0 ? h : ''}</div>`)
+    ).join('');
+
+    const rows = dayLabels.map((label, dow) => {
+      const hours = byDow[dow] || byDow[String(dow)] || {};
+      const cells = Array.from({ length: 24 }, (_, h) => {
+        const v = Number((hours[h] || hours[String(h)] || {}).occ_pct || 0);
+        const alpha = Math.max(0.05, v / maxPct);
+        return `<div class="heatmap-cell" style="background:rgba(50,230,173,${alpha.toFixed(2)})" title="${label} ${String(h).padStart(2,'0')}:00 — ${v}% avg occupancy"></div>`;
+      }).join('');
+      return `<div class="heatmap-row-label">${label}</div>${cells}`;
+    }).join('');
+
+    wrap.innerHTML = `<div class="heatmap-grid">${hourHeader}${rows}</div>`;
+  } catch (e) {
+    wrap.innerHTML = '<div class="empty-state"><strong>Heatmap unavailable</strong>Could not load hourly pattern data.</div>';
+  }
+}
+
+function renderRecommendationCards(items) {
+  const wrap = document.getElementById('insRecommendationCards');
+  if (!wrap) return;
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) {
+    wrap.innerHTML = '<div class="empty-state"><strong>No immediate action needed</strong>The lot is operating normally.</div>';
+    return;
+  }
+  wrap.innerHTML = list.map(text => `
+    <article class="insight-card action">
+      <div class="insight-label"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-alert"></use></svg>Recommended</div>
+      <div class="insight-text action-text">${escapeHtml(cleanText(text))}</div>
+    </article>`).join('');
+}
+
 async function fetchInsights() {
   try {
     const [r, statsReq, predReq, hourlyReq, histReq] = await Promise.all([
@@ -3241,6 +3759,7 @@ async function fetchInsights() {
     set('ins-pricing', d.pricing);
     set('ins-peak', d.peak_hours);
     set('ins-action', d.admin_action);
+    renderRecommendationCards(d.admin_action_items);
     renderStatusVisual(liveStats);
     renderTrendVisual(hist);
     renderForecastVisual(preds);
@@ -3260,6 +3779,27 @@ async function fetchInsights() {
       const nextRefresh = d.next_refresh ? ` - ${cleanText(d.next_refresh)}` : '';
       ts.textContent = lastRefreshed + nextRefresh;
     }
+
+    // ── Overview: AI Forecast panel + Dynamic Pricing stat ──
+    const hourlyEst = preds.hourly_est || {};
+    const nextHour = (new Date().getHours() + 1) % 24;
+    setText('aiNextHour', hourlyEst[String(nextHour)] != null ? `${Math.round(hourlyEst[String(nextHour)])}%` : '--');
+    setText('aiPeakTime', preds.peak_label ? cleanText(preds.peak_label) : '--');
+    setText('aiTrendText', d.trend ? cleanText(d.trend) : '--');
+    setText('aiActionText', d.admin_action ? cleanText(d.admin_action) : 'Waiting for insight data...');
+
+    const pd = d.pricing_details || {};
+    const chg = Number(pd.price_change_pct ?? 0);
+    const pricingCard = document.getElementById('statPricingCard');
+    let statusLabel = 'Normal', statusClass = 'green';
+    if (pd.pricing_reason === 'manual_admin_override') { statusLabel = 'Manual'; statusClass = 'blue'; }
+    else if (chg >= 5) { statusLabel = 'Surge'; statusClass = 'red'; }
+    else if (chg <= -5) { statusLabel = 'Discount'; statusClass = 'blue'; }
+    setText('statPricingStatus', statusLabel);
+    if (pricingCard) pricingCard.className = 'stat-card ' + statusClass;
+    setText('statPricingStatusSub', pd.recommended_price_php != null
+      ? `PHP ${Number(pd.recommended_price_php).toFixed(0)}/hr recommended`
+      : 'Waiting for pricing data');
   } catch(e) { console.warn('Insights:', e); }
 }
 
@@ -3347,6 +3887,7 @@ if (isAuthorizedAdmin) {
   fetchHistory();
   fetchPredictions();
   fetchRevenueDashboard();
+  fetchInsights();
 
   setInterval(fetchStats, 3000);
   setInterval(fetchHistory, 5000);
@@ -3354,13 +3895,10 @@ if (isAuthorizedAdmin) {
   setInterval(fetchRevenueDashboard, 30000);
   setInterval(fetchLayoutMode, 30000);
   setInterval(fetchPricingSettings, 30000);
-  setInterval(() => {
-    if (isPanelActive('insights')) fetchInsights();
-  }, 10000);
+  setInterval(fetchInsights, 10000);
 }
 </script>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
 // ── Reports Module ──────────────────────────────────────────────
 let reportTab = 'daily';

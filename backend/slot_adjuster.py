@@ -425,7 +425,7 @@ class SlotState:
             self.adjustment_reason = reason
             if demand != self._last_demand:
                 self._needs_bg_reset = True
-                self._last_demand    = demand
+                self._last_demand    = demand   
             self.demand       = demand
             self.forecast_veh = forecast_veh
             self.current_occ  = current_occ
