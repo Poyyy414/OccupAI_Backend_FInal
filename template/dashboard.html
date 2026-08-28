@@ -185,6 +185,7 @@
     }
 
     .nav-item {
+      position: relative;
       display: flex;
       align-items: center;
       gap: 11px;
@@ -198,7 +199,21 @@
       font-size: 14px;
       font-weight: 600;
       outline: none;
+      overflow: hidden;
       transition: color .16s ease, background .16s ease, border-color .16s ease, transform .16s ease;
+    }
+
+    .nav-item::before {
+      content: "";
+      position: absolute;
+      left: 0; top: 8%;
+      width: 3px;
+      height: 84%;
+      border-radius: 0 3px 3px 0;
+      background: var(--green);
+      transform: scaleY(0);
+      transform-origin: center;
+      transition: transform .22s cubic-bezier(.34,1.56,.64,1);
     }
 
     .nav-item:hover { background: var(--surface); color: var(--text); transform: translateX(2px); }
@@ -211,6 +226,8 @@
       box-shadow: inset 0 0 0 1px rgba(39, 212, 151, .26), 0 12px 28px rgba(0, 0, 0, .16);
     }
 
+    .nav-item.active::before { transform: scaleY(1); }
+
     .nav-icon {
       display: grid;
       place-items: center;
@@ -219,7 +236,10 @@
       border-radius: 6px;
       background: rgba(255, 255, 255, .04);
       color: currentColor;
+      transition: transform .16s ease;
     }
+
+    .nav-item.active .nav-icon { transform: scale(1.08); }
 
     .sidebar-footer {
       padding: 14px 12px 16px;
@@ -359,7 +379,16 @@
       padding: 24px 30px 34px;
     }
 
-    .content.active { display: block; }
+    .content.active { display: block; animation: panelIn .32s cubic-bezier(.16,.8,.3,1); }
+
+    @keyframes panelIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: none; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .content.active { animation: none; }
+    }
 
     .summary-strip {
       display: grid;
@@ -419,6 +448,13 @@
       background: var(--glass);
       box-shadow: 0 12px 32px rgba(0, 0, 0, .16);
       backdrop-filter: blur(14px);
+      transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+    }
+
+    .panel-card:hover, .zone-panel:hover, .insight-card:hover, .insight-summary-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 18px 40px rgba(0, 0, 0, .22);
+      border-color: var(--border);
     }
 
     .stat-card {
@@ -429,6 +465,19 @@
       border-radius: var(--radius);
       background: var(--surface);
       color: var(--text);
+      transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+    }
+
+    .stat-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 16px 36px rgba(0, 0, 0, .2);
+      border-color: color-mix(in srgb, currentColor 45%, var(--border-soft));
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .panel-card, .zone-panel, .insight-card, .insight-summary-card, .stat-card {
+        transition: none;
+      }
     }
 
     /* Color is reserved for cards that actually signal a status — most
@@ -482,6 +531,18 @@
     .stat-card.green .stat-value, .stat-card.red .stat-value,
     .stat-card.blue .stat-value, .stat-card.orange .stat-value {
       color: currentColor;
+    }
+
+    /* Brief highlight when a live value actually changes, so updates feel
+       noticed instead of just silently swapping text. */
+    @keyframes valueFlash {
+      0%   { text-shadow: 0 0 0 rgba(69, 223, 173, 0); }
+      30%  { text-shadow: 0 0 14px rgba(69, 223, 173, .55); }
+      100% { text-shadow: 0 0 0 rgba(69, 223, 173, 0); }
+    }
+    .stat-value.value-updated { animation: valueFlash .7s ease; }
+    @media (prefers-reduced-motion: reduce) {
+      .stat-value.value-updated { animation: none; }
     }
 
     .stat-sub { margin-top: 9px; color: var(--muted); font-size: 12px; }
@@ -2946,7 +3007,17 @@ function escapeHtml(value) {
 
 function setText(id, value) {
   const el = document.getElementById(id);
-  if (el) el.textContent = value;
+  if (!el) return;
+  const next = String(value ?? '');
+  // Flash stat numbers when they actually change value, so a live update is
+  // noticeable instead of just silently overwriting the old text. Skipped
+  // for non-stat text (hints/labels) and for no-op writes.
+  if (el.classList.contains('stat-value') && el.textContent !== next) {
+    el.classList.remove('value-updated');
+    void el.offsetWidth; // force reflow so re-adding the class restarts the animation
+    el.classList.add('value-updated');
+  }
+  el.textContent = next;
 }
 
 function setConnected(ok) {

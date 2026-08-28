@@ -26,7 +26,7 @@
       --radius: 8px;
     }
 
-    html { color-scheme: dark; }
+    html { color-scheme: dark; scroll-behavior: smooth; }
 
     body {
       min-height: 100vh;
@@ -35,6 +35,14 @@
       letter-spacing: 0;
       overflow-x: hidden;
       background: var(--bg);
+      opacity: 1;
+      transition: opacity .32s ease;
+    }
+
+    body.page-leaving { opacity: 0; }
+
+    @media (prefers-reduced-motion: reduce) {
+      body, .reveal { transition: none !important; animation: none !important; }
     }
 
     body::before {
@@ -143,6 +151,34 @@
       min-height: 310px;
     }
 
+    /* Subtle reveal-on-load: content eases up into place instead of popping
+       in — applied once via JS adding .in on DOMContentLoaded, staggered
+       per element with --reveal-delay. */
+    .reveal {
+      opacity: 0;
+      transform: translateY(14px);
+      transition: opacity .55s cubic-bezier(.16,.8,.3,1), transform .55s cubic-bezier(.16,.8,.3,1);
+      transition-delay: var(--reveal-delay, 0s);
+    }
+    .reveal.in { opacity: 1; transform: none; }
+
+    @keyframes cardGlowPulse {
+      0%, 100% { opacity: .55; transform: scale(1); }
+      50%      { opacity: .85; transform: scale(1.04); }
+    }
+
+    .stage::before {
+      content: "";
+      position: absolute;
+      z-index: 2;
+      width: min(440px, 90%);
+      height: 320px;
+      background: radial-gradient(closest-side, rgba(69,223,173,.16), transparent 72%);
+      filter: blur(6px);
+      pointer-events: none;
+      animation: cardGlowPulse 6s ease-in-out infinite;
+    }
+
     .auth-card {
       position: relative;
       z-index: 3;
@@ -155,6 +191,12 @@
         var(--glass);
       box-shadow: 0 26px 80px rgba(0, 0, 0, .46), inset 0 1px 0 rgba(255,255,255,.08);
       backdrop-filter: blur(22px);
+      transition: transform .3s ease, box-shadow .3s ease;
+    }
+
+    .auth-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 32px 90px rgba(0, 0, 0, .5), inset 0 1px 0 rgba(255,255,255,.1);
     }
 
     .auth-card::before {
@@ -309,13 +351,13 @@
 
     <section class="hero">
       <div class="headline">
-        <div class="eyebrow">105 Penafrancia Ave</div>
+        <div class="eyebrow reveal" style="--reveal-delay:.05s">105 Penafrancia Ave</div>
       </div>
 
       <div class="stage">
         <div class="lot-plate" aria-hidden="true"></div>
 
-        <div class="auth-card">
+        <div class="auth-card reveal" style="--reveal-delay:.16s">
           <div class="card-title">Welcome back</div>
           <div class="card-sub">No account yet? <a href="/register">Create one</a></div>
 
@@ -345,6 +387,19 @@
       return normalized === 'admin' ? '/dashboard' : '/driver';
     }
 
+    function goTo(url) {
+      // Fade out before navigating instead of an abrupt jump — skipped
+      // entirely if the visitor has reduced-motion set.
+      const prefersReduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (prefersReduced) { window.location.href = url; return; }
+      document.body.classList.add('page-leaving');
+      setTimeout(() => { window.location.href = url; }, 260);
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      document.querySelectorAll('.reveal').forEach(el => requestAnimationFrame(() => el.classList.add('in')));
+    });
+
     (function () {
       try {
         const raw = localStorage.getItem('occupai_user');
@@ -355,7 +410,7 @@
         }
         const u = JSON.parse(raw);
         if (u && typeof u === 'object' && u.user_id) {
-          window.location.href = destinationForRole(u.role);
+          goTo(destinationForRole(u.role));
         } else {
           localStorage.removeItem('occupai_user');
           localStorage.removeItem('occupai_token');
@@ -415,7 +470,7 @@
         }
 
         btn.innerHTML = 'Redirecting...';
-        setTimeout(() => { window.location.href = destinationForRole(userObj.role); }, 100);
+        setTimeout(() => { goTo(destinationForRole(userObj.role)); }, 100);
       } catch (e) {
         showErr(e.message);
         btn.disabled = false;
