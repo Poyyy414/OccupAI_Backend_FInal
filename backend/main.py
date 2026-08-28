@@ -1050,6 +1050,11 @@ def _ensure_payment_table():
         execute("ALTER TABLE parking_payments ADD COLUMN IF NOT EXISTS user_id INTEGER")
         execute("ALTER TABLE parking_payments ADD COLUMN IF NOT EXISTS vehicle_type TEXT NOT NULL DEFAULT 'car'")
         execute("ALTER TABLE parking_payments ADD COLUMN IF NOT EXISTS discount_id_number TEXT")
+        # Which admin/staff account confirmed the PWD/Senior ID in person before
+        # applying the discount. NULL for GCash payments the driver completes
+        # themselves — nobody on staff sees those IDs, which is the real gap in
+        # verifying them (see _check_discount_id_abuse below).
+        execute("ALTER TABLE parking_payments ADD COLUMN IF NOT EXISTS verified_by_user_id INTEGER")
     except Exception as e:
         print(f"[DB] payment table setup warning: {e}")
 
@@ -1843,6 +1848,42 @@ def _discount_rate_for_type(discount_type, id_number=None):
     raise HTTPException(400, "discount_type must be none, pwd, or senior")
 
 
+# _discount_rate_for_type() above only checks that an ID *looks* like a real
+# PWD/Senior ID (format + admin toggle) — it can't verify the person is who
+# they claim, since there's no accessible DSWD/OSCA registry to check against.
+# This catches the realistic abuse pattern instead: the same ID number being
+# reused for many separate discounted payments in a short window, which a
+# single PWD/Senior citizen legitimately would not do. Kept separate from
+# _discount_rate_for_type() (rather than merged into it) so that function
+# stays DB-free and its existing unit tests don't need a live database.
+_DISCOUNT_ABUSE_MAX_USES_PER_DAY = 3
+
+def _check_discount_id_abuse(discount_type: str, id_number: str) -> None:
+    if discount_type not in {"pwd", "senior"} or not id_number:
+        return
+    try:
+        rows = query(
+            """
+            SELECT COUNT(*) AS n FROM parking_payments
+            WHERE discount_id_number = %s
+              AND paid_at >= NOW() - INTERVAL '24 hours'
+            """,
+            (id_number,),
+        )
+        count = int(rows[0]["n"]) if rows else 0
+    except Exception as e:
+        # DB hiccup here shouldn't block a legitimate discount — log and allow.
+        print(f"[discount-abuse] check failed, allowing through: {e}")
+        return
+    if count >= _DISCOUNT_ABUSE_MAX_USES_PER_DAY:
+        raise HTTPException(
+            429,
+            f"This {discount_type.upper()} ID number has already been used for a "
+            f"discount {count} times in the last 24 hours. Please verify the ID in "
+            "person or have an admin review it before applying the discount again.",
+        )
+
+
 def _current_payment_regular_price(vehicle_type="car"):
     with state_lock:
         snapshot = dict(state)
@@ -2010,7 +2051,7 @@ def _payment_revenue_dashboard():
     recent_rows = query("""
         SELECT payment_id, vehicle_type, regular_price_php, discount_type,
                discount_amount_php, final_amount_php, payment_method, paid_at,
-               discount_id_number
+               discount_id_number, verified_by_user_id
         FROM parking_payments
         ORDER BY paid_at DESC
         LIMIT 10
@@ -2063,6 +2104,7 @@ def _payment_revenue_dashboard():
             "final_amount_php": _row_float(row, "final_amount_php"),
             "payment_method": row.get("payment_method") or "cash",
             "discount_id_number": row.get("discount_id_number"),
+            "verified_by_user_id": row.get("verified_by_user_id"),
             "paid_at_ph": paid_at.strftime("%Y-%m-%d %H:%M:%S"),
         })
 
@@ -2128,7 +2170,7 @@ def _payment_revenue_dashboard():
     }
 
 
-def _record_parking_payment(payload):
+def _record_parking_payment(payload, verified_by_user_id=None):
     vehicle_type = _normalize_vehicle_type(payload.vehicle_type, default="car")
     regular_price = _parse_price(
         payload.regular_price_php
@@ -2137,6 +2179,7 @@ def _record_parking_payment(payload):
     )
     discount_id_number = (getattr(payload, "discount_id_number", None) or "").strip()[:64] or None
     discount_type, discount_rate = _discount_rate_for_type(payload.discount_type, discount_id_number)
+    _check_discount_id_abuse(discount_type, discount_id_number)
     discount_amount = round(regular_price * discount_rate, 2)
     final_amount = round(max(0.0, regular_price - discount_amount), 2)
     payment_method = (payload.payment_method or "cash").strip().lower()
@@ -2153,17 +2196,17 @@ def _record_parking_payment(payload):
             INSERT INTO parking_payments (
                 vehicle_type, regular_price_php, discount_type, discount_rate,
                 discount_amount_php, final_amount_php, payment_method, notes, paid_at, user_id,
-                discount_id_number
+                discount_id_number, verified_by_user_id
             )
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             RETURNING payment_id, vehicle_type, regular_price_php, discount_type,
                       discount_rate, discount_amount_php, final_amount_php,
-                      payment_method, notes, paid_at, discount_id_number
+                      payment_method, notes, paid_at, discount_id_number, verified_by_user_id
             """,
             (
                 vehicle_type, regular_price, discount_type, discount_rate,
                 discount_amount, final_amount, payment_method, notes, paid_at,
-                payload.user_id, discount_id_number,
+                payload.user_id, discount_id_number, verified_by_user_id,
             ),
         )
         row = cur.fetchone()
@@ -2181,6 +2224,7 @@ def _record_parking_payment(payload):
             "payment_method": row["payment_method"],
             "notes": row["notes"],
             "discount_id_number": row["discount_id_number"],
+            "verified_by_user_id": row["verified_by_user_id"],
             "paid_at_ph": paid_at_ph,
         }
     except Exception as e:
@@ -2466,7 +2510,7 @@ def api_payments_recent(limit: int = 10, offset: int = 0, _admin=Depends(require
         """
         SELECT payment_id, vehicle_type, regular_price_php, discount_type,
                discount_amount_php, final_amount_php, payment_method, paid_at,
-               discount_id_number
+               discount_id_number, verified_by_user_id
         FROM parking_payments
         ORDER BY paid_at DESC
         LIMIT %s OFFSET %s
@@ -2485,6 +2529,7 @@ def api_payments_recent(limit: int = 10, offset: int = 0, _admin=Depends(require
             "final_amount_php": _row_float(row, "final_amount_php"),
             "payment_method": row.get("payment_method") or "cash",
             "discount_id_number": row.get("discount_id_number"),
+            "verified_by_user_id": row.get("verified_by_user_id"),
             "paid_at_ph": paid_at.strftime("%Y-%m-%d %H:%M:%S"),
         })
 
@@ -2505,7 +2550,9 @@ class PaymentRecordPayload(BaseModel):
 @app.post("/api/payments")
 def api_record_payment(payload: PaymentRecordPayload, request: Request, _admin=Depends(require_admin)):
     _rate_limit(request, "payments", max_calls=30, window_seconds=60)
-    return _record_parking_payment(payload)
+    # The admin recording this payment is the one who checked the physical
+    # PWD/Senior ID card in person — stamp who, for an audit trail.
+    return _record_parking_payment(payload, verified_by_user_id=_admin.get("user_id"))
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -2598,6 +2645,11 @@ def gcash_create_checkout(payload: GcashCheckoutPayload, request: Request):
     regular_price = _current_payment_regular_price(vehicle_type)
     discount_id_number = (payload.discount_id_number or "").strip()[:64] or None
     discount_type, discount_rate = _discount_rate_for_type(payload.discount_type, discount_id_number)
+    # Checked here, before PayMongo charges the customer — a GCash checkout is
+    # fully self-service (no staff ever sees the ID), so this is the only real
+    # abuse guard for this payment channel, and it needs to happen before money
+    # moves rather than after (see _record_parking_payment's own check for why).
+    _check_discount_id_abuse(discount_type, discount_id_number)
     discount_amount = round(regular_price * discount_rate, 2)
     final_amount = round(max(1.0, regular_price - discount_amount), 2)
     amount_centavos = round(final_amount * 100)
