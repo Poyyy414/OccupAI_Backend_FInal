@@ -1460,16 +1460,58 @@ def _db_history(hours: int = 168) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def _training_hourly_vehicle_avg():
+# parking_data_training.csv (3,864 rows, ~1.1MB) is static — it ships with the
+# repo and never changes while the app is running. _training_hourly_vehicle_avg()
+# and _training_weekday_revenue_forecast() used to re-read and fully reprocess
+# it on every call, and both sit on the hot path of /api/predictions, which
+# gets polled by the dashboard every request cycle. Measured cost: ~60ms just
+# to read+parse the CSV, and ~370ms total for the weekday revenue forecast
+# (it runs the pricing formula once per row — 3,864 formula calls per request).
+# On Render's single-core free instance that's real blocking CPU time on every
+# poll, and the repeated full-CSV DataFrame allocations add memory churn on
+# top of an already tight budget. None of this data changes minute to minute,
+# so it's cached with a short TTL instead of recomputed every request.
+_TRAINING_CACHE_TTL_SECONDS = 60
+
+_training_df_cache = {"df": None, "mtime": None}
+
+def _load_training_df():
+    """Cached read of the training CSV. Re-reads only if the file's mtime
+    changes (it doesn't, in practice, once deployed) — otherwise returns the
+    same in-memory DataFrame every call instead of hitting disk."""
     if not TRAINING_DATA_PATH.exists():
+        return None
+    try:
+        mtime = TRAINING_DATA_PATH.stat().st_mtime
+        if _training_df_cache["df"] is None or _training_df_cache["mtime"] != mtime:
+            _training_df_cache["df"] = pd.read_csv(TRAINING_DATA_PATH)
+            _training_df_cache["mtime"] = mtime
+    except Exception as e:
+        print(f"[training-data] load failed: {e}")
+        return None
+    return _training_df_cache["df"]
+
+
+_hourly_vehicle_avg_cache = {"computed_at": 0.0, "value": {}}
+
+def _training_hourly_vehicle_avg():
+    now = time.time()
+    if now - _hourly_vehicle_avg_cache["computed_at"] < _TRAINING_CACHE_TTL_SECONDS:
+        return _hourly_vehicle_avg_cache["value"]
+
+    df = _load_training_df()
+    if df is None:
         return {}
     try:
-        df = pd.read_csv(TRAINING_DATA_PATH, usecols=["hour", "vehicles_hour"])
         hourly = df.groupby("hour")["vehicles_hour"].mean().to_dict()
-        return {int(h): float(v) for h, v in hourly.items()}
+        result = {int(h): float(v) for h, v in hourly.items()}
     except Exception as e:
         print(f"[predictions] training hourly fallback unavailable: {e}")
-        return {}
+        result = {}
+
+    _hourly_vehicle_avg_cache["computed_at"] = now
+    _hourly_vehicle_avg_cache["value"] = result
+    return result
 
 
 def _training_hourly_occ_pct(capacity=None):
@@ -1637,8 +1679,16 @@ def _dynamic_price_formula(vehicles_hour=0.0, lot_capacity=None, when=None, vehi
     })
 
 
+_weekday_revenue_cache: dict = {}  # capacity -> (computed_at, weekday_revenue, today_revenue)
+
 def _training_weekday_revenue_forecast(capacity=None):
     capacity = max(1, int(capacity or _active_slot_capacity(LOT_CAPACITY)))
+
+    now = time.time()
+    cached = _weekday_revenue_cache.get(capacity)
+    if cached and now - cached[0] < _TRAINING_CACHE_TTL_SECONDS:
+        return cached[1], cached[2]
+
     ordered_days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
     pandas_day_labels = {
         0: "Mon",
@@ -1650,14 +1700,12 @@ def _training_weekday_revenue_forecast(capacity=None):
         6: "Sun",
     }
 
-    if not TRAINING_DATA_PATH.exists():
+    full_df = _load_training_df()
+    if full_df is None:
         return {day: 0.0 for day in ordered_days}, None
 
     try:
-        df = pd.read_csv(
-            TRAINING_DATA_PATH,
-            usecols=["datetime", "day_of_week", "vehicles_hour"],
-        )
+        df = full_df[["datetime", "day_of_week", "vehicles_hour"]].copy()
         df["datetime"] = pd.to_datetime(df["datetime"])
         df["vehicles_hour"] = pd.to_numeric(df["vehicles_hour"], errors="coerce").fillna(0.0)
         df["day_of_week"] = pd.to_numeric(df["day_of_week"], errors="coerce")
@@ -1687,7 +1735,9 @@ def _training_weekday_revenue_forecast(capacity=None):
                 weekday_revenue[day] = round(sum(valid) / len(valid), 2) if valid else 0.0
 
         today_label = datetime.now(PH_TZ).strftime("%a")
-        return weekday_revenue, weekday_revenue.get(today_label)
+        today_revenue = weekday_revenue.get(today_label)
+        _weekday_revenue_cache[capacity] = (now, weekday_revenue, today_revenue)
+        return weekday_revenue, today_revenue
     except Exception as e:
         print(f"[predictions revenue] training formula fallback unavailable: {e}")
         return {day: 0.0 for day in ordered_days}, None
