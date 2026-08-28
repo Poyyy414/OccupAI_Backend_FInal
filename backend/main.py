@@ -1076,6 +1076,24 @@ def _ensure_gcash_checkout_table():
         print(f"[DB] gcash checkout table setup warning: {e}")
 
 
+def _ensure_admin_settings_table():
+    # Backs the admin-toggle settings (discounts, layout override, price
+    # override) — these used to live in a local .env file, which Render
+    # wipes on every restart (including OOM crash-restarts), silently
+    # resetting toggles back to their code defaults. Postgres survives
+    # restarts, so this is the durable store for them now.
+    try:
+        execute("""
+            CREATE TABLE IF NOT EXISTS admin_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+    except Exception as e:
+        print(f"[DB] admin_settings table setup warning: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _ensure_core_tables()
@@ -1087,6 +1105,7 @@ async def lifespan(app: FastAPI):
     _ensure_parking_log_indexes()
     _ensure_payment_table()
     _ensure_gcash_checkout_table()
+    _ensure_admin_settings_table()
     print("[OccupAI] Loading ML models...")
     try:
         ml.load()
@@ -1150,7 +1169,7 @@ db_log_state = {
 
 
 def _layout_capacity_from_env(mode=None):
-    level = (mode or os.getenv("FORCE_DEMAND_LEVEL") or "").strip().upper()
+    level = (mode or _read_setting("FORCE_DEMAND_LEVEL", "") or "").strip().upper()
     if level not in {"NORMAL", "BUSY", "HIGH"}:
         return 0
     total = 0
@@ -2967,44 +2986,31 @@ class PricingSettingsPayload(BaseModel):
 _last_slot_adjustment: dict = {}
 _LAYOUT_MODES = {"NORMAL", "BUSY", "HIGH"}
 
-_env_file_cache = {"mtime": None, "values": {}}
-
-def _read_env_value(key: str, default: str = "") -> str:
-    env_path = BASE_DIR / ".env"
+# Admin-toggle settings (discounts, layout override, price override) are
+# persisted in the admin_settings Postgres table, not a local .env file —
+# Render wipes the local filesystem on every restart (including OOM
+# crash-restarts), which used to silently reset these toggles back to their
+# code defaults. Postgres survives restarts, so it's the durable store now.
+# ON CONFLICT DO UPDATE makes concurrent saves (e.g. pricing and layout-mode
+# at once) safe without an application-level lock.
+def _read_setting(key: str, default: str = "") -> str:
     try:
-        mtime = env_path.stat().st_mtime
-        if mtime != _env_file_cache["mtime"]:
-            values = {}
-            for line in env_path.read_text(encoding="utf-8").splitlines():
-                stripped = line.strip()
-                if stripped and not stripped.startswith("#") and "=" in stripped:
-                    k, v = stripped.split("=", 1)
-                    values[k.strip()] = v.strip()
-            _env_file_cache["values"] = values
-            _env_file_cache["mtime"] = mtime
-        if key in _env_file_cache["values"]:
-            return _env_file_cache["values"][key]
-    except (FileNotFoundError, OSError):
-        pass
+        rows = query("SELECT value FROM admin_settings WHERE key = %s", (key,))
+        if rows:
+            return rows[0]["value"]
+    except Exception as e:
+        print(f"[settings] read failed for {key}: {e}")
     return os.getenv(key, default)
 
-_env_write_lock = threading.Lock()
-
-def _write_env_value(key: str, value: str) -> None:
-    # Serialize read-modify-write so two concurrent admin saves (e.g. pricing
-    # and layout-mode) can't interleave and silently drop one update.
-    with _env_write_lock:
-        env_path = BASE_DIR / ".env"
-        lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
-        found = False
-        for i, line in enumerate(lines):
-            if line.strip().startswith(f"{key}="):
-                lines[i] = f"{key}={value}"
-                found = True
-                break
-        if not found:
-            lines.append(f"{key}={value}")
-        env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+def _write_setting(key: str, value: str) -> None:
+    execute(
+        """
+        INSERT INTO admin_settings (key, value, updated_at)
+        VALUES (%s, %s, NOW())
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+        """,
+        (key, value),
+    )
 
 def _parse_price(value, default=None):
     try:
@@ -3029,7 +3035,7 @@ def _current_flat_rate(vehicle_type="car"):
     vt = _normalize_vehicle_type(vehicle_type)
     key = "FLAT_RATE_CAR" if vt == "car" else "FLAT_RATE_MOTORCYCLE"
     default = FLAT_RATE_CAR if vt == "car" else FLAT_RATE_MOTORCYCLE
-    return _parse_price(_read_env_value(key, os.getenv(key, str(default))), default)
+    return _parse_price(_read_setting(key, os.getenv(key, str(default))), default)
 
 def _env_bool(value):
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
@@ -3037,9 +3043,9 @@ def _env_bool(value):
 def _pricing_settings():
     flat_car = _current_flat_rate("car")
     flat_moto = _current_flat_rate("motorcycle")
-    manual_car = _parse_price(_read_env_value("PRICE_OVERRIDE_PHP_CAR", str(flat_car)), flat_car)
-    manual_moto = _parse_price(_read_env_value("PRICE_OVERRIDE_PHP_MOTORCYCLE", str(flat_moto)), flat_moto)
-    enabled = _env_bool(_read_env_value("PRICE_OVERRIDE_ENABLED", "false"))
+    manual_car = _parse_price(_read_setting("PRICE_OVERRIDE_PHP_CAR", str(flat_car)), flat_car)
+    manual_moto = _parse_price(_read_setting("PRICE_OVERRIDE_PHP_MOTORCYCLE", str(flat_moto)), flat_moto)
+    enabled = _env_bool(_read_setting("PRICE_OVERRIDE_ENABLED", "false"))
     return {
         "enabled": enabled,
         "mode": "manual" if enabled else "dynamic",
@@ -3058,8 +3064,8 @@ def _pricing_settings():
 
 def _discount_settings():
     return {
-        "pwd_enabled": _env_bool(_read_env_value("DISCOUNT_PWD_ENABLED", "true")),
-        "senior_enabled": _env_bool(_read_env_value("DISCOUNT_SENIOR_ENABLED", "true")),
+        "pwd_enabled": _env_bool(_read_setting("DISCOUNT_PWD_ENABLED", "true")),
+        "senior_enabled": _env_bool(_read_setting("DISCOUNT_SENIOR_ENABLED", "true")),
         "pwd_senior_discount_rate": PWD_SENIOR_DISCOUNT_RATE,
         "pwd_senior_discount_pct": round(PWD_SENIOR_DISCOUNT_RATE * 100, 1),
     }
@@ -3184,7 +3190,7 @@ async def get_slot_adjustment():
 # ══════════════════════════════════════════════════════════════════
 @app.get("/api/settings/layout-mode")
 def get_layout_mode():
-    raw_mode = _read_env_value("FORCE_DEMAND_LEVEL", "").strip().upper()
+    raw_mode = _read_setting("FORCE_DEMAND_LEVEL", "").strip().upper()
     enabled = raw_mode in _LAYOUT_MODES
     mode = raw_mode if enabled else "NORMAL"
     return {"mode": mode, "enabled": enabled, "modes": ["NORMAL", "BUSY", "HIGH"]}
@@ -3192,20 +3198,18 @@ def get_layout_mode():
 @app.post("/api/settings/layout-mode")
 def set_layout_mode(payload: LayoutModePayload, _admin=Depends(require_admin)):
     enabled = True if payload.enabled is None else bool(payload.enabled)
-    mode = (payload.mode or _read_env_value("FORCE_DEMAND_LEVEL", "NORMAL") or "NORMAL").strip().upper()
+    mode = (payload.mode or _read_setting("FORCE_DEMAND_LEVEL", "NORMAL") or "NORMAL").strip().upper()
     if mode not in _LAYOUT_MODES:
         raise HTTPException(400, "mode must be NORMAL, BUSY, or HIGH")
     if not enabled:
-        _write_env_value("FORCE_DEMAND_LEVEL", "")
-        os.environ["FORCE_DEMAND_LEVEL"] = ""
+        _write_setting("FORCE_DEMAND_LEVEL", "")
         return {
             "ok": True,
             "mode": mode,
             "enabled": False,
             "message": "Manual layout override is off. Detector will choose the layout automatically.",
         }
-    _write_env_value("FORCE_DEMAND_LEVEL", mode)
-    os.environ["FORCE_DEMAND_LEVEL"] = mode
+    _write_setting("FORCE_DEMAND_LEVEL", mode)
     return {
         "ok": True,
         "mode": mode,
@@ -3231,12 +3235,9 @@ def set_pricing_settings(payload: PricingSettingsPayload, _admin=Depends(require
         else _parse_price(payload.price_php_motorcycle)
     )
 
-    _write_env_value("PRICE_OVERRIDE_ENABLED", "true" if enabled else "false")
-    _write_env_value("PRICE_OVERRIDE_PHP_CAR", f"{price_car:.2f}")
-    _write_env_value("PRICE_OVERRIDE_PHP_MOTORCYCLE", f"{price_moto:.2f}")
-    os.environ["PRICE_OVERRIDE_ENABLED"] = "true" if enabled else "false"
-    os.environ["PRICE_OVERRIDE_PHP_CAR"] = f"{price_car:.2f}"
-    os.environ["PRICE_OVERRIDE_PHP_MOTORCYCLE"] = f"{price_moto:.2f}"
+    _write_setting("PRICE_OVERRIDE_ENABLED", "true" if enabled else "false")
+    _write_setting("PRICE_OVERRIDE_PHP_CAR", f"{price_car:.2f}")
+    _write_setting("PRICE_OVERRIDE_PHP_MOTORCYCLE", f"{price_moto:.2f}")
 
     with _insight_lock:
         _insight_cache.clear()
@@ -3262,10 +3263,8 @@ def set_discount_settings(payload: DiscountSettingsPayload, _admin=Depends(requi
     pwd_enabled = current["pwd_enabled"] if payload.pwd_enabled is None else bool(payload.pwd_enabled)
     senior_enabled = current["senior_enabled"] if payload.senior_enabled is None else bool(payload.senior_enabled)
 
-    _write_env_value("DISCOUNT_PWD_ENABLED", "true" if pwd_enabled else "false")
-    _write_env_value("DISCOUNT_SENIOR_ENABLED", "true" if senior_enabled else "false")
-    os.environ["DISCOUNT_PWD_ENABLED"] = "true" if pwd_enabled else "false"
-    os.environ["DISCOUNT_SENIOR_ENABLED"] = "true" if senior_enabled else "false"
+    _write_setting("DISCOUNT_PWD_ENABLED", "true" if pwd_enabled else "false")
+    _write_setting("DISCOUNT_SENIOR_ENABLED", "true" if senior_enabled else "false")
 
     result = _discount_settings()
     result.update({
