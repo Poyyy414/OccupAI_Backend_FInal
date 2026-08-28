@@ -446,14 +446,18 @@ class _MLEngine:
     def __init__(self):
         self._nb1         = {}
         self._occ         = None
-        self._price       = None
+        # NOTE: dynamic pricing Random Forest (pricing_model.pkl / pricing_features.pkl)
+        # was removed from loading — predict_price() has always used the formula-based
+        # _dynamic_price_formula(), never this model, so it sat in memory unused. The
+        # files are still on disk under backend/models/ and pricing_rf's historical
+        # training metrics are still surfaced via _metric_score_pct/_training_metrics
+        # in predict_price() for reference — only the live model load was dropped.
         self._rev         = None
         self._scX         = None
         self._scY         = None
         self._occ_scX     = None
         self._occ_scY     = None
         self._occ_feats   = None
-        self._price_feats = None
         self._rev_feats   = None
         self._ready       = False
 
@@ -477,14 +481,12 @@ class _MLEngine:
 
         for attr, fname in [
             ("_occ",         "occupancy_model.keras"),
-            ("_price",       "pricing_model.pkl"),
             ("_rev",         "revenue_model.pkl"),
             ("_scX",         "scaler_nb1_X.pkl"),
             ("_scY",         "scaler_nb1_y.pkl"),
             ("_occ_scX",     "scaler_occ_X.pkl"),
             ("_occ_scY",     "scaler_occ_y.pkl"),
             ("_occ_feats",   "occ_features.pkl"),
-            ("_price_feats", "pricing_features.pkl"),
             ("_rev_feats",   "rev_features.pkl"),
         ]:
             p = MODEL_DIR / fname
