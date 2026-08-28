@@ -1106,6 +1106,7 @@ async def lifespan(app: FastAPI):
     _ensure_payment_table()
     _ensure_gcash_checkout_table()
     _ensure_admin_settings_table()
+    _load_settings_cache()
     print("[OccupAI] Loading ML models...")
     try:
         ml.load()
@@ -2993,13 +2994,30 @@ _LAYOUT_MODES = {"NORMAL", "BUSY", "HIGH"}
 # code defaults. Postgres survives restarts, so it's the durable store now.
 # ON CONFLICT DO UPDATE makes concurrent saves (e.g. pricing and layout-mode
 # at once) safe without an application-level lock.
-def _read_setting(key: str, default: str = "") -> str:
+#
+# Reads go through an in-memory cache, not a query per call: these settings
+# get read many times per request (pricing formula alone checks 4+ keys),
+# and hitting Postgres for each one exhausted the connection pool under
+# normal traffic. The cache is populated once at startup from the table
+# (_load_settings_cache, called from lifespan) and updated in place on every
+# write, so a read never needs a DB round trip after boot.
+_settings_cache: dict = {}
+_settings_cache_lock = threading.Lock()
+
+def _load_settings_cache():
     try:
-        rows = query("SELECT value FROM admin_settings WHERE key = %s", (key,))
-        if rows:
-            return rows[0]["value"]
+        rows = query("SELECT key, value FROM admin_settings")
+        with _settings_cache_lock:
+            _settings_cache.clear()
+            _settings_cache.update({r["key"]: r["value"] for r in rows})
+        print(f"[settings] Loaded {len(rows)} setting(s) from admin_settings")
     except Exception as e:
-        print(f"[settings] read failed for {key}: {e}")
+        print(f"[settings] Initial cache load failed (falling back to env/defaults): {e}")
+
+def _read_setting(key: str, default: str = "") -> str:
+    with _settings_cache_lock:
+        if key in _settings_cache:
+            return _settings_cache[key]
     return os.getenv(key, default)
 
 def _write_setting(key: str, value: str) -> None:
@@ -3011,6 +3029,8 @@ def _write_setting(key: str, value: str) -> None:
         """,
         (key, value),
     )
+    with _settings_cache_lock:
+        _settings_cache[key] = value
 
 def _parse_price(value, default=None):
     try:
