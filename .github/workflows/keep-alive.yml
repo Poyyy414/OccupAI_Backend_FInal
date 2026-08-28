@@ -1,0 +1,31 @@
+name: Keep Render service warm
+
+# Render's free tier spins a web service down after ~15 minutes with no
+# incoming traffic, so the next real request pays a slow cold start. This
+# pings a lightweight status endpoint every 10 minutes to keep it warm.
+#
+# NOTE: this only prevents idle spin-down. It does NOT fix out-of-memory
+# crashes (Render killing the process for exceeding its RAM limit) — a
+# crashed/OOM-killed instance won't be "woken up" by this, Render has to
+# restart it on its own.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}   # lets you trigger a run manually from the Actions tab
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /status
+        run: |
+          url="https://occupai-backend-final-last.onrender.com/status"
+          echo "Pinging $url"
+          code=$(curl -s -o response.json -w "%{http_code}" --max-time 25 "$url")
+          echo "HTTP status: $code"
+          cat response.json || true
+          if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+            echo "::error::Ping failed with HTTP $code"
+            exit 1
+          fi
