@@ -2634,6 +2634,36 @@ function authHeaders() {
   return token ? { 'Authorization': 'Bearer ' + token } : {};
 }
 
+// Render's free tier spins the backend down when idle. The first requests
+// after it wakes can get refused (ERR_HTTP2_SERVER_REFUSED_STREAM / net
+// errors) before it's fully warmed up — especially a burst of many GET
+// requests firing at once on page load or tab switch. These two helpers
+// keep the dashboard resilient to that: fetchWithRetry gives a transient
+// network failure one automatic retry after a short backoff, and
+// staggerCalls spreads a batch of independent fetches out by a small gap
+// instead of firing them all in the same instant. Only used for read-only
+// GET calls — POST/save actions are never auto-retried, to avoid quietly
+// double-submitting something like a payment or a settings change.
+function _delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function fetchWithRetry(url, options, retries = 1, backoffMs = 1500) {
+  try {
+    return await fetch(url, options);
+  } catch (err) {
+    if (retries > 0) {
+      await _delay(backoffMs);
+      return fetchWithRetry(url, options, retries - 1, backoffMs);
+    }
+    throw err;
+  }
+}
+
+function staggerCalls(fns, gapMs = 120) {
+  fns.forEach((fn, i) => setTimeout(fn, i * gapMs));
+}
+
 function getStoredUser() {
   try {
     const raw = localStorage.getItem('occupai_user');
@@ -2796,7 +2826,7 @@ function setLayoutUi(mode, pending, enabled) {
 
 async function fetchLayoutMode() {
   try {
-    const r = await fetch('/api/settings/layout-mode');
+    const r = await fetchWithRetry('/api/settings/layout-mode');
     if (!r.ok) throw new Error(r.status);
     const d = await r.json();
     setLayoutUi(d.mode || 'NORMAL', false, Boolean(d.enabled));
@@ -2909,7 +2939,7 @@ function setPricingUi(settings, pending) {
 
 async function fetchPricingSettings() {
   try {
-    const r = await fetch('/api/settings/pricing');
+    const r = await fetchWithRetry('/api/settings/pricing');
     if (!r.ok) throw new Error(r.status);
     setPricingUi(await r.json(), false);
   } catch (e) {
@@ -2955,7 +2985,7 @@ function setDiscountUi(settings, pending) {
 
 async function fetchDiscountSettings() {
   try {
-    const r = await fetch('/api/settings/discounts');
+    const r = await fetchWithRetry('/api/settings/discounts');
     if (!r.ok) throw new Error(r.status);
     setDiscountUi(await r.json(), false);
   } catch (e) {
@@ -3050,7 +3080,7 @@ async function setDurationPricingUi(settings, pending) {
 
 async function fetchDurationPricingSettings() {
   try {
-    const r = await fetch('/api/settings/duration-pricing');
+    const r = await fetchWithRetry('/api/settings/duration-pricing');
     if (!r.ok) throw new Error(r.status);
     setDurationPricingUi(await r.json(), false);
   } catch (e) {
@@ -3101,7 +3131,7 @@ async function saveDurationPricingSettings() {
 
 async function fetchCapacitySettings() {
   try {
-    const r = await fetch('/api/settings/capacity');
+    const r = await fetchWithRetry('/api/settings/capacity');
     if (!r.ok) throw new Error(r.status);
     setCapacityUi(await r.json(), false);
   } catch (e) {
@@ -3208,9 +3238,9 @@ function switchPanel(name, btn) {
   document.getElementById('pageTitle').textContent = meta.title;
   document.getElementById('pageSub').textContent = meta.sub;
 
-  if (name === 'insights') { fetchInsights(); fetchMlConfidence(); }
-  if (name === 'revenue') { fetchRevenueDashboard(); fetchTransactionLogs(); }
-  if (name === 'predictions') { fetchFullPredictions(); fetchMlConfidence(); fetchHeatmap(); }
+  if (name === 'insights') { staggerCalls([fetchInsights, fetchMlConfidence]); }
+  if (name === 'revenue') { staggerCalls([fetchRevenueDashboard, fetchTransactionLogs]); }
+  if (name === 'predictions') { staggerCalls([fetchFullPredictions, fetchMlConfidence, fetchHeatmap]); }
 }
 
 function cleanText(value) {
@@ -3276,7 +3306,7 @@ async function fetchStats() {
   // otherwise overwrite fresh data with stale data).
   const seq = ++_statsSeq;
   try {
-    const r = await fetch('/api/stats');
+    const r = await fetchWithRetry('/api/stats');
     if (!r.ok) throw new Error(r.status);
     const d = await r.json();
     if (seq !== _statsSeq) return;
@@ -3400,7 +3430,7 @@ let _historySeq = 0;
 async function fetchHistory() {
   const seq = ++_historySeq;
   try {
-    const r = await fetch('/api/history');
+    const r = await fetchWithRetry('/api/history');
     if (!r.ok) throw new Error(r.status);
     const data = await r.json();
     if (seq !== _historySeq) return;
@@ -3453,7 +3483,7 @@ function renderHistory(items) {
 
 async function fetchPredictions() {
   try {
-    const r = await fetch('/api/predictions');
+    const r = await fetchWithRetry('/api/predictions');
     if (!r.ok) throw new Error(r.status);
     const d = await r.json();
     const hourly = d.hourly_est || {};
@@ -3511,7 +3541,7 @@ async function fetchPredictions() {
 
 async function fetchFullPredictions() {
   try {
-    const r = await fetch('/api/predictions');
+    const r = await fetchWithRetry('/api/predictions');
     if (!r.ok) throw new Error(r.status);
     const d = await r.json();
     const hourly = d.hourly_est || {};
@@ -3524,7 +3554,7 @@ async function fetchFullPredictions() {
     setText('predFullTs', d.generated_at_ph ? `Generated ${cleanText(d.generated_at_ph)}` : '--');
 
     try {
-      const statsR = await fetch('/api/stats');
+      const statsR = await fetchWithRetry('/api/stats');
       if (statsR.ok) {
         const s = await statsR.json();
         const pct = s.occupancy_pct ?? (s.total ? Math.round((s.occupied || 0) / s.total * 100) : 0);
@@ -3600,7 +3630,7 @@ let gcashIssuesCache = [];
 
 async function fetchGcashIssues() {
   try {
-    const r = await fetch('/api/gcash/issues', { headers: authHeaders() });
+    const r = await fetchWithRetry('/api/gcash/issues', { headers: authHeaders() });
     if (!r.ok) throw new Error(r.status);
     const d = await r.json();
     gcashIssuesCache = Array.isArray(d.items) ? d.items : [];
@@ -3650,7 +3680,7 @@ let txLogsTotal = 0;
 async function fetchTransactionLogs() {
   const body = document.getElementById('transactionLogsBody');
   try {
-    const r = await fetch(`/api/payments/recent?limit=${txLogsLimit}&offset=${txLogsOffset}`, { headers: authHeaders() });
+    const r = await fetchWithRetry(`/api/payments/recent?limit=${txLogsLimit}&offset=${txLogsOffset}`, { headers: authHeaders() });
     if (!r.ok) throw new Error(r.status);
     const d = await r.json();
     txLogsTotal = d.total || 0;
@@ -3803,7 +3833,7 @@ function renderRevenueCharts(d) {
 
 async function fetchRevenueDashboard() {
   try {
-    const r = await fetch('/api/revenue/dashboard', { cache: 'no-store' });
+    const r = await fetchWithRetry('/api/revenue/dashboard', { cache: 'no-store' });
     if (!r.ok) {
       let detail = r.status;
       try { const errBody = await r.json(); detail = errBody.detail || errBody.error || detail; } catch (_) {}
@@ -4193,7 +4223,7 @@ function renderPeakVisual(hourlyByDay) {
 
 async function fetchMlConfidence() {
   try {
-    const r = await fetch('/api/ml/dashboard');
+    const r = await fetchWithRetry('/api/ml/dashboard');
     if (!r.ok) throw new Error(r.status);
     const d = await r.json();
     const vehConf = d?.vehicles?.confidence_pct;
@@ -4219,7 +4249,7 @@ async function fetchHeatmap() {
   const wrap = document.getElementById('heatmapWrap');
   if (!wrap) return;
   try {
-    const r = await fetch('/api/predictions/hourly-by-day');
+    const r = await fetchWithRetry('/api/predictions/hourly-by-day');
     if (!r.ok) throw new Error(r.status);
     const d = await r.json();
     const dayLabels = d.day_labels || ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -4271,12 +4301,14 @@ function renderRecommendationCards(items) {
 
 async function fetchInsights() {
   try {
+    const staggeredFetch = (url, delayMs) =>
+      _delay(delayMs).then(() => fetchWithRetry(url)).catch(() => null);
     const [r, statsReq, predReq, hourlyReq, histReq] = await Promise.all([
-      fetch('/api/insights'),
-      fetch('/api/stats').catch(() => null),
-      fetch('/api/predictions').catch(() => null),
-      fetch('/api/predictions/hourly-by-day').catch(() => null),
-      fetch('/api/history').catch(() => null),
+      fetchWithRetry('/api/insights'),
+      staggeredFetch('/api/stats', 100),
+      staggeredFetch('/api/predictions', 200),
+      staggeredFetch('/api/predictions/hourly-by-day', 300),
+      staggeredFetch('/api/history', 400),
     ]);
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
@@ -4419,28 +4451,35 @@ function openFullscreen() {
 
 initTheme();
 if (isAuthorizedAdmin) {
-  fetchLayoutMode();
-  fetchPricingSettings();
-  fetchDiscountSettings();
-  fetchCapacitySettings();
-  fetchDurationPricingSettings();
-  fetchStats();
-  fetchHistory();
-  fetchPredictions();
-  fetchRevenueDashboard();
-  fetchTransactionLogs();
-  fetchInsights();
-  fetchGcashIssues();
+  // Spread the initial load out instead of firing ~12 requests in the same
+  // instant — see the fetchWithRetry/staggerCalls comment above for why.
+  staggerCalls([
+    fetchLayoutMode,
+    fetchPricingSettings,
+    fetchDiscountSettings,
+    fetchCapacitySettings,
+    fetchDurationPricingSettings,
+    fetchStats,
+    fetchHistory,
+    fetchPredictions,
+    fetchRevenueDashboard,
+    fetchTransactionLogs,
+    fetchInsights,
+    fetchGcashIssues,
+  ]);
 
+  // Several of these share a 30s (or a multiple of it) period, which would
+  // otherwise re-synchronize into the same repeating burst — offset each
+  // one's start slightly so their ticks land apart instead of together.
   setInterval(fetchGcashIssues, 60000);
   setInterval(fetchStats, 3000);
   setInterval(fetchHistory, 5000);
-  setInterval(fetchPredictions, 30000);
-  setInterval(fetchRevenueDashboard, 30000);
-  setInterval(fetchLayoutMode, 30000);
-  setInterval(fetchPricingSettings, 30000);
-  setInterval(fetchDiscountSettings, 30000);
   setInterval(fetchInsights, 10000);
+  setTimeout(() => setInterval(fetchPredictions, 30000), 100);
+  setTimeout(() => setInterval(fetchRevenueDashboard, 30000), 250);
+  setTimeout(() => setInterval(fetchLayoutMode, 30000), 400);
+  setTimeout(() => setInterval(fetchPricingSettings, 30000), 550);
+  setTimeout(() => setInterval(fetchDiscountSettings, 30000), 700);
 }
 </script>
 
@@ -4460,7 +4499,7 @@ function switchReportTab(tab, btn) {
 
 async function fetchReports() {
   try {
-    const res = await fetch('/api/revenue/dashboard');
+    const res = await fetchWithRetry('/api/revenue/dashboard');
     if (!res.ok) throw new Error('Reports request failed: ' + res.status);
     const data = await res.json();
     reportData = data;
@@ -4628,7 +4667,7 @@ function renderReportChart(rows) {
 
 async function fetchPredVsActual(dailyRows) {
   try {
-    const res = await fetch('/api/predictions');
+    const res = await fetchWithRetry('/api/predictions');
     const pred = await res.json();
     const weekdayPred = pred.weekday_revenue || {};
     const days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
