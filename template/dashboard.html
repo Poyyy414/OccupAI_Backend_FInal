@@ -2052,6 +2052,14 @@
           </select>
         </label>
         <label>
+          Duration
+          <select class="payment-input" id="paymentDurationType" onchange="onPaymentVehicleTypeChange()">
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="monthly">Monthly</option>
+          </select>
+        </label>
+        <label>
           Regular PHP
           <input class="payment-input" id="paymentAmount" type="number" min="1" max="10000" step="1" value="50" />
         </label>
@@ -2236,6 +2244,58 @@
             <span class="layout-toggle-label" id="pricingOverrideLabel">Auto</span>
             <button class="toggle-switch" id="pricingOverrideToggle" onclick="togglePricingOverride()" aria-label="Toggle manual pricing" aria-pressed="false"></button>
           </div>
+        </div>
+      </div>
+
+      <div class="setting-row" style="align-items:stretch;flex-direction:column">
+        <div class="setting-copy">
+          <strong>Daily / Weekly / Monthly Rates</strong>
+          <span id="durationPricingHint">Car PHP 150/day, PHP 800/week, PHP 1,200/month. Moto PHP 80/day, PHP 450/week, PHP 600/month.</span>
+        </div>
+        <div class="price-setting-controls">
+          <label class="price-input-wrap" aria-label="Car daily rate">
+            <span>Car/Day</span>
+            <input class="price-input" id="durationInputCarDaily" type="number" min="1" max="10000" step="1" value="150" />
+          </label>
+          <label class="price-input-wrap" aria-label="Car weekly rate">
+            <span>Car/Wk</span>
+            <input class="price-input" id="durationInputCarWeekly" type="number" min="1" max="10000" step="1" value="800" />
+          </label>
+          <label class="price-input-wrap" aria-label="Car monthly rate">
+            <span>Car/Mo</span>
+            <input class="price-input" id="durationInputCarMonthly" type="number" min="1" max="10000" step="1" value="1200" />
+          </label>
+          <label class="price-input-wrap" aria-label="Motorcycle daily rate">
+            <span>Moto/Day</span>
+            <input class="price-input" id="durationInputMotoDaily" type="number" min="1" max="10000" step="1" value="80" />
+          </label>
+          <label class="price-input-wrap" aria-label="Motorcycle weekly rate">
+            <span>Moto/Wk</span>
+            <input class="price-input" id="durationInputMotoWeekly" type="number" min="1" max="10000" step="1" value="450" />
+          </label>
+          <label class="price-input-wrap" aria-label="Motorcycle monthly rate">
+            <span>Moto/Mo</span>
+            <input class="price-input" id="durationInputMotoMonthly" type="number" min="1" max="10000" step="1" value="600" />
+          </label>
+          <button class="setting-save-btn" id="durationPricingSaveBtn" onclick="saveDurationPricingSettings()">Save</button>
+        </div>
+      </div>
+
+      <div class="setting-row" style="align-items:stretch;flex-direction:column">
+        <div class="setting-copy">
+          <strong>Parking Capacity</strong>
+          <span id="capacityHint">10 car slot(s), 20 motorcycle slot(s) — 30 total.</span>
+        </div>
+        <div class="price-setting-controls">
+          <label class="price-input-wrap" aria-label="Car slot count">
+            <span>Car slots</span>
+            <input class="price-input" id="capacityInputCar" type="number" min="0" max="999" step="1" value="10" />
+          </label>
+          <label class="price-input-wrap" aria-label="Motorcycle slot count">
+            <span>Moto slots</span>
+            <input class="price-input" id="capacityInputMoto" type="number" min="0" max="999" step="1" value="20" />
+          </label>
+          <button class="setting-save-btn" id="capacitySaveBtn" onclick="saveCapacitySettings()">Save</button>
         </div>
       </div>
 
@@ -2647,6 +2707,11 @@ const LAYOUT_MODES = ['NORMAL', 'BUSY', 'HIGH'];
 let layoutSelectedMode = 'NORMAL';
 let layoutOverrideEnabled = false;
 let suggestedPrices = { car: 50, motorcycle: 25 };
+let durationPricing = {
+  daily_rate_php_car: 150, daily_rate_php_motorcycle: 80,
+  weekly_rate_php_car: 800, weekly_rate_php_motorcycle: 450,
+  monthly_rate_php_car: 1200, monthly_rate_php_motorcycle: 600,
+};
 let pricingSettings = {
   enabled: false,
   price_php_car: 50, price_php_motorcycle: 25,
@@ -2654,6 +2719,7 @@ let pricingSettings = {
   mode: 'dynamic'
 };
 let discountSettings = { pwd_enabled: true, senior_enabled: true };
+let capacitySettings = { car_slots: 10, motorcycle_slots: 20 };
 
 function formatPhp(value, options = {}) {
   const n = Number(value);
@@ -2911,6 +2977,168 @@ async function toggleDiscountSetting(kind) {
     setDiscountUi(await r.json(), false);
   } catch (e) {
     setDiscountUi({ ...discountSettings, [key]: !nextValue }, false);
+  }
+}
+
+function setCapacityUi(settings, pending) {
+  capacitySettings = {
+    car_slots: Number(settings?.car_slots ?? capacitySettings.car_slots ?? 10),
+    motorcycle_slots: Number(settings?.motorcycle_slots ?? capacitySettings.motorcycle_slots ?? 20),
+  };
+
+  const carInput = document.getElementById('capacityInputCar');
+  if (carInput && document.activeElement !== carInput) carInput.value = capacitySettings.car_slots;
+  if (carInput) carInput.disabled = Boolean(pending);
+
+  const motoInput = document.getElementById('capacityInputMoto');
+  if (motoInput && document.activeElement !== motoInput) motoInput.value = capacitySettings.motorcycle_slots;
+  if (motoInput) motoInput.disabled = Boolean(pending);
+
+  const saveBtn = document.getElementById('capacitySaveBtn');
+  if (saveBtn) {
+    saveBtn.disabled = Boolean(pending);
+    saveBtn.textContent = pending ? 'Saving...' : 'Save';
+  }
+
+  const hint = document.getElementById('capacityHint');
+  if (hint && !pending) {
+    const total = capacitySettings.car_slots + capacitySettings.motorcycle_slots;
+    hint.textContent = `${capacitySettings.car_slots} car slot(s), ${capacitySettings.motorcycle_slots} motorcycle slot(s) — ${total} total.`;
+  }
+}
+
+async function setDurationPricingUi(settings, pending) {
+  durationPricing = {
+    daily_rate_php_car: Number(settings?.daily_rate_php_car ?? durationPricing.daily_rate_php_car ?? 150),
+    daily_rate_php_motorcycle: Number(settings?.daily_rate_php_motorcycle ?? durationPricing.daily_rate_php_motorcycle ?? 80),
+    weekly_rate_php_car: Number(settings?.weekly_rate_php_car ?? durationPricing.weekly_rate_php_car ?? 800),
+    weekly_rate_php_motorcycle: Number(settings?.weekly_rate_php_motorcycle ?? durationPricing.weekly_rate_php_motorcycle ?? 450),
+    monthly_rate_php_car: Number(settings?.monthly_rate_php_car ?? durationPricing.monthly_rate_php_car ?? 1200),
+    monthly_rate_php_motorcycle: Number(settings?.monthly_rate_php_motorcycle ?? durationPricing.monthly_rate_php_motorcycle ?? 600),
+  };
+
+  const fields = [
+    ['durationInputCarDaily', durationPricing.daily_rate_php_car],
+    ['durationInputCarWeekly', durationPricing.weekly_rate_php_car],
+    ['durationInputCarMonthly', durationPricing.monthly_rate_php_car],
+    ['durationInputMotoDaily', durationPricing.daily_rate_php_motorcycle],
+    ['durationInputMotoWeekly', durationPricing.weekly_rate_php_motorcycle],
+    ['durationInputMotoMonthly', durationPricing.monthly_rate_php_motorcycle],
+  ];
+  for (const [id, value] of fields) {
+    const el = document.getElementById(id);
+    if (el && document.activeElement !== el) el.value = Number(value || 0).toFixed(value % 1 ? 2 : 0);
+    if (el) el.disabled = Boolean(pending);
+  }
+
+  const saveBtn = document.getElementById('durationPricingSaveBtn');
+  if (saveBtn) {
+    saveBtn.disabled = Boolean(pending);
+    saveBtn.textContent = pending ? 'Saving...' : 'Save';
+  }
+
+  const hint = document.getElementById('durationPricingHint');
+  if (hint && !pending) {
+    hint.textContent = `Car ${formatPhp(durationPricing.daily_rate_php_car)}/day, ` +
+      `${formatPhp(durationPricing.weekly_rate_php_car)}/week, ` +
+      `${formatPhp(durationPricing.monthly_rate_php_car)}/month. ` +
+      `Moto ${formatPhp(durationPricing.daily_rate_php_motorcycle)}/day, ` +
+      `${formatPhp(durationPricing.weekly_rate_php_motorcycle)}/week, ` +
+      `${formatPhp(durationPricing.monthly_rate_php_motorcycle)}/month.`;
+  }
+}
+
+async function fetchDurationPricingSettings() {
+  try {
+    const r = await fetch('/api/settings/duration-pricing');
+    if (!r.ok) throw new Error(r.status);
+    setDurationPricingUi(await r.json(), false);
+  } catch (e) {
+    const hint = document.getElementById('durationPricingHint');
+    if (hint) hint.textContent = 'Could not load daily/weekly/monthly rates.';
+  }
+}
+
+async function saveDurationPricingSettings() {
+  const carDaily = Number(document.getElementById('durationInputCarDaily')?.value);
+  const carWeekly = Number(document.getElementById('durationInputCarWeekly')?.value);
+  const carMonthly = Number(document.getElementById('durationInputCarMonthly')?.value);
+  const motoDaily = Number(document.getElementById('durationInputMotoDaily')?.value);
+  const motoWeekly = Number(document.getElementById('durationInputMotoWeekly')?.value);
+  const motoMonthly = Number(document.getElementById('durationInputMotoMonthly')?.value);
+  const values = [carDaily, carWeekly, carMonthly, motoDaily, motoWeekly, motoMonthly];
+  if (values.some(v => !Number.isFinite(v) || v < 1 || v > 10000)) {
+    const hint = document.getElementById('durationPricingHint');
+    if (hint) hint.textContent = 'Enter all six rates from PHP 1 to PHP 10,000.';
+    return;
+  }
+
+  const previous = { ...durationPricing };
+  setDurationPricingUi({
+    daily_rate_php_car: carDaily, weekly_rate_php_car: carWeekly, monthly_rate_php_car: carMonthly,
+    daily_rate_php_motorcycle: motoDaily, weekly_rate_php_motorcycle: motoWeekly, monthly_rate_php_motorcycle: motoMonthly,
+  }, true);
+  try {
+    const r = await fetch('/api/settings/duration-pricing', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({
+        daily_rate_php_car: carDaily, weekly_rate_php_car: carWeekly, monthly_rate_php_car: carMonthly,
+        daily_rate_php_motorcycle: motoDaily, weekly_rate_php_motorcycle: motoWeekly, monthly_rate_php_motorcycle: motoMonthly,
+      })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || d.error || r.status);
+    setDurationPricingUi(d, false);
+    onPaymentVehicleTypeChange();
+    await fetchRevenueDashboard();
+  } catch (e) {
+    setDurationPricingUi(previous, false);
+    const hint = document.getElementById('durationPricingHint');
+    if (hint) hint.textContent = cleanText(e.message || 'Could not save daily/monthly rates.');
+  }
+}
+
+async function fetchCapacitySettings() {
+  try {
+    const r = await fetch('/api/settings/capacity');
+    if (!r.ok) throw new Error(r.status);
+    setCapacityUi(await r.json(), false);
+  } catch (e) {
+    const hint = document.getElementById('capacityHint');
+    if (hint) hint.textContent = 'Could not load capacity settings.';
+  }
+}
+
+async function saveCapacitySettings() {
+  const carInput = document.getElementById('capacityInputCar');
+  const motoInput = document.getElementById('capacityInputMoto');
+  const carSlots = Number(carInput?.value);
+  const motoSlots = Number(motoInput?.value);
+  if (!Number.isInteger(carSlots) || carSlots < 0 || carSlots > 999 ||
+      !Number.isInteger(motoSlots) || motoSlots < 0 || motoSlots > 999 ||
+      carSlots + motoSlots < 1) {
+    const hint = document.getElementById('capacityHint');
+    if (hint) hint.textContent = 'Enter whole slot counts (0–999); total must be at least 1.';
+    return;
+  }
+
+  const previous = { ...capacitySettings };
+  setCapacityUi({ car_slots: carSlots, motorcycle_slots: motoSlots }, true);
+  try {
+    const r = await fetch('/api/settings/capacity', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ car_slots: carSlots, motorcycle_slots: motoSlots })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || d.error || r.status);
+    setCapacityUi(d, false);
+    await Promise.all([fetchPredictions(), fetchRevenueDashboard(), fetchInsights().catch(() => {})]);
+  } catch (e) {
+    setCapacityUi(previous, false);
+    const hint = document.getElementById('capacityHint');
+    if (hint) hint.textContent = cleanText(e.message || 'Could not save capacity.');
   }
 }
 
@@ -3434,10 +3662,12 @@ async function fetchTransactionLogs() {
           ? String(item.discount_type).toUpperCase() + (item.discount_id_number ? ` · ${escapeHtml(cleanText(item.discount_id_number))}` : '')
           : '—';
         const vehicle = item.vehicle_type === 'motorcycle' ? 'Motorcycle' : 'Car';
+        const durationLabels = { hourly: 'Hourly', daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' };
+        const duration = durationLabels[item.duration_type] ? ` · ${durationLabels[item.duration_type]}` : '';
         return `
           <tr>
             <td>${escapeHtml(cleanText(item.paid_at_ph || ''))}</td>
-            <td>${vehicle}</td>
+            <td>${vehicle}${duration}</td>
             <td class="col-money">${escapeHtml(formatPhp(item.final_amount_php, { forceCents: true }))}</td>
             <td>${escapeHtml(cleanText(item.payment_method || 'cash').toUpperCase())}</td>
             <td class="col-discount">${discount}</td>
@@ -3582,7 +3812,9 @@ async function fetchRevenueDashboard() {
     const d = await r.json();
 
     setText('statMaxCount', d.max_total_count ?? '--');
-    setText('statMaxCountSub', `Peak cars ${d.max_occupied_count ?? 0}; ${d.log_count ?? 0} logs`);
+    const capBreakdown = (d.car_slots != null && d.motorcycle_slots != null)
+      ? ` (${d.car_slots} car / ${d.motorcycle_slots} moto)` : '';
+    setText('statMaxCountSub', `Peak cars ${d.max_occupied_count ?? 0}; ${d.log_count ?? 0} logs${capBreakdown}`);
     const maxMeter = document.getElementById('maxCountMeter');
     if (maxMeter) {
       const maxTotal = Number(d.max_total_count || 0);
@@ -3609,9 +3841,11 @@ async function fetchRevenueDashboard() {
       car: Number(d.suggested_regular_price_php_car ?? d.suggested_regular_price_php ?? 50),
       motorcycle: Number(d.suggested_regular_price_php_motorcycle ?? 25),
     };
+    if (d.duration_pricing) durationPricing = d.duration_pricing;
     const paymentAmount = document.getElementById('paymentAmount');
     const vehicleType = document.getElementById('paymentVehicleType')?.value === 'motorcycle' ? 'motorcycle' : 'car';
-    const suggested = suggestedPrices[vehicleType];
+    const durationType = document.getElementById('paymentDurationType')?.value || 'daily';
+    const suggested = suggestedPaymentAmount(vehicleType, durationType);
     if (paymentAmount && document.activeElement !== paymentAmount && Number.isFinite(suggested) && suggested > 0) {
       paymentAmount.value = suggested.toFixed(suggested % 1 ? 2 : 0);
     }
@@ -3676,10 +3910,16 @@ async function fetchRevenueDashboard() {
   }
 }
 
+function suggestedPaymentAmount(vehicleType, durationType) {
+  const key = `${durationType}_rate_php_${vehicleType}`;
+  return Number(durationPricing[key] ?? 0);
+}
+
 function onPaymentVehicleTypeChange() {
   const vehicleType = document.getElementById('paymentVehicleType')?.value === 'motorcycle' ? 'motorcycle' : 'car';
+  const durationType = document.getElementById('paymentDurationType')?.value || 'daily';
   const paymentAmount = document.getElementById('paymentAmount');
-  const suggested = suggestedPrices[vehicleType];
+  const suggested = suggestedPaymentAmount(vehicleType, durationType);
   if (paymentAmount && Number.isFinite(suggested) && suggested > 0) {
     paymentAmount.value = suggested.toFixed(suggested % 1 ? 2 : 0);
   }
@@ -3713,6 +3953,7 @@ async function recordPayment() {
 
   const payload = {
     vehicle_type: document.getElementById('paymentVehicleType')?.value === 'motorcycle' ? 'motorcycle' : 'car',
+    duration_type: document.getElementById('paymentDurationType')?.value || 'daily',
     regular_price_php: amount,
     discount_type: discountType,
     discount_id_number: discountId || null,
@@ -4181,6 +4422,8 @@ if (isAuthorizedAdmin) {
   fetchLayoutMode();
   fetchPricingSettings();
   fetchDiscountSettings();
+  fetchCapacitySettings();
+  fetchDurationPricingSettings();
   fetchStats();
   fetchHistory();
   fetchPredictions();

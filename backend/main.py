@@ -1050,6 +1050,12 @@ def _ensure_payment_table():
         execute("ALTER TABLE parking_payments ADD COLUMN IF NOT EXISTS user_id INTEGER")
         execute("ALTER TABLE parking_payments ADD COLUMN IF NOT EXISTS vehicle_type TEXT NOT NULL DEFAULT 'car'")
         execute("ALTER TABLE parking_payments ADD COLUMN IF NOT EXISTS discount_id_number TEXT")
+        # Rate plan the driver paid under — daily, weekly, or monthly flat
+        # rate (this lot doesn't sell hourly parking). Payments recorded
+        # before this column existed default to 'daily'; rows from before
+        # hourly was retired legitimately say 'hourly' and are left as-is —
+        # that's what was actually charged at the time.
+        execute("ALTER TABLE parking_payments ADD COLUMN IF NOT EXISTS duration_type TEXT NOT NULL DEFAULT 'daily'")
         # Which admin/staff account confirmed the PWD/Senior ID in person before
         # applying the discount. NULL for GCash payments the driver completes
         # themselves — nobody on staff sees those IDs, which is the real gap in
@@ -1077,6 +1083,7 @@ def _ensure_gcash_checkout_table():
         execute("ALTER TABLE gcash_checkouts ADD COLUMN IF NOT EXISTS vehicle_type TEXT NOT NULL DEFAULT 'car'")
         execute("ALTER TABLE gcash_checkouts ADD COLUMN IF NOT EXISTS discount_id_number TEXT")
         execute("ALTER TABLE gcash_checkouts ADD COLUMN IF NOT EXISTS error_message TEXT")
+        execute("ALTER TABLE gcash_checkouts ADD COLUMN IF NOT EXISTS duration_type TEXT NOT NULL DEFAULT 'daily'")
     except Exception as e:
         print(f"[DB] gcash checkout table setup warning: {e}")
 
@@ -1209,6 +1216,10 @@ def _active_slot_capacity(default=None):
     env_total = _layout_capacity_from_env()
     if env_total > 0:
         return env_total
+
+    configured_total = _capacity_settings()["total_slots"]
+    if configured_total > 0:
+        return configured_total
 
     return int(default or LOT_CAPACITY)
 
@@ -1905,6 +1916,7 @@ def _row_int(row, key):
 def _empty_payment_dashboard(error=None):
     now = datetime.now(PH_TZ)
     active_capacity = max(1, int(_active_slot_capacity(LOT_CAPACITY)))
+    capacity_settings = _capacity_settings()
     daily = []
     for i in range(6, -1, -1):
         day = now.date() - timedelta(days=i)
@@ -1929,6 +1941,8 @@ def _empty_payment_dashboard(error=None):
         "generated_at_ph": now.strftime("%Y-%m-%d %H:%M:%S"),
         "active_slot_capacity": active_capacity,
         "max_total_count": active_capacity,
+        "car_slots": capacity_settings["car_slots"],
+        "motorcycle_slots": capacity_settings["motorcycle_slots"],
         "max_occupied_count": 0,
         "today_revenue_php": 0.0,
         "week_revenue_php": 0.0,
@@ -1948,12 +1962,14 @@ def _empty_payment_dashboard(error=None):
         "revenue_by_vehicle_type": {},
         "revenue_by_payment_method": {},
         "revenue_by_discount_type": {},
+        "revenue_by_duration_type": {},
         "daily_revenue": daily,
         "monthly_revenue": monthly,
         "recent_payments": [],
         "suggested_regular_price_php": round(_current_payment_regular_price("car"), 2),
         "suggested_regular_price_php_car": round(_current_payment_regular_price("car"), 2),
         "suggested_regular_price_php_motorcycle": round(_current_payment_regular_price("motorcycle"), 2),
+        "duration_pricing": _duration_pricing_settings(),
         "revenue_basis": "Actual recorded parking payments. Profit is gross because expenses are not tracked.",
     }
     if error:
@@ -1964,6 +1980,7 @@ def _empty_payment_dashboard(error=None):
 def _payment_revenue_dashboard():
     now = datetime.now(PH_TZ)
     active_capacity = max(1, int(_active_slot_capacity(LOT_CAPACITY)))
+    capacity_settings = _capacity_settings()
     with state_lock:
         live_total = int(state.get("total") or 0)
         live_occupied = int(state.get("occupied") or 0)
@@ -2025,6 +2042,13 @@ def _payment_revenue_dashboard():
         FROM parking_payments
         GROUP BY discount_type
     """)
+    duration_rows = query("""
+        SELECT duration_type,
+               COALESCE(SUM(final_amount_php), 0) AS revenue,
+               COUNT(*) AS transaction_count
+        FROM parking_payments
+        GROUP BY duration_type
+    """)
 
     daily_rows = query("""
         SELECT
@@ -2049,7 +2073,7 @@ def _payment_revenue_dashboard():
         ORDER BY bucket_month
     """)
     recent_rows = query("""
-        SELECT payment_id, vehicle_type, regular_price_php, discount_type,
+        SELECT payment_id, vehicle_type, duration_type, regular_price_php, discount_type,
                discount_amount_php, final_amount_php, payment_method, paid_at,
                discount_id_number, verified_by_user_id
         FROM parking_payments
@@ -2098,6 +2122,7 @@ def _payment_revenue_dashboard():
         recent.append({
             "payment_id": row.get("payment_id"),
             "vehicle_type": row.get("vehicle_type") or "car",
+            "duration_type": row.get("duration_type") or "daily",
             "regular_price_php": _row_float(row, "regular_price_php"),
             "discount_type": row.get("discount_type") or "none",
             "discount_amount_php": _row_float(row, "discount_amount_php"),
@@ -2136,11 +2161,20 @@ def _payment_revenue_dashboard():
         }
         for row in discount_rows
     }
+    by_duration = {
+        (row.get("duration_type") or "daily"): {
+            "revenue_php": _row_float(row, "revenue"),
+            "transaction_count": _row_int(row, "transaction_count"),
+        }
+        for row in duration_rows
+    }
 
     return {
         "generated_at_ph": now.strftime("%Y-%m-%d %H:%M:%S"),
         "active_slot_capacity": active_capacity,
-        "max_total_count": max(active_capacity, live_total, int(LOT_CAPACITY)),
+        "max_total_count": max(active_capacity, live_total, capacity_settings["total_slots"]),
+        "car_slots": capacity_settings["car_slots"],
+        "motorcycle_slots": capacity_settings["motorcycle_slots"],
         "max_occupied_count": live_occupied,
         "today_revenue_php": today_revenue,
         "week_revenue_php": week_revenue,
@@ -2160,22 +2194,25 @@ def _payment_revenue_dashboard():
         "revenue_by_vehicle_type": by_vehicle,
         "revenue_by_payment_method": by_payment_method,
         "revenue_by_discount_type": by_discount,
+        "revenue_by_duration_type": by_duration,
         "daily_revenue": daily,
         "monthly_revenue": monthly,
         "recent_payments": recent,
         "suggested_regular_price_php": round(_current_payment_regular_price("car"), 2),
         "suggested_regular_price_php_car": round(_current_payment_regular_price("car"), 2),
         "suggested_regular_price_php_motorcycle": round(_current_payment_regular_price("motorcycle"), 2),
+        "duration_pricing": _duration_pricing_settings(),
         "revenue_basis": "Actual recorded parking payments. Profit is gross because expenses are not tracked.",
     }
 
 
 def _record_parking_payment(payload, verified_by_user_id=None):
     vehicle_type = _normalize_vehicle_type(payload.vehicle_type, default="car")
+    duration_type = _normalize_duration_type(getattr(payload, "duration_type", None), default="daily")
     regular_price = _parse_price(
         payload.regular_price_php
         if payload.regular_price_php is not None
-        else _current_payment_regular_price(vehicle_type)
+        else _regular_price_for_duration(vehicle_type, duration_type)
     )
     discount_id_number = (getattr(payload, "discount_id_number", None) or "").strip()[:64] or None
     discount_type, discount_rate = _discount_rate_for_type(payload.discount_type, discount_id_number)
@@ -2194,17 +2231,17 @@ def _record_parking_payment(payload, verified_by_user_id=None):
         cur.execute(
             """
             INSERT INTO parking_payments (
-                vehicle_type, regular_price_php, discount_type, discount_rate,
+                vehicle_type, duration_type, regular_price_php, discount_type, discount_rate,
                 discount_amount_php, final_amount_php, payment_method, notes, paid_at, user_id,
                 discount_id_number, verified_by_user_id
             )
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            RETURNING payment_id, vehicle_type, regular_price_php, discount_type,
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            RETURNING payment_id, vehicle_type, duration_type, regular_price_php, discount_type,
                       discount_rate, discount_amount_php, final_amount_php,
                       payment_method, notes, paid_at, discount_id_number, verified_by_user_id
             """,
             (
-                vehicle_type, regular_price, discount_type, discount_rate,
+                vehicle_type, duration_type, regular_price, discount_type, discount_rate,
                 discount_amount, final_amount, payment_method, notes, paid_at,
                 payload.user_id, discount_id_number, verified_by_user_id,
             ),
@@ -2216,6 +2253,7 @@ def _record_parking_payment(payload, verified_by_user_id=None):
             "ok": True,
             "payment_id": row["payment_id"],
             "vehicle_type": row["vehicle_type"],
+            "duration_type": row["duration_type"],
             "regular_price_php": _row_float(row, "regular_price_php"),
             "discount_type": row["discount_type"],
             "discount_rate": float(row["discount_rate"] or 0.0),
@@ -2322,6 +2360,7 @@ def api_driver_summary():
         "last_update": timestamp,
         "status_text": status_text,
         "generated_at_ph": datetime.now(PH_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+        "duration_pricing": _duration_pricing_settings(),
         **price,
     }
 
@@ -2508,7 +2547,7 @@ def api_payments_recent(limit: int = 10, offset: int = 0, _admin=Depends(require
 
     rows = query(
         """
-        SELECT payment_id, vehicle_type, regular_price_php, discount_type,
+        SELECT payment_id, vehicle_type, duration_type, regular_price_php, discount_type,
                discount_amount_php, final_amount_php, payment_method, paid_at,
                discount_id_number, verified_by_user_id
         FROM parking_payments
@@ -2523,6 +2562,7 @@ def api_payments_recent(limit: int = 10, offset: int = 0, _admin=Depends(require
         items.append({
             "payment_id": row.get("payment_id"),
             "vehicle_type": row.get("vehicle_type") or "car",
+            "duration_type": row.get("duration_type") or "daily",
             "regular_price_php": _row_float(row, "regular_price_php"),
             "discount_type": row.get("discount_type") or "none",
             "discount_amount_php": _row_float(row, "discount_amount_php"),
@@ -2538,6 +2578,7 @@ def api_payments_recent(limit: int = 10, offset: int = 0, _admin=Depends(require
 
 class PaymentRecordPayload(BaseModel):
     vehicle_type: Optional[str] = "car"
+    duration_type: Optional[str] = "daily"
     regular_price_php: Optional[float] = None
     discount_type: Optional[str] = "none"
     discount_id_number: Optional[str] = None
@@ -2575,6 +2616,7 @@ def api_driver_history(user_id: int, period: str = "all", limit: int = 50, _auth
             SELECT
                 payment_id,
                 vehicle_type,
+                duration_type,
                 regular_price_php,
                 discount_type,
                 discount_amount_php,
@@ -2594,6 +2636,7 @@ def api_driver_history(user_id: int, period: str = "all", limit: int = 50, _auth
             records.append({
                 "payment_id": r["payment_id"],
                 "vehicle_type": r["vehicle_type"] or "car",
+                "duration_type": r["duration_type"] or "daily",
                 "regular_price_php": float(r["regular_price_php"]),
                 "discount_type": r["discount_type"],
                 "discount_amount_php": float(r["discount_amount_php"]),
@@ -2620,6 +2663,7 @@ def api_driver_history(user_id: int, period: str = "all", limit: int = 50, _auth
 # ══════════════════════════════════════════════════════════════════
 class GcashCheckoutPayload(BaseModel):
     vehicle_type: Optional[str] = "car"
+    duration_type: Optional[str] = "daily"
     discount_type: Optional[str] = "none"
     discount_id_number: Optional[str] = None
     description: Optional[str] = "OccupAI Parking Payment"
@@ -2642,7 +2686,8 @@ def gcash_create_checkout(payload: GcashCheckoutPayload, request: Request):
         raise HTTPException(503, "PayMongo is not configured. Set PAYMONGO_SECRET_KEY in .env")
 
     vehicle_type = _normalize_vehicle_type(payload.vehicle_type, default="car")
-    regular_price = _current_payment_regular_price(vehicle_type)
+    duration_type = _normalize_duration_type(payload.duration_type, default="daily")
+    regular_price = _regular_price_for_duration(vehicle_type, duration_type)
     discount_id_number = (payload.discount_id_number or "").strip()[:64] or None
     discount_type, discount_rate = _discount_rate_for_type(payload.discount_type, discount_id_number)
     # Checked here, before PayMongo charges the customer — a GCash checkout is
@@ -2662,17 +2707,17 @@ def gcash_create_checkout(payload: GcashCheckoutPayload, request: Request):
     ref = secrets.token_urlsafe(24)
     execute(
         """
-        INSERT INTO gcash_checkouts (ref, user_id, vehicle_type, regular_price_php, discount_type, final_amount_php, discount_id_number)
-        VALUES (%s,%s,%s,%s,%s,%s,%s)
+        INSERT INTO gcash_checkouts (ref, user_id, vehicle_type, duration_type, regular_price_php, discount_type, final_amount_php, discount_id_number)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
         """,
-        (ref, payload.user_id, vehicle_type, regular_price, discount_type, final_amount, discount_id_number),
+        (ref, payload.user_id, vehicle_type, duration_type, regular_price, discount_type, final_amount, discount_id_number),
     )
 
     body = json.dumps({
         "data": {
             "attributes": {
                 "line_items": [{
-                    "name": f"Parking Fee ({vehicle_type.title()})",
+                    "name": f"Parking Fee ({vehicle_type.title()}, {duration_type.title()})",
                     "amount": amount_centavos,
                     "currency": "PHP",
                     "quantity": 1,
@@ -2708,6 +2753,8 @@ def gcash_create_checkout(payload: GcashCheckoutPayload, request: Request):
         "checkout_url": checkout_url,
         "checkout_id": checkout_id,
         "amount_php": final_amount,
+        "vehicle_type": vehicle_type,
+        "duration_type": duration_type,
         "discount_type": discount_type,
         "discount_amount_php": discount_amount,
     }
@@ -2854,6 +2901,7 @@ def gcash_success(ref: str, attempt: int = 0):
     try:
         payment_payload = PaymentRecordPayload(
             vehicle_type=checkout["vehicle_type"] or "car",
+            duration_type=checkout["duration_type"] or "daily",
             regular_price_php=float(checkout["regular_price_php"]),
             discount_type=checkout["discount_type"],
             discount_id_number=checkout["discount_id_number"],
@@ -2891,7 +2939,7 @@ def gcash_issues(_admin=Depends(require_admin)):
     Needs manual reconciliation.
     """
     rows = query("""
-        SELECT ref, user_id, vehicle_type, final_amount_php, discount_type,
+        SELECT ref, user_id, vehicle_type, duration_type, final_amount_php, discount_type,
                error_message, created_at
         FROM gcash_checkouts
         WHERE status = 'error'
@@ -2902,6 +2950,7 @@ def gcash_issues(_admin=Depends(require_admin)):
         "ref": r.get("ref"),
         "user_id": r.get("user_id"),
         "vehicle_type": r.get("vehicle_type") or "car",
+        "duration_type": r.get("duration_type") or "daily",
         "final_amount_php": _row_float(r, "final_amount_php"),
         "discount_type": r.get("discount_type") or "none",
         "error_message": r.get("error_message"),
@@ -3085,6 +3134,18 @@ class PricingSettingsPayload(BaseModel):
     price_php_motorcycle: Optional[float] = None
     enabled: Optional[bool] = None
 
+class CapacitySettingsPayload(BaseModel):
+    car_slots: Optional[int] = None
+    motorcycle_slots: Optional[int] = None
+
+class DurationPricingPayload(BaseModel):
+    daily_rate_php_car: Optional[float] = None
+    daily_rate_php_motorcycle: Optional[float] = None
+    weekly_rate_php_car: Optional[float] = None
+    weekly_rate_php_motorcycle: Optional[float] = None
+    monthly_rate_php_car: Optional[float] = None
+    monthly_rate_php_motorcycle: Optional[float] = None
+
 # Keep last adjustment in memory so dashboard can read it
 _last_slot_adjustment: dict = {}
 _LAYOUT_MODES = {"NORMAL", "BUSY", "HIGH"}
@@ -3153,6 +3214,14 @@ def _normalize_vehicle_type(value, default="car"):
         return "car"
     raise HTTPException(400, "vehicle_type must be 'car' or 'motorcycle'")
 
+_DURATION_TYPES = {"daily", "weekly", "monthly"}
+
+def _normalize_duration_type(value, default="daily"):
+    raw = str(value if value is not None else default).strip().lower()
+    if raw in _DURATION_TYPES:
+        return raw
+    raise HTTPException(400, "duration_type must be one of: daily, weekly, monthly")
+
 def _current_flat_rate(vehicle_type="car"):
     vt = _normalize_vehicle_type(vehicle_type)
     key = "FLAT_RATE_CAR" if vt == "car" else "FLAT_RATE_MOTORCYCLE"
@@ -3190,6 +3259,82 @@ def _discount_settings():
         "senior_enabled": _env_bool(_read_setting("DISCOUNT_SENIOR_ENABLED", "true")),
         "pwd_senior_discount_rate": PWD_SENIOR_DISCOUNT_RATE,
         "pwd_senior_discount_pct": round(PWD_SENIOR_DISCOUNT_RATE * 100, 1),
+    }
+
+# Flat daily/weekly/monthly parking rates. This lot doesn't sell hourly
+# parking at all — payments are always one of these three plans. (The
+# occupancy-based dynamic/manual hourly formula elsewhere in this file still
+# runs for insights, forecasting, and the live rate ticker — it's just not a
+# duration a driver can pay for.) Same durable admin_settings-backed pattern
+# as pricing/capacity.
+_DEFAULT_DAILY_RATE_CAR = 150.0
+_DEFAULT_DAILY_RATE_MOTORCYCLE = 80.0
+_DEFAULT_WEEKLY_RATE_CAR = 800.0
+_DEFAULT_WEEKLY_RATE_MOTORCYCLE = 450.0
+_DEFAULT_MONTHLY_RATE_CAR = 1200.0
+_DEFAULT_MONTHLY_RATE_MOTORCYCLE = 600.0
+
+def _duration_pricing_settings():
+    daily_car = _parse_price(_read_setting("DAILY_RATE_CAR", str(_DEFAULT_DAILY_RATE_CAR)), _DEFAULT_DAILY_RATE_CAR)
+    daily_moto = _parse_price(
+        _read_setting("DAILY_RATE_MOTORCYCLE", str(_DEFAULT_DAILY_RATE_MOTORCYCLE)), _DEFAULT_DAILY_RATE_MOTORCYCLE
+    )
+    weekly_car = _parse_price(
+        _read_setting("WEEKLY_RATE_CAR", str(_DEFAULT_WEEKLY_RATE_CAR)), _DEFAULT_WEEKLY_RATE_CAR
+    )
+    weekly_moto = _parse_price(
+        _read_setting("WEEKLY_RATE_MOTORCYCLE", str(_DEFAULT_WEEKLY_RATE_MOTORCYCLE)), _DEFAULT_WEEKLY_RATE_MOTORCYCLE
+    )
+    monthly_car = _parse_price(
+        _read_setting("MONTHLY_RATE_CAR", str(_DEFAULT_MONTHLY_RATE_CAR)), _DEFAULT_MONTHLY_RATE_CAR
+    )
+    monthly_moto = _parse_price(
+        _read_setting("MONTHLY_RATE_MOTORCYCLE", str(_DEFAULT_MONTHLY_RATE_MOTORCYCLE)), _DEFAULT_MONTHLY_RATE_MOTORCYCLE
+    )
+    return {
+        "daily_rate_php_car": daily_car,
+        "daily_rate_php_motorcycle": daily_moto,
+        "weekly_rate_php_car": weekly_car,
+        "weekly_rate_php_motorcycle": weekly_moto,
+        "monthly_rate_php_car": monthly_car,
+        "monthly_rate_php_motorcycle": monthly_moto,
+        "currency": "PHP",
+    }
+
+def _regular_price_for_duration(vehicle_type="car", duration_type="daily"):
+    vt = _normalize_vehicle_type(vehicle_type)
+    dt = _normalize_duration_type(duration_type)
+    rates = _duration_pricing_settings()
+    key = f"{dt}_rate_php_{vt}"
+    return float(rates[key])
+
+# Default lot layout: 10 car slots + 20 motorcycle slots = 30 total, per the
+# panel's approved system requirements ("Total Max Count" / "identify how
+# many are for motorcycle slots"). Admin-editable, durable in admin_settings
+# the same way pricing/discounts are.
+_DEFAULT_CAR_SLOTS = 10
+_DEFAULT_MOTORCYCLE_SLOTS = 20
+
+def _parse_slot_count(value, default):
+    try:
+        count = int(float(value))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "slot counts must be whole numbers")
+    if count < 0 or count > 999:
+        raise HTTPException(400, "slot counts must be between 0 and 999")
+    return count
+
+def _capacity_settings():
+    car = _parse_slot_count(
+        _read_setting("CAPACITY_CAR_SLOTS", str(_DEFAULT_CAR_SLOTS)), _DEFAULT_CAR_SLOTS
+    )
+    moto = _parse_slot_count(
+        _read_setting("CAPACITY_MOTORCYCLE_SLOTS", str(_DEFAULT_MOTORCYCLE_SLOTS)), _DEFAULT_MOTORCYCLE_SLOTS
+    )
+    return {
+        "car_slots": car,
+        "motorcycle_slots": moto,
+        "total_slots": car + moto,
     }
 
 def _manual_price_override(vehicle_type="car"):
@@ -3392,6 +3537,87 @@ def set_discount_settings(payload: DiscountSettingsPayload, _admin=Depends(requi
     result.update({
         "ok": True,
         "message": f"PWD discount {'on' if pwd_enabled else 'off'}, Senior discount {'on' if senior_enabled else 'off'}.",
+    })
+    return result
+
+@app.get("/api/settings/capacity")
+def get_capacity_settings():
+    return _capacity_settings()
+
+@app.post("/api/settings/capacity")
+def set_capacity_settings(payload: CapacitySettingsPayload, _admin=Depends(require_admin)):
+    current = _capacity_settings()
+    car = current["car_slots"] if payload.car_slots is None else _parse_slot_count(payload.car_slots, current["car_slots"])
+    moto = (
+        current["motorcycle_slots"]
+        if payload.motorcycle_slots is None
+        else _parse_slot_count(payload.motorcycle_slots, current["motorcycle_slots"])
+    )
+    if car + moto < 1:
+        raise HTTPException(400, "Total slots (car + motorcycle) must be at least 1")
+
+    _write_setting("CAPACITY_CAR_SLOTS", str(car))
+    _write_setting("CAPACITY_MOTORCYCLE_SLOTS", str(moto))
+
+    with _insight_lock:
+        _insight_cache.clear()
+    threading.Thread(target=_run_insights_now, daemon=True, name="insight-capacity-update").start()
+
+    result = _capacity_settings()
+    result.update({
+        "ok": True,
+        "message": f"Capacity saved — {car} car slot(s), {moto} motorcycle slot(s) ({car + moto} total).",
+    })
+    return result
+
+@app.get("/api/settings/duration-pricing")
+def get_duration_pricing_settings():
+    return _duration_pricing_settings()
+
+@app.post("/api/settings/duration-pricing")
+def set_duration_pricing_settings(payload: DurationPricingPayload, _admin=Depends(require_admin)):
+    current = _duration_pricing_settings()
+    daily_car = current["daily_rate_php_car"] if payload.daily_rate_php_car is None else _parse_price(payload.daily_rate_php_car)
+    daily_moto = (
+        current["daily_rate_php_motorcycle"]
+        if payload.daily_rate_php_motorcycle is None
+        else _parse_price(payload.daily_rate_php_motorcycle)
+    )
+    weekly_car = (
+        current["weekly_rate_php_car"]
+        if payload.weekly_rate_php_car is None
+        else _parse_price(payload.weekly_rate_php_car)
+    )
+    weekly_moto = (
+        current["weekly_rate_php_motorcycle"]
+        if payload.weekly_rate_php_motorcycle is None
+        else _parse_price(payload.weekly_rate_php_motorcycle)
+    )
+    monthly_car = (
+        current["monthly_rate_php_car"]
+        if payload.monthly_rate_php_car is None
+        else _parse_price(payload.monthly_rate_php_car)
+    )
+    monthly_moto = (
+        current["monthly_rate_php_motorcycle"]
+        if payload.monthly_rate_php_motorcycle is None
+        else _parse_price(payload.monthly_rate_php_motorcycle)
+    )
+
+    _write_setting("DAILY_RATE_CAR", f"{daily_car:.2f}")
+    _write_setting("DAILY_RATE_MOTORCYCLE", f"{daily_moto:.2f}")
+    _write_setting("WEEKLY_RATE_CAR", f"{weekly_car:.2f}")
+    _write_setting("WEEKLY_RATE_MOTORCYCLE", f"{weekly_moto:.2f}")
+    _write_setting("MONTHLY_RATE_CAR", f"{monthly_car:.2f}")
+    _write_setting("MONTHLY_RATE_MOTORCYCLE", f"{monthly_moto:.2f}")
+
+    result = _duration_pricing_settings()
+    result.update({
+        "ok": True,
+        "message": (
+            f"Rates saved — Car PHP {daily_car:.2f}/day, PHP {weekly_car:.2f}/week, PHP {monthly_car:.2f}/month; "
+            f"Motorcycle PHP {daily_moto:.2f}/day, PHP {weekly_moto:.2f}/week, PHP {monthly_moto:.2f}/month."
+        ),
     })
     return result
 
