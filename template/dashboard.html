@@ -1699,6 +1699,24 @@
     .report-footer { margin-top:10px; font-size:11px; color:var(--muted); text-align:right; padding:4px 2px; }
     @media(max-width:900px) { .report-kpi-row { grid-template-columns:repeat(2,1fr); } }
     @media(max-width:600px) { .report-kpi-row { grid-template-columns:1fr; } .reports-toolbar { flex-direction:column; align-items:flex-start; } }
+
+    /* Shimmering placeholder shown in place of a stat value while its first
+       (uncached) fetch is still in flight, so the panel never looks blank. */
+    .skeleton-text {
+      display: inline-block;
+      min-width: 64px;
+      min-height: 1em;
+      color: transparent !important;
+      background: linear-gradient(90deg, var(--border) 25%, var(--surface) 37%, var(--border) 63%);
+      background-size: 400% 100%;
+      animation: skeleton-shimmer 1.4s ease-in-out infinite;
+      border-radius: 6px;
+      vertical-align: middle;
+    }
+    @keyframes skeleton-shimmer {
+      0% { background-position: 100% 50%; }
+      100% { background-position: 0% 50%; }
+    }
 </style>
 </head>
 <body>
@@ -2664,6 +2682,38 @@ function staggerCalls(fns, gapMs = 120) {
   fns.forEach((fn, i) => setTimeout(fn, i * gapMs));
 }
 
+// Stale-while-revalidate cache for read-only panel data (localStorage, so it
+// survives a reload too). Only meant for data that's fine to show briefly
+// stale — forecasts, aggregated revenue — never for live camera telemetry,
+// where a silently-stale number would be actively misleading. On a first
+// visit (nothing cached yet) callers fall back to a loading skeleton
+// instead of a blank "--" while the first real fetch is in flight.
+const CACHE_PREFIX = 'occupai_cache_';
+
+function cacheGet(key) {
+  try {
+    const raw = localStorage.getItem(CACHE_PREFIX + key);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function cacheSet(key, data) {
+  try {
+    localStorage.setItem(CACHE_PREFIX + key, JSON.stringify(data));
+  } catch (e) {
+    // Storage full or unavailable (private browsing) — caching is a nicety,
+    // not something worth failing the page load over.
+  }
+}
+
+function setSkeleton(selector, isLoading) {
+  document.querySelectorAll(selector).forEach(el => {
+    el.classList.toggle('skeleton-text', isLoading);
+  });
+}
+
 function getStoredUser() {
   try {
     const raw = localStorage.getItem('occupai_user');
@@ -3539,90 +3589,114 @@ async function fetchPredictions() {
   }
 }
 
+const PREDICTIONS_CACHE_KEY = 'predictions_full';
+
+function renderFullPredictions(payload) {
+  const d = payload.predictions || {};
+  const hourly = d.hourly_est || {};
+  const hours = Array.from({ length: 24 }, (_, h) => Number(hourly[String(h)] ?? 0));
+
+  setText('predFullPeak', d.peak_label ? cleanText(d.peak_label) : '--');
+  setText('predFullCapacity', d.active_slot_capacity != null ? `${d.active_slot_capacity} slots` : '--');
+  setText('predFullTodayRevenue', d.today_revenue_forecast != null
+    ? formatPhp(d.today_revenue_forecast) : '--');
+  setText('predFullTs', d.generated_at_ph ? `Generated ${cleanText(d.generated_at_ph)}` : '--');
+  if (payload.currentOccPct != null) {
+    setText('predFullCurrentOcc', `${Math.round(payload.currentOccPct)}%`);
+  }
+
+  const bars = document.getElementById('predFullHourBars');
+  const note = document.getElementById('predFullHourNote');
+  if (bars) {
+    const max = Math.max(1, ...hours);
+    const nowH = new Date().getHours();
+    bars.innerHTML = hours.map((v, h) => {
+      const height = Math.max(4, v / max * 100);
+      return `<div class="hour-bar ${h === nowH ? 'now' : ''}" title="${String(h).padStart(2, '0')}:00 - ${v}%" style="height:${height}%"></div>`;
+    }).join('');
+  }
+  if (note) note.textContent = d.peak_label ? 'Peak: ' + cleanText(d.peak_label) : 'Full 24-hour pattern';
+
+  const grid = document.getElementById('predFullGrid');
+  if (grid) {
+    if (hours.every(v => v === 0)) {
+      grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><strong>Not enough data yet</strong>Predictions need more logged activity.</div>';
+    } else {
+      grid.innerHTML = hours.map((v, h) => `
+        <div class="pred-card">
+          <div class="pred-time">${String(h).padStart(2, '0')}:00</div>
+          <div class="pred-val">${v}%</div>
+          <div class="pred-label">avg occupancy</div>
+        </div>`).join('');
+    }
+  }
+
+  const busyEl = document.getElementById('predFullBusyDays');
+  if (busyEl) {
+    const busy = Array.isArray(d.busy_days) ? d.busy_days : [];
+    busyEl.innerHTML = busy.length
+      ? busy.map(day => `<span class="status-chip warn" style="margin:0 6px 6px 0">${escapeHtml(cleanText(day))}</span>`).join('')
+      : '<span class="insight-loading">No busy-day data yet.</span>';
+  }
+  const quietEl = document.getElementById('predFullQuietDays');
+  if (quietEl) {
+    const quiet = Array.isArray(d.quiet_days) ? d.quiet_days : [];
+    quietEl.innerHTML = quiet.length
+      ? quiet.map(day => `<span class="status-chip good" style="margin:0 6px 6px 0">${escapeHtml(cleanText(day))}</span>`).join('')
+      : '<span class="insight-loading">No quiet-day data yet.</span>';
+  }
+
+  const revenueGrid = document.getElementById('predFullWeekdayGrid');
+  if (revenueGrid) {
+    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const phDay = new Date().toLocaleDateString('en-PH', { timeZone: 'Asia/Manila', weekday: 'short' });
+    if (d.weekday_revenue && Object.keys(d.weekday_revenue).length > 0) {
+      revenueGrid.innerHTML = days.map(day => {
+        const rev = d.weekday_revenue[day] ?? 0;
+        const isToday = day === phDay;
+        return `
+          <div class="revenue-day ${isToday ? 'is-today' : ''}">
+            <div class="revenue-day-name">${day}</div>
+            <div class="revenue-day-value">${formatPhp(rev)}</div>
+          </div>`;
+      }).join('');
+    } else {
+      revenueGrid.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><strong>No revenue data yet</strong>Weekday forecast will appear here.</div>';
+    }
+  }
+}
+
 async function fetchFullPredictions() {
+  const cached = cacheGet(PREDICTIONS_CACHE_KEY);
+  if (cached) {
+    renderFullPredictions(cached);
+  } else {
+    setSkeleton('#predFullCurrentOcc, #predFullPeak, #predFullCapacity, #predFullTodayRevenue', true);
+  }
+
   try {
     const r = await fetchWithRetry('/api/predictions');
     if (!r.ok) throw new Error(r.status);
     const d = await r.json();
-    const hourly = d.hourly_est || {};
-    const hours = Array.from({ length: 24 }, (_, h) => Number(hourly[String(h)] ?? 0));
 
-    setText('predFullPeak', d.peak_label ? cleanText(d.peak_label) : '--');
-    setText('predFullCapacity', d.active_slot_capacity != null ? `${d.active_slot_capacity} slots` : '--');
-    setText('predFullTodayRevenue', d.today_revenue_forecast != null
-      ? formatPhp(d.today_revenue_forecast) : '--');
-    setText('predFullTs', d.generated_at_ph ? `Generated ${cleanText(d.generated_at_ph)}` : '--');
-
+    let currentOccPct = cached ? cached.currentOccPct : null;
     try {
       const statsR = await fetchWithRetry('/api/stats');
       if (statsR.ok) {
         const s = await statsR.json();
-        const pct = s.occupancy_pct ?? (s.total ? Math.round((s.occupied || 0) / s.total * 100) : 0);
-        setText('predFullCurrentOcc', `${Math.round(pct)}%`);
+        currentOccPct = s.occupancy_pct ?? (s.total ? Math.round((s.occupied || 0) / s.total * 100) : 0);
       }
     } catch (_) {}
 
-    const bars = document.getElementById('predFullHourBars');
-    const note = document.getElementById('predFullHourNote');
-    if (bars) {
-      const max = Math.max(1, ...hours);
-      const nowH = new Date().getHours();
-      bars.innerHTML = hours.map((v, h) => {
-        const height = Math.max(4, v / max * 100);
-        return `<div class="hour-bar ${h === nowH ? 'now' : ''}" title="${String(h).padStart(2, '0')}:00 - ${v}%" style="height:${height}%"></div>`;
-      }).join('');
-    }
-    if (note) note.textContent = d.peak_label ? 'Peak: ' + cleanText(d.peak_label) : 'Full 24-hour pattern';
-
-    const grid = document.getElementById('predFullGrid');
-    if (grid) {
-      if (hours.every(v => v === 0)) {
-        grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><strong>Not enough data yet</strong>Predictions need more logged activity.</div>';
-      } else {
-        grid.innerHTML = hours.map((v, h) => `
-          <div class="pred-card">
-            <div class="pred-time">${String(h).padStart(2, '0')}:00</div>
-            <div class="pred-val">${v}%</div>
-            <div class="pred-label">avg occupancy</div>
-          </div>`).join('');
-      }
-    }
-
-    const busyEl = document.getElementById('predFullBusyDays');
-    if (busyEl) {
-      const busy = Array.isArray(d.busy_days) ? d.busy_days : [];
-      busyEl.innerHTML = busy.length
-        ? busy.map(day => `<span class="status-chip warn" style="margin:0 6px 6px 0">${escapeHtml(cleanText(day))}</span>`).join('')
-        : '<span class="insight-loading">No busy-day data yet.</span>';
-    }
-    const quietEl = document.getElementById('predFullQuietDays');
-    if (quietEl) {
-      const quiet = Array.isArray(d.quiet_days) ? d.quiet_days : [];
-      quietEl.innerHTML = quiet.length
-        ? quiet.map(day => `<span class="status-chip good" style="margin:0 6px 6px 0">${escapeHtml(cleanText(day))}</span>`).join('')
-        : '<span class="insight-loading">No quiet-day data yet.</span>';
-    }
-
-    const revenueGrid = document.getElementById('predFullWeekdayGrid');
-    if (revenueGrid) {
-      const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-      const phDay = new Date().toLocaleDateString('en-PH', { timeZone: 'Asia/Manila', weekday: 'short' });
-      if (d.weekday_revenue && Object.keys(d.weekday_revenue).length > 0) {
-        revenueGrid.innerHTML = days.map(day => {
-          const rev = d.weekday_revenue[day] ?? 0;
-          const isToday = day === phDay;
-          return `
-            <div class="revenue-day ${isToday ? 'is-today' : ''}">
-              <div class="revenue-day-name">${day}</div>
-              <div class="revenue-day-value">${formatPhp(rev)}</div>
-            </div>`;
-        }).join('');
-      } else {
-        revenueGrid.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><strong>No revenue data yet</strong>Weekday forecast will appear here.</div>';
-      }
-    }
+    const payload = { predictions: d, currentOccPct };
+    cacheSet(PREDICTIONS_CACHE_KEY, payload);
+    renderFullPredictions(payload);
   } catch (e) {
     console.error('fetchFullPredictions error:', e);
+    // Network/server hiccup: leave whatever was already rendered (cached
+    // data, or the loading skeleton) in place rather than blanking the page.
+  } finally {
+    setSkeleton('#predFullCurrentOcc, #predFullPeak, #predFullCapacity, #predFullTodayRevenue', false);
   }
 }
 
@@ -4221,27 +4295,43 @@ function renderPeakVisual(hourlyByDay) {
   if (label) label.textContent = max > 0 ? `Peak ${hourLabel24(peakHour)}` : '--';
 }
 
+const ML_CONFIDENCE_CACHE_KEY = 'ml_confidence';
+
+function renderMlConfidence(d) {
+  const vehConf = d?.vehicles?.confidence_pct;
+  const occConf = d?.occupancy?.confidence_pct;
+  const nums = [vehConf, occConf].filter(v => Number.isFinite(v));
+  const avgConf = nums.length ? Math.round(nums.reduce((a, b) => a + b, 0) / nums.length) : null;
+
+  setText('predFullAccuracy', avgConf != null ? `${avgConf}%` : '--');
+
+  const setBar = (barId, valueId, pct) => {
+    const bar = document.getElementById(barId);
+    if (bar) bar.style.width = Number.isFinite(pct) ? `${Math.min(100, Math.max(0, pct))}%` : '0%';
+    setText(valueId, Number.isFinite(pct) ? `${Math.round(pct)}%` : 'n/a');
+  };
+  setBar('confVehiclesBar', 'confVehiclesValue', vehConf);
+  setBar('confOccupancyBar', 'confOccupancyValue', occConf);
+}
+
 async function fetchMlConfidence() {
+  const cached = cacheGet(ML_CONFIDENCE_CACHE_KEY);
+  if (cached) {
+    renderMlConfidence(cached);
+  } else {
+    setSkeleton('#predFullAccuracy, #confVehiclesValue, #confOccupancyValue', true);
+  }
+
   try {
     const r = await fetchWithRetry('/api/ml/dashboard');
     if (!r.ok) throw new Error(r.status);
     const d = await r.json();
-    const vehConf = d?.vehicles?.confidence_pct;
-    const occConf = d?.occupancy?.confidence_pct;
-    const nums = [vehConf, occConf].filter(v => Number.isFinite(v));
-    const avgConf = nums.length ? Math.round(nums.reduce((a, b) => a + b, 0) / nums.length) : null;
-
-    setText('predFullAccuracy', avgConf != null ? `${avgConf}%` : '--');
-
-    const setBar = (barId, valueId, pct) => {
-      const bar = document.getElementById(barId);
-      if (bar) bar.style.width = Number.isFinite(pct) ? `${Math.min(100, Math.max(0, pct))}%` : '0%';
-      setText(valueId, Number.isFinite(pct) ? `${Math.round(pct)}%` : 'n/a');
-    };
-    setBar('confVehiclesBar', 'confVehiclesValue', vehConf);
-    setBar('confOccupancyBar', 'confOccupancyValue', occConf);
+    cacheSet(ML_CONFIDENCE_CACHE_KEY, d);
+    renderMlConfidence(d);
   } catch (e) {
     console.warn('ML confidence fetch failed:', e);
+  } finally {
+    setSkeleton('#predFullAccuracy, #confVehiclesValue, #confOccupancyValue', false);
   }
 }
 
