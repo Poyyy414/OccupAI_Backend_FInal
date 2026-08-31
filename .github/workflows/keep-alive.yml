@@ -22,10 +22,26 @@ jobs:
         run: |
           url="https://occupai-backend-final-last.onrender.com/status"
           echo "Pinging $url"
-          code=$(curl -s -o response.json -w "%{http_code}" --max-time 25 "$url")
-          echo "HTTP status: $code"
-          cat response.json || true
+
+          # Render's free tier can take 30-60s+ to wake a cold instance, so a
+          # single short-timeout curl flakes on the exact scenario this job
+          # exists to prevent. Retry a few times with a generous per-attempt
+          # timeout before actually failing the job.
+          attempt=1
+          max_attempts=5
+          code=000
+          until [ "$attempt" -gt "$max_attempts" ]; do
+            code=$(curl -s -o response.json -w "%{http_code}" --max-time 55 "$url" || echo 000)
+            echo "Attempt $attempt: HTTP status $code"
+            if [ "$code" -ge 200 ] && [ "$code" -lt 300 ]; then
+              break
+            fi
+            attempt=$((attempt + 1))
+            sleep 5
+          done
+
+          cat response.json 2>/dev/null || true
           if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
-            echo "::error::Ping failed with HTTP $code"
+            echo "::error::Ping failed with HTTP $code after $max_attempts attempts"
             exit 1
           fi
