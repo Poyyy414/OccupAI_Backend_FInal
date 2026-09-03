@@ -89,7 +89,7 @@ Audit scope: FastAPI backend, YOLO/camera integration, admin/driver web dashboar
 
 ## Priority 2: product/data correctness
 
-- [ ] Fix the predictions data-source policy: the current code prefers static training data whenever it is available, so recent live rows may not influence the displayed prediction. Define and test the intended live-vs-training fallback.
+- [x] Fix the predictions data-source policy: recent live parking logs now drive hourly and revenue forecasts when available; the bundled CSV is an explicitly labeled fallback for a new system with no live logs.
 - [ ] Return a server-side total count for driver history; the current `total_sessions` is the count of the limited page, not necessarily the user's total history.
 - [ ] Decide whether the public pricing/occupancy/forecast endpoints are intentionally public. If not, add role-based authorization and update web/mobile callers.
 - [ ] Replace the compile-time public Render URL with environment-specific `API_BASE_URL` values for development, staging, and production. Use the debug Android manifest only for local HTTP.

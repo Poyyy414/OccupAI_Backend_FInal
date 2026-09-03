@@ -42,7 +42,13 @@ _CAM_TOKEN_DEFAULT = "occupai_cam_2027"
 
 # Fail closed when a deployment forgets to declare its environment. Local
 # development must opt in explicitly with DEPLOY_MODE=local.
-DEPLOY_MODE  = os.getenv("DEPLOY_MODE", "production").strip().lower()
+_raw_deploy_mode = os.getenv("DEPLOY_MODE", "production")
+# Render environment values do not support shell-style inline comments. Be
+# tolerant of an accidentally pasted comment for this non-secret setting, but
+# keep the effective mode normalized in health responses and feature flags.
+DEPLOY_MODE = _raw_deploy_mode.split("#", 1)[0].strip().lower()
+if DEPLOY_MODE not in {"local", "staging", "production"}:
+    raise RuntimeError("DEPLOY_MODE must be exactly local, staging, or production.")
 _configured_cam_token = os.getenv("CAM_TOKEN", "").strip()
 if _configured_cam_token:
     CAM_TOKEN = _configured_cam_token
@@ -946,16 +952,17 @@ def _run_insights_now():
         out["pricing"] = f"Pricing recommendation temporarily unavailable. ({e})"
 
     try:
-        weekday_revenue, today_revenue = _training_weekday_revenue_forecast(active_capacity)
-        source = "training data"
-        if not any(weekday_revenue.values()):
-            weekday_revenue, today_revenue = _logged_weekday_revenue_forecast(active_capacity)
-            source = "deduplicated live logs"
+        weekday_revenue, today_revenue, source = _weekday_revenue_forecast(active_capacity)
+        source_label = {
+            "deduplicated_live_logs": "deduplicated live logs",
+            "training_data_fallback": "training data fallback",
+            "none": "available data",
+        }.get(source, source)
 
         if today_revenue is not None:
             out["revenue_forecast"] = (
                 f"Today's estimated revenue is approximately PHP {today_revenue:,.2f}. "
-                f"This uses the occupancy pricing formula and {source}, so repeated camera refreshes "
+                f"This uses the occupancy pricing formula and {source_label}, so repeated camera refreshes "
                 f"do not inflate the total."
             )
         else:
@@ -964,22 +971,13 @@ def _run_insights_now():
         out["revenue_forecast"] = f"Revenue forecast temporarily unavailable. ({e})"
 
     try:
-        rows = query("""
-            SELECT EXTRACT(HOUR FROM logged_at AT TIME ZONE 'Asia/Manila') AS hour,
-                   AVG(occupied) AS avg_veh
-            FROM parking_logs
-            WHERE logged_at >= NOW() - INTERVAL '7 days'
-            GROUP BY hour ORDER BY hour
-        """)
-        training_hourly = _training_hourly_vehicle_avg()
-        if training_hourly:
-            hourly = training_hourly
-            source = "historical training data"
-        elif rows and len(rows) >= 3:
-            hourly = {int(r["hour"]): float(r["avg_veh"]) for r in rows}
+        live_hourly = _logged_hourly_vehicle_avg()
+        if live_hourly:
+            hourly = live_hourly
             source = "the last 7 days"
         else:
-            hourly = {}
+            hourly = _training_hourly_vehicle_avg()
+            source = "historical training data fallback" if hourly else "available data"
 
         if hourly:
             peak_h  = max(hourly, key=lambda h: hourly[h])
@@ -1698,13 +1696,39 @@ def _training_hourly_vehicle_avg():
     return result
 
 
+def _logged_hourly_vehicle_avg():
+    """Return recent live vehicle averages grouped by Philippine hour."""
+    try:
+        rows = query("""
+            SELECT EXTRACT(HOUR FROM logged_at AT TIME ZONE 'Asia/Manila') AS hour,
+                   AVG(occupied) AS avg_vehicles
+            FROM parking_logs
+            WHERE logged_at >= NOW() - INTERVAL '7 days'
+            GROUP BY hour ORDER BY hour
+        """)
+        return {
+            int(row["hour"]): max(0.0, float(row["avg_vehicles"] or 0.0))
+            for row in (rows or [])
+        }
+    except Exception as e:
+        print(f"[predictions] live hourly data unavailable: {e}")
+        return {}
+
+
+def _hourly_occupancy_percent(vehicle_by_hour, capacity):
+    capacity = max(1, int(capacity or LOT_CAPACITY))
+    return {
+        str(hour): round(
+            min(max(float(vehicle_by_hour.get(hour, 0.0)) / capacity * 100, 0.0), 100.0),
+            1,
+        )
+        for hour in range(24)
+    }
+
+
 def _training_hourly_occ_pct(capacity=None):
     capacity = max(1, int(capacity or _active_slot_capacity(LOT_CAPACITY)))
-    hourly = _training_hourly_vehicle_avg()
-    return {
-        str(h): round(min(max(hourly.get(h, 0.0) / capacity * 100, 0.0), 100.0), 1)
-        for h in range(24)
-    }
+    return _hourly_occupancy_percent(_training_hourly_vehicle_avg(), capacity)
 
 
 def _historical_peak_context(now=None):
@@ -1925,6 +1949,19 @@ def _training_weekday_revenue_forecast(capacity=None):
     except Exception as e:
         print(f"[predictions revenue] training formula fallback unavailable: {e}")
         return {day: 0.0 for day in ordered_days}, None
+
+
+def _weekday_revenue_forecast(capacity=None):
+    """Prefer current database observations and fall back to training data."""
+    live_values, live_today = _logged_weekday_revenue_forecast(capacity)
+    if any(float(value or 0.0) > 0.0 for value in live_values.values()):
+        return live_values, live_today, "deduplicated_live_logs"
+
+    training_values, training_today = _training_weekday_revenue_forecast(capacity)
+    if any(float(value or 0.0) > 0.0 for value in training_values.values()):
+        return training_values, training_today, "training_data_fallback"
+
+    return training_values, training_today, "none"
 
 
 def _logged_weekday_revenue_forecast(capacity=None):
@@ -2579,11 +2616,7 @@ def ml_predict_price():
 def ml_predict_revenue():
     try:
         active_capacity = max(1, int(_active_slot_capacity(LOT_CAPACITY)))
-        weekday_revenue, today_forecast = _training_weekday_revenue_forecast(active_capacity)
-        source = "training_data"
-        if not any(weekday_revenue.values()):
-            weekday_revenue, today_forecast = _logged_weekday_revenue_forecast(active_capacity)
-            source = "deduplicated_live_logs"
+        weekday_revenue, today_forecast, source = _weekday_revenue_forecast(active_capacity)
         if today_forecast is None:
             raise HTTPException(422, "Need training data or live logs for revenue forecast")
         return {
@@ -2639,26 +2672,19 @@ def ml_dashboard():
 def api_predictions():
     try:
         active_capacity = max(1, int(_active_slot_capacity(LOT_CAPACITY)))
-        # Hourly avg occupancy in PH time (last 7 days)
-        rows = query("""
-            SELECT EXTRACT(HOUR FROM logged_at AT TIME ZONE 'Asia/Manila') AS hour,
-                   AVG(occupancy_pct) AS avg_pct
-            FROM parking_logs
-            WHERE logged_at >= NOW() - INTERVAL '7 days'
-            GROUP BY hour ORDER BY hour
-        """)
-        training_hourly = _training_hourly_occ_pct(active_capacity)
-        if any(training_hourly.values()):
-            hourly = training_hourly
+        # Use live database history whenever it has recent observations. The
+        # bundled CSV is only a fallback for a newly deployed system with no
+        # parking logs yet; it must not mask current camera/database data.
+        live_hourly = _logged_hourly_vehicle_avg()
+        if live_hourly:
+            hourly = _hourly_occupancy_percent(live_hourly, active_capacity)
+            hourly_source = "last_7_days"
         else:
-            hourly = {str(int(r["hour"])): round(float(r["avg_pct"]), 1) for r in rows}
-            for h in range(24):
-                hourly.setdefault(str(h), 0.0)
+            hourly = _training_hourly_occ_pct(active_capacity)
+            hourly_source = "training_data_fallback" if any(hourly.values()) else "none"
         peak = max(hourly, key=lambda h: hourly[h])
 
-        weekday_revenue, today_forecast = _training_weekday_revenue_forecast(active_capacity)
-        if not any(weekday_revenue.values()):
-            weekday_revenue, today_forecast = _logged_weekday_revenue_forecast(active_capacity)
+        weekday_revenue, today_forecast, revenue_source = _weekday_revenue_forecast(active_capacity)
 
         days_with_revenue = {d: v for d, v in weekday_revenue.items() if v and v > 0}
         if days_with_revenue:
@@ -2680,18 +2706,22 @@ def api_predictions():
             "weekday_revenue":        weekday_revenue,
             "today_revenue_forecast": today_forecast,
             "active_slot_capacity":   active_capacity,
+            "hourly_source":           hourly_source,
+            "revenue_source":          revenue_source,
             "generated_at_ph":        datetime.now(PH_TZ).strftime("%Y-%m-%d %H:%M:%S"),
         }
     except Exception as e:
         print(f"[predictions] {e}")
         return {
             "hourly_est":             {str(h): 0.0 for h in range(24)},
-            "peak_hour":              8,
+            "peak_hour":              datetime.now(PH_TZ).hour,
             "peak_label":             "N/A",
             "busy_days":              [],
             "quiet_days":             [],
             "weekday_revenue":        {},
             "today_revenue_forecast": None,
+            "hourly_source":          "none",
+            "revenue_source":         "none",
             "generated_at_ph":        datetime.now(PH_TZ).strftime("%Y-%m-%d %H:%M:%S"),
         }
 
