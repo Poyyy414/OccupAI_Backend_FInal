@@ -23,7 +23,8 @@ def _now_ph():
     return datetime.now(PH_TZ)
 
 def _reload_env():
-    load_dotenv(override=True)
+    # Keep deployment environment variables authoritative over local .env files.
+    load_dotenv(override=False)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -7,7 +7,8 @@ from dotenv import load_dotenv
 from fastapi import HTTPException
 from urllib.parse import urlparse
 
-load_dotenv(override=True)
+# Never let a local .env replace the deployment DATABASE_URL or credentials.
+load_dotenv(override=False)
 
 
 def _safe_int(value, default):

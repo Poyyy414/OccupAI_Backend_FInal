@@ -2138,10 +2138,11 @@
         <div class="stream-shell">
           <div class="stream-toolbar">
             <div class="stream-title">
-              <strong>Primary detection camera</strong>
-              <span id="streamEndpointLabel">/api/stream</span>
+              <strong id="streamTitle">Primary detection camera</strong>
+              <span id="streamEndpointLabel">/api/stream?camera_id=main</span>
             </div>
             <div class="stream-actions">
+              <select id="streamCameraSelect" class="ghost-btn" onchange="setStreamCamera(this.value)" aria-label="Select camera feed" style="display:none; min-width:150px"></select>
               <span class="status-chip warn" id="streamInlineStatus">Connecting</span>
               <button class="ghost-btn" onclick="openFullscreen()" aria-label="Open camera feed fullscreen"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-maximize"></use></svg>Fullscreen</button>
               <button class="retry-btn" onclick="retryStream()" aria-label="Retry camera stream"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"></use></svg>Retry</button>
@@ -2152,14 +2153,14 @@
             <img
               id="streamImg"
               class="mjpeg"
-              src="/api/stream"
+              src="/api/stream?camera_id=main"
               alt="Live parking feed"
               onerror="onStreamError(this)"
               onload="onStreamLoad(this)"
             />
             <div class="stream-placeholder" id="streamPlaceholder" style="display:none">
               <div class="camera-mark">CAM</div>
-              <div id="streamStatusMsg">Connecting to /api/stream...</div>
+              <div id="streamStatusMsg">Connecting to /api/stream?camera_id=main...</div>
               <div class="mono" style="font-size:11px;color:var(--muted)">Start detector.py if the feed is offline.</div>
             </div>
             <div class="stream-badge" id="streamBadge" style="display:none">
@@ -2169,7 +2170,7 @@
         </div>
 
         <div class="stream-debug">
-          <span>Source: <strong>/api/stream</strong></span>
+          <span>Source: <strong id="streamSourceLabel">/api/stream?camera_id=main</strong></span>
           <span id="snapStatus" style="color:var(--muted)">connecting...</span>
           <span id="streamLastSeen" class="mono">Last seen --</span>
         </div>
@@ -2630,7 +2631,7 @@ let isAuthorizedAdmin = false;
       return;
     }
     const u = JSON.parse(raw);
-    if (!u || typeof u !== 'object' || !u.user_id) {
+    if (!u || typeof u !== 'object' || !u.user_id || !localStorage.getItem('occupai_token')) {
       localStorage.removeItem('occupai_user'); localStorage.removeItem('occupai_token');
       window.location.href = '/login';
       return;
@@ -3360,6 +3361,7 @@ async function fetchStats() {
     if (!r.ok) throw new Error(r.status);
     const d = await r.json();
     if (seq !== _statsSeq) return;
+    updateCameraSelector(d.cameras || {});
 
     const total = d.total ?? d.total_slots ?? 0;
     const occupied = d.occupied ?? d.occupied_slots ?? 0;
@@ -3907,7 +3909,7 @@ function renderRevenueCharts(d) {
 
 async function fetchRevenueDashboard() {
   try {
-    const r = await fetchWithRetry('/api/revenue/dashboard', { cache: 'no-store' });
+    const r = await fetchWithRetry('/api/revenue/dashboard', { cache: 'no-store', headers: authHeaders() });
     if (!r.ok) {
       let detail = r.status;
       try { const errBody = await r.json(); detail = errBody.detail || errBody.error || detail; } catch (_) {}
@@ -4484,6 +4486,56 @@ async function forceRefreshInsights() {
 }
 
 let _streamRetries = 0, _streamTimer = null;
+let _selectedCameraId = 'main';
+
+function streamEndpoint(withCacheBust = false) {
+  const endpoint = '/api/stream?camera_id=' + encodeURIComponent(_selectedCameraId);
+  return withCacheBust ? endpoint + '&t=' + Date.now() : endpoint;
+}
+
+function updateCameraSelector(cameras) {
+  const select = document.getElementById('streamCameraSelect');
+  if (!select) return;
+  const ids = Object.keys(cameras || {});
+  if (!ids.length) {
+    select.style.display = 'none';
+    return;
+  }
+
+  ids.sort((a, b) => a === 'main' ? -1 : b === 'main' ? 1 : a.localeCompare(b));
+  const nextId = ids.includes(_selectedCameraId) ? _selectedCameraId : ids[0];
+  select.replaceChildren(...ids.map(id => {
+    const info = cameras[id] || {};
+    const role = String(info.camera_role || '').toLowerCase();
+    const roleLabel = role === 'car' ? 'Cars' : role === 'motorcycle' ? 'Motorcycles' : 'Mixed';
+    const option = new Option(
+      id === 'main' ? 'Primary camera' : `${roleLabel} camera (${id})`,
+      id,
+    );
+    return option;
+  }));
+  select.value = nextId;
+  select.style.display = ids.length > 1 ? 'inline-block' : 'none';
+  if (nextId !== _selectedCameraId) setStreamCamera(nextId);
+}
+
+function setStreamCamera(cameraId) {
+  _selectedCameraId = String(cameraId || 'main');
+  const endpoint = streamEndpoint();
+  const img = document.getElementById('streamImg');
+  if (img && img.src !== new URL(endpoint, window.location.href).href) {
+    img.src = endpoint;
+  }
+  const select = document.getElementById('streamCameraSelect');
+  if (select) select.value = _selectedCameraId;
+  const label = _selectedCameraId === 'main'
+    ? 'Primary detection camera'
+    : _selectedCameraId + ' detection camera';
+  setText('streamTitle', label);
+  setText('streamEndpointLabel', endpoint);
+  setText('streamSourceLabel', endpoint);
+  setText('streamStatusMsg', 'Connecting to ' + endpoint + '...');
+}
 
 function onStreamLoad(img) {
   _streamRetries = 0;
@@ -4514,7 +4566,7 @@ function onStreamError(img) {
   if (!_streamTimer) {
     _streamTimer = setTimeout(() => {
       _streamTimer = null;
-      img.src = '/api/stream?t=' + Date.now();
+      img.src = streamEndpoint(true);
     }, Math.min(_streamRetries * 3, 15) * 1000);
   }
 }
@@ -4524,7 +4576,7 @@ function retryStream() {
   _streamTimer = null;
   _streamRetries = 0;
   const img = document.getElementById('streamImg');
-  img.src = '/api/stream?t=' + Date.now();
+  img.src = streamEndpoint(true);
   document.getElementById('snapStatus').textContent = 'Retrying...';
   document.getElementById('snapStatus').style.color = 'var(--muted)';
   const inline = document.getElementById('streamInlineStatus');

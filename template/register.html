@@ -527,7 +527,7 @@
 
             <div class="field">
               <label for="password">Password</label>
-              <input type="password" id="password" placeholder="Minimum 6 characters" autocomplete="new-password" />
+              <input type="password" id="password" placeholder="At least 8 characters, with a number" autocomplete="new-password" />
               <div class="strength-bar"><div class="strength-fill" id="strength-fill"></div></div>
             </div>
 
@@ -587,7 +587,7 @@
       const pw = password.value;
       const fill = document.getElementById('strength-fill');
       let score = 0;
-      if (pw.length >= 6) score++;
+      if (pw.length >= 8) score++;
       if (pw.length >= 10) score++;
       if (/[A-Z]/.test(pw)) score++;
       if (/[0-9]/.test(pw)) score++;
@@ -596,7 +596,7 @@
       const color = score <= 1 ? 'var(--red)' : score <= 3 ? 'var(--orange)' : 'var(--green)';
       fill.style.width = pct + '%';
       fill.style.background = color;
-      password.className = pw.length >= 6 ? 'valid' : pw.length > 0 ? 'invalid' : '';
+      password.className = pw.length >= 8 && /[A-Za-z]/.test(pw) && /[0-9]/.test(pw) ? 'valid' : pw.length > 0 ? 'invalid' : '';
     }
 
     async function doRegister(event) {
@@ -626,8 +626,8 @@
         showErr('Please enter a valid email address.');
         return;
       }
-      if (data.password.length < 6) {
-        showErr('Password must be at least 6 characters.');
+      if (data.password.length < 8 || !/[A-Za-z]/.test(data.password) || !/[0-9]/.test(data.password)) {
+        showErr('Password must be at least 8 characters and contain a letter and a number.');
         return;
       }
 

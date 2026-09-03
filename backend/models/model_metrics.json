@@ -31,13 +31,6 @@
     "r2": 0.909,
     "tolerance_pct": 10
   },
-  "pricing_rf": {
-    "display_name": "Pricing Random Forest",
-    "model_file": "pricing_model.pkl",
-    "task": "Dynamic pricing recommendation",
-    "accuracy_pct": 80.34,
-    "tolerance_pct": 10
-  },
   "revenue_gbr": {
     "display_name": "Revenue Gradient Boosting Regressor",
     "model_file": "revenue_model.pkl",

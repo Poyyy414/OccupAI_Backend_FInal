@@ -15,12 +15,13 @@ from pathlib import Path
 from collections import deque, defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from typing import Optional
 from zoneinfo import ZoneInfo
 
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Header, Request, Depends
+from fastapi import FastAPI, HTTPException, Header, Request, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -30,40 +31,68 @@ from backend.db     import get_db, query, execute
 from backend.models import UserRegister, UserLogin, YoloUpdate, PushFrame
 
 warnings.filterwarnings("ignore")
-load_dotenv(override=True)
+# Local .env is useful during development, but deployment-provided environment
+# variables must always take precedence over it. This prevents a stale local
+# file from replacing production secrets or DEPLOY_MODE.
+load_dotenv(override=False)
 
 PH_TZ        = ZoneInfo("Asia/Manila")
 
 _CAM_TOKEN_DEFAULT = "occupai_cam_2027"
-_ADMIN_PASSWORD_DEFAULT = "12345678"
 
-CAM_TOKEN    = os.getenv("CAM_TOKEN",   _CAM_TOKEN_DEFAULT)
-DEPLOY_MODE  = os.getenv("DEPLOY_MODE", "local")
+# Fail closed when a deployment forgets to declare its environment. Local
+# development must opt in explicitly with DEPLOY_MODE=local.
+DEPLOY_MODE  = os.getenv("DEPLOY_MODE", "production").strip().lower()
+_configured_cam_token = os.getenv("CAM_TOKEN", "").strip()
+if _configured_cam_token:
+    CAM_TOKEN = _configured_cam_token
+elif DEPLOY_MODE == "local":
+    CAM_TOKEN = _CAM_TOKEN_DEFAULT
+    print("[SECURITY WARNING] CAM_TOKEN is not set in local mode — using the development fallback.")
+else:
+    raise RuntimeError("CAM_TOKEN must be configured outside local development.")
 STREAM_PORT  = int(os.getenv("STREAM_PORT", "8001"))
 LOT_CAPACITY = int(os.getenv("LOT_CAPACITY", "44"))
 ADMIN_EMAIL  = os.getenv("ADMIN_EMAIL", "jpcambiado@gbox.ncf.edu.ph").strip().lower()
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", _ADMIN_PASSWORD_DEFAULT)
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "").strip()
 
-if CAM_TOKEN == _CAM_TOKEN_DEFAULT:
-    print(
-        "[SECURITY WARNING] CAM_TOKEN is not set — using the hardcoded default value. "
-        "Anyone who reads the source can push fake camera data. Set CAM_TOKEN in your "
-        "environment (e.g. Render dashboard) to a private random value."
-    )
-if ADMIN_PASSWORD == _ADMIN_PASSWORD_DEFAULT:
-    print(
-        "[SECURITY WARNING] ADMIN_PASSWORD is not set — using the hardcoded default "
-        "'12345678'. The admin account is only as secure as this value. Set ADMIN_PASSWORD "
-        "in your environment (e.g. Render dashboard) to a strong private password."
-    )
+if not ADMIN_PASSWORD:
+    if DEPLOY_MODE == "local":
+        print("[SECURITY WARNING] ADMIN_PASSWORD is not set in local mode; no admin login will be available.")
+    else:
+        raise RuntimeError("ADMIN_PASSWORD must be configured outside local development.")
 AUTH_SECRET_KEY = os.getenv("AUTH_SECRET_KEY", "")
 if not AUTH_SECRET_KEY:
+    if DEPLOY_MODE != "local":
+        raise RuntimeError("AUTH_SECRET_KEY must be configured outside local development.")
     AUTH_SECRET_KEY = secrets.token_hex(32)
     print(
         "[auth] WARNING: AUTH_SECRET_KEY is not set. Using a random secret generated for this "
         "process — all login sessions will be invalidated on every restart/deploy. "
         "Set AUTH_SECRET_KEY in your environment for stable sessions."
     )
+
+if DEPLOY_MODE != "local":
+    if CAM_TOKEN == _CAM_TOKEN_DEFAULT or len(CAM_TOKEN) < 32:
+        raise RuntimeError(
+            "CAM_TOKEN must be a unique secret of at least 32 characters outside local development."
+        )
+    if len(AUTH_SECRET_KEY) < 32:
+        raise RuntimeError(
+            "AUTH_SECRET_KEY must be at least 32 characters outside local development."
+        )
+    if (
+        len(ADMIN_PASSWORD) < 12
+        or not re.search(r"[A-Za-z]", ADMIN_PASSWORD)
+        or not re.search(r"\d", ADMIN_PASSWORD)
+    ):
+        raise RuntimeError(
+            "ADMIN_PASSWORD must be at least 12 characters and contain a letter and number outside local development."
+        )
+    if len({CAM_TOKEN, AUTH_SECRET_KEY, ADMIN_PASSWORD}) != 3:
+        raise RuntimeError(
+            "CAM_TOKEN, AUTH_SECRET_KEY, and ADMIN_PASSWORD must be different secrets."
+        )
 
 AUTH_TOKEN_TTL_SECONDS = 60 * 60 * 24  # 24h
 
@@ -199,7 +228,21 @@ def require_user(authorization: str = Header(None)):
     payload = _auth_payload_from_header(authorization)
     if not payload:
         raise HTTPException(401, "Authentication required")
-    return payload
+    try:
+        rows = query(
+            "SELECT role, is_active, email FROM users WHERE user_id=%s",
+            (int(payload.get("user_id") or 0),),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[auth] session validation failed: {e}")
+        raise HTTPException(503, "Authentication service temporarily unavailable") from e
+    if not rows or not rows[0].get("is_active"):
+        raise HTTPException(401, "Authentication required")
+
+    current_role = _normalized_auth_role(rows[0].get("role"), rows[0].get("email"))
+    return {**payload, "role": current_role}
 
 
 def require_admin(authorization: str = Header(None)):
@@ -214,6 +257,7 @@ def _check_cam_token(x_cam_token: Optional[str]):
         raise HTTPException(401, "Unauthorized")
 DB_LOG_CONFIRM_SECONDS = max(0.0, float(os.getenv("DB_LOG_CONFIRM_SECONDS", "20")))
 DB_LOG_MIN_INTERVAL_SECONDS = max(1.0, float(os.getenv("DB_LOG_MIN_INTERVAL_SECONDS", "20")))
+CAMERA_STATE_TTL_SECONDS = max(5.0, float(os.getenv("CAMERA_STATE_TTL_SECONDS", "15")))
 
 BASE_DIR     = Path(__file__).resolve().parent.parent
 TEMPLATE_DIR = BASE_DIR / "template"
@@ -222,6 +266,21 @@ METRICS_PATH = MODEL_DIR / "model_metrics.json"
 TRAINING_DATA_PATH = BASE_DIR / "parking_data_training.csv"
 
 INTERNAL_STREAM = f"http://127.0.0.1:{STREAM_PORT}/stream"
+
+
+def _camera_stream_target(camera_id: str):
+    """Resolve a configured local MJPEG stream for a camera worker."""
+    camera_id = _normalize_camera_id(camera_id)
+    explicit = os.getenv(f"CAMERA_STREAM_URL_{camera_id.upper()}", "").strip()
+    if explicit:
+        return explicit
+    for item in os.getenv("CAMERA_STREAM_URLS", "").split(","):
+        if "=" not in item:
+            continue
+        name, url = item.split("=", 1)
+        if _normalize_camera_id(name) == camera_id and url.strip():
+            return url.strip()
+    return INTERNAL_STREAM if camera_id == "main" else None
 
 FLAT_RATE_CAR        = float(os.getenv("FLAT_RATE_CAR", os.getenv("FLAT_RATE", "50")) or 50)
 FLAT_RATE_MOTORCYCLE = float(os.getenv("FLAT_RATE_MOTORCYCLE", "25") or 25)
@@ -446,12 +505,10 @@ class _MLEngine:
     def __init__(self):
         self._nb1         = {}
         self._occ         = None
-        # NOTE: dynamic pricing Random Forest (pricing_model.pkl / pricing_features.pkl)
-        # was removed from loading — predict_price() has always used the formula-based
-        # _dynamic_price_formula(), never this model, so it sat in memory unused. The
-        # files are still on disk under backend/models/ and pricing_rf's historical
-        # training metrics are still surfaced via _metric_score_pct/_training_metrics
-        # in predict_price() for reference — only the live model load was dropped.
+        # NOTE: the dynamic pricing Random Forest (pricing_model.pkl) was removed
+        # entirely — never used for a live prediction (predict_price() has always
+        # been formula-based), and never part of the paper's documented model set.
+        # Fully retired: not loaded, no metrics surfaced, files deleted.
         self._rev         = None
         self._scX         = None
         self._scY         = None
@@ -590,8 +647,12 @@ class _MLEngine:
         primary = preds.get("Spatio-Temporal", next(iter(preds.values())))
         occ_pct = round(min(primary / capacity * 100, 100.0), 1)
         last_db_ts = pd.to_datetime(df["datetime"].iloc[-1])
+        if last_db_ts.tzinfo is None:
+            last_db_ts = last_db_ts.tz_localize(PH_TZ)
+        else:
+            last_db_ts = last_db_ts.tz_convert(PH_TZ)
         now_ph = datetime.now(PH_TZ)
-        data_age_hours = (now_ph - last_db_ts.replace(tzinfo=PH_TZ)).total_seconds() / 3600
+        data_age_hours = (now_ph - last_db_ts.to_pydatetime()).total_seconds() / 3600
         if data_age_hours > 2:
             next_ts = now_ph + timedelta(hours=1)
         else:
@@ -663,12 +724,7 @@ class _MLEngine:
         vehicles = row.get("vehicles_hour", row.get("occupied", 0.0))
         when = row.get("datetime") or row.get("logged_at") or datetime.now(PH_TZ)
         result = _dynamic_price_formula(vehicles, lot_capacity, when)
-        result.update({
-            "model_used":       "Dynamic Pricing Formula",
-            "confidence_pct":   _metric_score_pct("pricing_rf"),
-            "score_label":      _metric_score_label("pricing_rf"),
-            "training_metrics": _training_metrics("pricing_rf"),
-        })
+        result.update({"model_used": "Dynamic Pricing Formula"})
         return result
 
     def predict_revenue(self, row):
@@ -1146,12 +1202,17 @@ elif DEPLOY_MODE == "local":
 else:
     print(
         "[SECURITY WARNING] ALLOWED_ORIGINS is not set outside local dev — falling back to "
-        "the app's own BACKEND_URL only. Set ALLOWED_ORIGINS (comma-separated) in your "
-        "environment to control this explicitly."
+        "same-origin only. Set ALLOWED_ORIGINS (comma-separated) if a separate web client "
+        "must call this API."
     )
-    _cors_origins = [os.getenv("BACKEND_URL", "").strip()] if os.getenv("BACKEND_URL") else ["*"]
+    _cors_origins = []
 
-app.add_middleware(CORSMiddleware, allow_origins=_cors_origins, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Cam-Token"],
+)
 
 @app.exception_handler(Exception)
 async def _err(request: Request, exc: Exception):
@@ -1168,7 +1229,9 @@ state = {
     "lot_full": False, "fps": 0.0, "timestamp": "",
     "yolo_count": 0, "yolo_boxes": [], "slots": [], "zones": {},
     "car_count": 0, "motorcycle_count": 0,
+    "cameras": {},
 }
+camera_states = {}
 history    = deque(maxlen=200)
 state_lock = threading.Lock()
 db_log_lock = threading.Lock()
@@ -1179,6 +1242,68 @@ db_log_state = {
     "zone_occupied_since": {},
     "confirmed_zones": {},
 }
+
+
+def _normalize_camera_id(value) -> str:
+    clean = re.sub(r"[^A-Za-z0-9_-]", "-", str(value or "main").strip())
+    return clean[:40] or "main"
+
+
+def _aggregate_camera_states_locked(now=None):
+    """Combine fresh camera workers into the legacy single-lot state shape."""
+    now = time.monotonic() if now is None else now
+    active = {
+        camera_id: item
+        for camera_id, item in camera_states.items()
+        if now - item["received_at"] <= CAMERA_STATE_TTL_SECONDS
+    }
+
+    total = sum(int(item["total"]) for item in active.values())
+    occupied = min(total, sum(int(item["occupied"]) for item in active.values()))
+    free = max(0, total - occupied)
+    latest = max(active.values(), key=lambda item: item["received_at"], default=None)
+    zones = {}
+    public_cameras = {}
+    for camera_id, item in active.items():
+        for name, value in item["zones"].items():
+            zone_name = str(name) if camera_id == "main" else f"{camera_id}:{name}"
+            zones[zone_name] = bool(value)
+        public_cameras[camera_id] = {
+            "camera_id": camera_id,
+            "camera_role": item["camera_role"],
+            "occupied": item["occupied"],
+            "free": item["free"],
+            "total": item["total"],
+            "occupancy_pct": item["occupancy_pct"],
+            "car_count": item["car_count"],
+            "motorcycle_count": item["motorcycle_count"],
+            "fps": item["fps"],
+            "timestamp": item["timestamp"],
+            "online": True,
+        }
+
+    return {
+        "occupied": occupied,
+        "free": free,
+        "total": total,
+        "occupancy_pct": round(occupied / total * 100, 1) if total else 0.0,
+        "lot_full": bool(total and free == 0),
+        "fps": round(
+            sum(float(item["fps"]) for item in active.values()) / len(active), 1
+        ) if active else 0.0,
+        "timestamp": latest["timestamp"] if latest else "",
+        "yolo_count": sum(int(item["yolo_count"]) for item in active.values()),
+        "yolo_boxes": [],
+        "slots": [],
+        "zones": zones,
+        "car_count": sum(int(item["car_count"]) for item in active.values()),
+        "motorcycle_count": sum(int(item["motorcycle_count"]) for item in active.values()),
+        "cameras": public_cameras,
+    }
+
+
+def _refresh_aggregated_state_locked():
+    state.update(_aggregate_camera_states_locked())
 
 
 def _layout_capacity_from_env(mode=None):
@@ -1360,11 +1485,15 @@ def status():
 #  MJPEG proxy
 # ══════════════════════════════════════════════════════════════════
 @app.get("/api/stream")
-async def stream_proxy():
+async def stream_proxy(camera_id: str = Query("main", min_length=1, max_length=40)):
+    stream_target = _camera_stream_target(camera_id)
+    if not stream_target:
+        raise HTTPException(404, "This camera stream is not configured")
+
     async def _pipe():
         try:
             async with httpx.AsyncClient(timeout=None) as client:
-                async with client.stream("GET", INTERNAL_STREAM) as resp:
+                async with client.stream("GET", stream_target) as resp:
                     async for chunk in resp.aiter_bytes(chunk_size=8192):
                         yield chunk
         except Exception as e:
@@ -1385,27 +1514,50 @@ def yolo_update(data: YoloUpdate, x_cam_token: str = Header(...)):
     _check_cam_token(x_cam_token)
     # PH time timestamp
     ts = datetime.now(PH_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    camera_id = _normalize_camera_id(data.camera_id)
+    camera_role = str(data.camera_role or "mixed").strip().lower()
+    if camera_role not in {"mixed", "car", "motorcycle"}:
+        camera_role = "mixed"
     with state_lock:
-        state.update({
-            "occupied":      data.occupied,
-            "free":          data.free,
-            "total":         data.total,
-            "occupancy_pct": round(data.occupancy_pct, 1),
-            "lot_full":      data.lot_full,
-            "fps":           data.fps,
-            "timestamp":     ts,
-            "yolo_count":    data.yolo_count,
-            "car_count":     data.car_count,
-            "motorcycle_count": data.motorcycle_count,
-            "yolo_boxes":    data.yolo_boxes,
-            "slots":         data.slots,
-            "zones":         data.zones,
-        })
+        camera_states[camera_id] = {
+            "camera_role": camera_role,
+            "occupied": int(data.occupied),
+            "free": int(data.free),
+            "total": int(data.total),
+            "occupancy_pct": round(float(data.occupancy_pct), 1),
+            "yolo_count": int(data.yolo_count),
+            "car_count": int(data.car_count),
+            "motorcycle_count": int(data.motorcycle_count),
+            "fps": float(data.fps),
+            "timestamp": ts,
+            "zones": dict(data.zones or {}),
+            "received_at": time.monotonic(),
+        }
+        _refresh_aggregated_state_locked()
+        aggregated = dict(state)
+
+    # Keep the per-camera request limit enforced by YoloUpdate. The aggregate
+    # can legitimately be larger than one camera's 1,000-slot safety bound.
+    aggregated_data = SimpleNamespace(
+        occupied=aggregated["occupied"],
+        free=aggregated["free"],
+        total=aggregated["total"],
+        occupancy_pct=aggregated["occupancy_pct"],
+        lot_full=aggregated["lot_full"],
+        fps=aggregated["fps"],
+        yolo_count=aggregated["yolo_count"],
+        car_count=aggregated["car_count"],
+        motorcycle_count=aggregated["motorcycle_count"],
+        timestamp=ts,
+        zones=aggregated["zones"],
+        camera_id="aggregate",
+        camera_role="mixed",
+    )
     history.append({
-        "time": ts, "occupied": data.occupied,
-        "total": data.total, "pct": round(data.occupancy_pct, 1),
+        "time": ts, "occupied": aggregated_data.occupied,
+        "total": aggregated_data.total, "pct": round(aggregated_data.occupancy_pct, 1),
     })
-    db_logged, stable_for, db_snapshot = _should_insert_parking_log(data)
+    db_logged, stable_for, db_snapshot = _should_insert_parking_log(aggregated_data)
     if db_logged:
         try:
             execute(
@@ -1428,6 +1580,8 @@ def yolo_update(data: YoloUpdate, x_cam_token: str = Header(...)):
         "stable_for_sec": round(stable_for, 1),
         "db_confirm_sec": DB_LOG_CONFIRM_SECONDS,
         "db_snapshot": db_snapshot,
+        "camera_id": camera_id,
+        "cameras": aggregated["cameras"],
     }
 
 
@@ -1442,7 +1596,9 @@ def push_frame(data: PushFrame, x_cam_token: str = Header(...)):
 # ══════════════════════════════════════════════════════════════════
 @app.get("/api/stats")
 def api_stats():
-    with state_lock: return dict(state)
+    with state_lock:
+        _refresh_aggregated_state_locked()
+        return dict(state)
 
 @app.get("/api/history")
 def api_history():
@@ -1451,6 +1607,7 @@ def api_history():
 @app.get("/api/occupancy")
 def api_occupancy():
     with state_lock:
+        _refresh_aggregated_state_locked()
         return {k: state[k] for k in ("occupied","free","total","occupancy_pct","zones")}
 
 
@@ -1884,8 +2041,8 @@ def _check_discount_id_abuse(discount_type: str, id_number: str) -> None:
         count = int(rows[0]["n"]) if rows else 0
     except Exception as e:
         # DB hiccup here shouldn't block a legitimate discount — log and allow.
-        print(f"[discount-abuse] check failed, allowing through: {e}")
-        return
+        print(f"[discount-abuse] check failed: {e}")
+        raise HTTPException(503, "Discount verification is temporarily unavailable") from e
     if count >= _DISCOUNT_ABUSE_MAX_USES_PER_DAY:
         raise HTTPException(
             429,
@@ -2267,7 +2424,8 @@ def _record_parking_payment(payload, verified_by_user_id=None):
         }
     except Exception as e:
         conn.rollback()
-        raise HTTPException(500, str(e))
+        print(f"[payment] {e}")
+        raise HTTPException(500, "Could not record payment") from e
     finally:
         cur.close()
         conn.close()
@@ -2312,22 +2470,18 @@ def _driver_price_summary(vehicles_hour=None, lot_capacity=None):
     car = _format_price_result(car_result)
     moto = _format_price_result(moto_result)
 
-    confidence = _metric_score_pct("pricing_rf")
-    score_label = _metric_score_label("pricing_rf")
-
     # Top-level fields stay car-based for backward compatibility with older callers.
     return {
         **car,
         "car": car,
         "motorcycle": moto,
-        "confidence_pct": confidence,
-        "score_label": score_label,
     }
 
 
 @app.get("/api/driver/summary")
 def api_driver_summary():
     with state_lock:
+        _refresh_aggregated_state_locked()
         snapshot = dict(state)
 
     live_total = int(snapshot.get("total") or 0)
@@ -2381,7 +2535,9 @@ def ml_predict_vehicles():
     if len(df) < NB1_SEQ_LEN:
         raise HTTPException(422, f"Need {NB1_SEQ_LEN} rows, have {len(df)}")
     try: return ml.predict_vehicles(df, capacity=_active_slot_capacity())
-    except Exception as e: raise HTTPException(500, str(e))
+    except Exception as e:
+        print(f"[ML vehicles] {e}")
+        raise HTTPException(500, "Vehicle prediction failed") from e
 
 
 @app.get("/api/ml/predict/occupancy")
@@ -2391,7 +2547,9 @@ def ml_predict_occupancy():
     if len(df) < NB2_OCC_SEQ_LEN:
         raise HTTPException(422, f"Need {NB2_OCC_SEQ_LEN} rows, have {len(df)}")
     try: return ml.predict_occupancy(df, capacity=_active_slot_capacity())
-    except Exception as e: raise HTTPException(500, str(e))
+    except Exception as e:
+        print(f"[ML occupancy] {e}")
+        raise HTTPException(500, "Occupancy prediction failed") from e
 
 
 @app.get("/api/ml/predict/price")
@@ -2401,7 +2559,9 @@ def ml_predict_price():
     try:
         row = df.iloc[-1].to_dict()
         return _dynamic_price_formula(row.get("vehicles_hour", 0.0), _active_slot_capacity(), row.get("datetime"))
-    except Exception as e: raise HTTPException(500, str(e))
+    except Exception as e:
+        print(f"[ML price] {e}")
+        raise HTTPException(500, "Price prediction failed") from e
 
 
 @app.get("/api/ml/predict/revenue")
@@ -2427,7 +2587,9 @@ def ml_predict_revenue():
         }
     except HTTPException:
         raise
-    except Exception as e: raise HTTPException(500, str(e))
+    except Exception as e:
+        print(f"[ML revenue] {e}")
+        raise HTTPException(500, "Revenue prediction failed") from e
 
 
 @app.get("/api/ml/dashboard")
@@ -2529,12 +2691,12 @@ def api_predictions():
 # ══════════════════════════════════════════════════════════════════
 
 @app.get("/api/revenue/dashboard")
-def api_revenue_dashboard():
+def api_revenue_dashboard(_admin=Depends(require_admin)):
     try:
         return _payment_revenue_dashboard()
     except Exception as e:
         print(f"[revenue dashboard] {e}")
-        return _empty_payment_dashboard(e)
+        return _empty_payment_dashboard()
 
 
 @app.get("/api/payments/recent")
@@ -2603,6 +2765,7 @@ def api_driver_history(user_id: int, period: str = "all", limit: int = 50, _auth
     """Returns parking payment history for a specific driver."""
     if _auth.get("role") != "admin" and int(_auth.get("user_id") or 0) != int(user_id):
         raise HTTPException(403, "You can only view your own payment history")
+    safe_limit = max(1, min(int(limit), 100))
     try:
         period_filter = ""
         if period == "today":
@@ -2628,7 +2791,7 @@ def api_driver_history(user_id: int, period: str = "all", limit: int = 50, _auth
             WHERE user_id = %s {period_filter}
             ORDER BY paid_at DESC
             LIMIT %s
-        """, (user_id, limit))
+        """, (user_id, safe_limit))
 
         records = []
         for r in rows:
@@ -2656,8 +2819,11 @@ def api_driver_history(user_id: int, period: str = "all", limit: int = 50, _auth
             "total_sessions": len(records),
             "period": period,
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"[driver history] {e}")
+        raise HTTPException(status_code=500, detail="Could not load payment history") from e
 
 #  GCash Payment via PayMongo
 # ══════════════════════════════════════════════════════════════════
@@ -2680,7 +2846,11 @@ def _paymongo_headers():
 
 
 @app.post("/api/gcash/create-checkout")
-def gcash_create_checkout(payload: GcashCheckoutPayload, request: Request):
+def gcash_create_checkout(
+    payload: GcashCheckoutPayload,
+    request: Request,
+    _auth=Depends(require_user),
+):
     _rate_limit(request, "gcash-checkout", max_calls=10, window_seconds=60)
     if not PAYMONGO_SECRET_KEY:
         raise HTTPException(503, "PayMongo is not configured. Set PAYMONGO_SECRET_KEY in .env")
@@ -2710,7 +2880,7 @@ def gcash_create_checkout(payload: GcashCheckoutPayload, request: Request):
         INSERT INTO gcash_checkouts (ref, user_id, vehicle_type, duration_type, regular_price_php, discount_type, final_amount_php, discount_id_number)
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
         """,
-        (ref, payload.user_id, vehicle_type, duration_type, regular_price, discount_type, final_amount, discount_id_number),
+        (ref, int(_auth["user_id"]), vehicle_type, duration_type, regular_price, discount_type, final_amount, discount_id_number),
     )
 
     body = json.dumps({
@@ -2721,12 +2891,12 @@ def gcash_create_checkout(payload: GcashCheckoutPayload, request: Request):
                     "amount": amount_centavos,
                     "currency": "PHP",
                     "quantity": 1,
-                    "description": payload.description or "OccupAI Parking Payment",
+                    "description": (payload.description or "OccupAI Parking Payment").strip()[:200],
                 }],
                 "payment_method_types": ["gcash"],
                 "success_url": f"{base_url}/api/gcash/success?ref={ref}",
                 "cancel_url": f"{base_url}/driver",
-                "description": payload.description or "OccupAI Parking Payment",
+                "description": (payload.description or "OccupAI Parking Payment").strip()[:200],
             }
         }
     }).encode()
@@ -2822,6 +2992,35 @@ text-decoration:none;font-weight:600}
 _GCASH_MAX_PAGE_RETRIES = 6
 
 
+def _claim_gcash_checkout(ref: str):
+    """Atomically claim a paid checkout before inserting its payment row."""
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT * FROM gcash_checkouts WHERE ref=%s FOR UPDATE", (ref,))
+        row = cur.fetchone()
+        if not row:
+            conn.commit()
+            return None, "missing"
+        status = str(row.get("status") or "pending").lower()
+        if status == "pending":
+            cur.execute(
+                "UPDATE gcash_checkouts SET status='processing' WHERE ref=%s",
+                (ref,),
+            )
+            row["status"] = "processing"
+            conn.commit()
+            return row, "claimed"
+        conn.commit()
+        return row, status
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
 def _checkout_is_paid(attributes: dict) -> bool:
     """True if a PayMongo checkout session shows the payment as completed.
 
@@ -2844,7 +3043,12 @@ def _checkout_is_paid(attributes: dict) -> bool:
 
 
 @app.get("/api/gcash/success")
-def gcash_success(ref: str, attempt: int = 0):
+def gcash_success(
+    request: Request,
+    ref: str = Query(..., min_length=20, max_length=64),
+    attempt: int = Query(0, ge=0, le=100),
+):
+    _rate_limit(request, "gcash-success", max_calls=60, window_seconds=60)
     rows = query("SELECT * FROM gcash_checkouts WHERE ref = %s", (ref,))
     if not rows:
         return _gcash_result_page(False, "We couldn't find this checkout session.")
@@ -2854,6 +3058,8 @@ def gcash_success(ref: str, attempt: int = 0):
         return _gcash_result_page(
             True, f"Your GCash payment of PHP {float(checkout['final_amount_php']):,.2f} has been recorded."
         )
+    if checkout["status"] == "error":
+        return _gcash_result_page(False, "This payment needs manual reconciliation. Please contact support.")
 
     checkout_id = checkout["checkout_id"]
     if not checkout_id:
@@ -2897,6 +3103,21 @@ def gcash_success(ref: str, attempt: int = 0):
             return _gcash_pending_page(ref, attempt + 1)
         print(f"[GCash] checkout {checkout_id} still not paid after retries: {attributes}")
         return _gcash_result_page(False, "PayMongo has not confirmed this payment yet.")
+
+    try:
+        checkout, claim_status = _claim_gcash_checkout(ref)
+    except Exception as e:
+        print(f"[GCash] Could not claim checkout {ref}: {e}")
+        return _gcash_result_page(False, "We couldn't finalize this payment yet. Please try again.")
+
+    if checkout is None:
+        return _gcash_result_page(False, "We couldn't find this checkout session.")
+    if claim_status == "paid":
+        return _gcash_result_page(
+            True, f"Your GCash payment of PHP {float(checkout['final_amount_php']):,.2f} has been recorded."
+        )
+    if claim_status != "claimed":
+        return _gcash_pending_page(ref, min(attempt + 1, _GCASH_MAX_PAGE_RETRIES))
 
     try:
         payment_payload = PaymentRecordPayload(
@@ -3042,7 +3263,7 @@ def api_hourly_by_day():
 
     except Exception as e:
         print(f"[hourly-by-day] {e}")
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, "Could not load hourly predictions") from e
 
 # ══════════════════════════════════════════════════════════════════
 #  Insights
@@ -3094,12 +3315,13 @@ def api_insights_refresh(_admin=Depends(require_admin)):
     return {"ok": True, "message": "Recalculating — results ready in a few seconds."}
 
 @app.get("/api/parking_logs_recent")
-def parking_logs_recent(limit: int = 168):
+def parking_logs_recent(limit: int = 168, x_cam_token: str = Header(None)):
     """
     Returns the most recent `limit` parking_logs rows (newest first).
     Used by the SlotAdjusterThread in detector.py to build lag features.
     Default 168 = 7 days of hourly rows.
     """
+    _check_cam_token(x_cam_token)
     safe_limit = max(1, min(int(limit), 1000))
     rows = query(
         """
@@ -3351,7 +3573,7 @@ def _is_reserved_admin_email(email: str) -> bool:
     return bool(ADMIN_EMAIL) and _clean_email(email) == ADMIN_EMAIL
 
 def _is_reserved_admin_credentials(email: str, password: str) -> bool:
-    return _is_reserved_admin_email(email) and (password or "") == ADMIN_PASSWORD
+    return bool(ADMIN_PASSWORD) and _is_reserved_admin_email(email) and (password or "") == ADMIN_PASSWORD
 
 def _normalized_auth_role(role: str, email: str) -> str:
     if _is_reserved_admin_email(email):
@@ -3632,12 +3854,13 @@ def _validate_password_strength(password: str) -> None:
 @app.post("/auth/register")
 def register(data: UserRegister):
     email = _clean_email(data.email)
-    if _is_reserved_admin_email(email) and not _is_reserved_admin_credentials(email, data.password):
+    if _is_reserved_admin_email(email):
         raise HTTPException(400, "This email is reserved for the admin account")
 
     _validate_password_strength(data.password)
 
-    role = "admin" if _is_reserved_admin_credentials(email, data.password) else "driver"
+    # Public registration can never create or take over an admin account.
+    role = "driver"
     pw = bcrypt.hashpw(data.password.encode(), bcrypt.gensalt()).decode()
     conn = get_db()
     cur = conn.cursor()
@@ -3670,7 +3893,8 @@ def register(data: UserRegister):
         raise
     except Exception as e:
         conn.rollback()
-        raise HTTPException(500, str(e))
+        print(f"[register] {e}")
+        raise HTTPException(500, "Could not create account") from e
     finally:
         cur.close()
         conn.close()
@@ -3713,7 +3937,9 @@ def login(data: UserLogin, request: Request):
             "token": _sign_auth_token(u["user_id"], role),
         }
     except HTTPException: raise
-    except Exception as e: raise HTTPException(500, str(e))
+    except Exception as e:
+        print(f"[login] {e}")
+        raise HTTPException(500, "Login service temporarily unavailable") from e
 
 
 @app.post("/auth/logout")

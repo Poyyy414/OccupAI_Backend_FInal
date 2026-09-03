@@ -3,14 +3,14 @@ from typing import Optional, Any
 from datetime import datetime
 
 class UserRegister(BaseModel):
-    first_name: str
-    last_name:  str
-    email:      str
-    password:   str
+    first_name: str = Field(min_length=1, max_length=80)
+    last_name:  str = Field(min_length=1, max_length=80)
+    email:      str = Field(min_length=3, max_length=254)
+    password:   str = Field(min_length=8, max_length=128)
 
 class UserLogin(BaseModel):
-    email:    str
-    password: str
+    email:    str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=1, max_length=128)
 
 class YoloUpdate(BaseModel):
     occupied:      int      = Field(ge=0)
@@ -22,20 +22,26 @@ class YoloUpdate(BaseModel):
     yolo_count:    int      = Field(default=0, ge=0)
     car_count:        int  = Field(default=0, ge=0)
     motorcycle_count: int  = Field(default=0, ge=0)
-    timestamp:     str      = ""
-    snapshot_b64:  str      = ""
-    yolo_boxes:    list     = []
-    slots:         list     = []
-    zones:         dict     = {}   # {"Z1": True, "Z2": False, ...}
+    timestamp:     str      = Field(default="", max_length=64)
+    camera_id:     str      = Field(default="main", min_length=1, max_length=40)
+    camera_role:   str      = Field(default="mixed", min_length=1, max_length=20)
+    snapshot_b64:  str      = Field(default="", max_length=5_000_000)
+    yolo_boxes:    list     = Field(default_factory=list, max_length=500)
+    slots:         list     = Field(default_factory=list, max_length=500)
+    zones:         dict     = Field(default_factory=dict, max_length=500)   # {"Z1": True, "Z2": False, ...}
 
     @model_validator(mode="after")
     def _check_occupied_within_total(self):
         if self.occupied > self.total:
             raise ValueError("occupied cannot exceed total")
+        if self.free > self.total:
+            raise ValueError("free cannot exceed total")
+        if self.occupied + self.free > self.total:
+            raise ValueError("occupied plus free cannot exceed total")
         return self
 
 class PushFrame(BaseModel):
-    frame: str              # base64 JPEG
+    frame: str = Field(min_length=1, max_length=5_000_000)  # base64 JPEG
 
 class StatsResponse(BaseModel):
     occupied:      int

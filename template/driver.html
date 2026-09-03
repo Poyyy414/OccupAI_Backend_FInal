@@ -840,12 +840,17 @@
         const raw = localStorage.getItem('occupai_user');
         if (!raw || raw === 'undefined' || raw === 'null') return null;
         const parsed = JSON.parse(raw);
-        return parsed && parsed.user_id ? parsed : null;
+        return parsed && parsed.user_id && localStorage.getItem('occupai_token') ? parsed : null;
       } catch (e) {
         localStorage.removeItem('occupai_user');
         localStorage.removeItem('occupai_token');
         return null;
       }
+    }
+
+    function authHeaders() {
+      const token = localStorage.getItem('occupai_token');
+      return token ? { 'Authorization': 'Bearer ' + token } : {};
     }
 
     function hydrateUser(u) {
@@ -1019,7 +1024,7 @@
       try {
         const r = await fetch('/api/gcash/create-checkout', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
           body: JSON.stringify({
             vehicle_type: selectedVehicleType,
             duration_type: durationType,

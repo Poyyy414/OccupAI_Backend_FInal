@@ -409,7 +409,7 @@
           return;
         }
         const u = JSON.parse(raw);
-        if (u && typeof u === 'object' && u.user_id) {
+        if (u && typeof u === 'object' && u.user_id && localStorage.getItem('occupai_token')) {
           goTo(destinationForRole(u.role));
         } else {
           localStorage.removeItem('occupai_user');

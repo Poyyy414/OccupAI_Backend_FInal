@@ -16,6 +16,7 @@ import threading
 import time
 import base64
 import os
+import re
 import sys
 import queue
 import requests
@@ -60,10 +61,31 @@ def _es(k, d=""):
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 LOCAL_BACKEND_URL = os.getenv("LOCAL_BACKEND_URL", "http://127.0.0.1:8000")
-DEPLOY_MODE = os.getenv("DEPLOY_MODE", "local").strip().lower()
+# A detector running without explicit mode must not silently use local
+# behavior or a development camera token.
+DEPLOY_MODE = os.getenv("DEPLOY_MODE", "production").strip().lower()
 PUSH_LOCAL_BACKEND = _eb("PUSH_LOCAL_BACKEND", DEPLOY_MODE == "local")
 PUSH_REMOTE_BACKEND = _eb("PUSH_REMOTE_BACKEND", DEPLOY_MODE != "local")
-CAM_TOKEN   = os.getenv("CAM_TOKEN",   "occupai_cam_2027")
+CAMERA_ID = re.sub(r"[^A-Za-z0-9_-]", "-", os.getenv("CAMERA_ID", "main").strip())[:40] or "main"
+CAMERA_ROLE = os.getenv("CAMERA_ROLE", "mixed").strip().lower()
+if CAMERA_ROLE not in {"mixed", "car", "motorcycle"}:
+    print(f"[camera] Invalid CAMERA_ROLE={CAMERA_ROLE!r}; using mixed.")
+    CAMERA_ROLE = "mixed"
+_CAM_TOKEN_LOCAL_DEFAULT = "occupai_cam_2027"
+_configured_cam_token = os.getenv("CAM_TOKEN", "").strip()
+if _configured_cam_token:
+    CAM_TOKEN = _configured_cam_token
+elif DEPLOY_MODE == "local":
+    CAM_TOKEN = _CAM_TOKEN_LOCAL_DEFAULT
+    print("[SECURITY WARNING] CAM_TOKEN is not set in local mode — using the development fallback.")
+else:
+    raise RuntimeError("CAM_TOKEN must be configured outside local development.")
+if DEPLOY_MODE != "local" and (
+    CAM_TOKEN == _CAM_TOKEN_LOCAL_DEFAULT or len(CAM_TOKEN) < 32
+):
+    raise RuntimeError(
+        "CAM_TOKEN must be a unique secret of at least 32 characters outside local development."
+    )
 WEBCAM_IDX  = _ei("WEBCAM_INDEX", 0)
 STREAM_PORT = _ei("STREAM_PORT",  8001)
 STREAM_FPS  = max(1, _ei("STREAM_FPS", 20))
@@ -110,7 +132,7 @@ TOY_MIN_H = _ei("TOY_MIN_H", 12)
 # Blobs with contour area (as a fraction of frame area) below this are
 # classified "motorcycle", at/above it "car". Toy motorcycles need to be
 # visibly smaller than toy cars on camera for this to work — point the
-# camera at your actual toy set and check debug_zones.jpg / the live feed
+# camera at your actual toy set and check the per-camera debug image / live feed
 # to pick a value between TOY_MIN_AREA_FRAC and TOY_MAX_AREA_FRAC.
 TOY_MOTO_MAX_AREA_FRAC = _ef("TOY_MOTO_MAX_AREA_FRAC", 0.02)
 TOY_COLOR_RANGES = [
@@ -205,6 +227,12 @@ def grab_background(cap, bg_sub, n=30):
 #   DEBUG IMAGE
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _debug_filename(filename):
+    """Keep diagnostic files separate when two detector workers run together."""
+    stem, suffix = os.path.splitext(filename)
+    return filename if CAMERA_ID == "main" else f"{stem}_{CAMERA_ID}{suffix}"
+
+
 def _save_debug_zones(frame_or_bg, slots):
     dbg = frame_or_bg.copy() if frame_or_bg is not None else \
           np.zeros((FEED_H, FEED_W, 3), dtype=np.uint8)
@@ -213,7 +241,7 @@ def _save_debug_zones(frame_or_bg, slots):
         _draw_rounded_rect(dbg, x1, y1, x2, y2, col, 2)
         cv2.putText(dbg, name, (x1+3, y1+14),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.38, col, 1)
-    cv2.imwrite("debug_zones.jpg", dbg)
+    cv2.imwrite(_debug_filename("debug_zones.jpg"), dbg)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -604,7 +632,9 @@ def encode_frame(frame):
     _,buf=cv2.imencode('.jpg',frame,[cv2.IMWRITE_JPEG_QUALITY,JPEG_Q])
     return base64.b64encode(buf.tobytes()).decode()
 
-def push_to_backend(occupied,free,total,pct,fps,zone_status,snapshot_frame,car_count=0,moto_count=0):
+def push_to_backend(occupied,free,total,pct,fps,zone_status,snapshot_frame,
+                    car_count=0,moto_count=0, camera_id=CAMERA_ID,
+                    camera_role=CAMERA_ROLE):
     global _pushing
     with _push_lock:
         if _pushing: return
@@ -617,6 +647,7 @@ def push_to_backend(occupied,free,total,pct,fps,zone_status,snapshot_frame,car_c
             "occupancy_pct":pct,"lot_full":total>0 and free==0,
             "fps":fps,"yolo_count":occupied,
             "car_count":car_count,"motorcycle_count":moto_count,
+            "camera_id":camera_id,"camera_role":camera_role,
             "timestamp":time.strftime("%Y-%m-%d %H:%M:%S"),
             "snapshot_b64":fb64,"yolo_boxes":[],"slots":[],"zones":zone_status,
             "demand_level":adj.get("demand","NORMAL"),
@@ -819,12 +850,23 @@ def detection_loop():
             if n_slots!=last_n_slots:
                 _save_debug_zones(frame,active)
                 last_n_slots=n_slots
-                print(f"[detector] Slot count → {n_slots}  debug_zones.jpg updated")
+                print(
+                    f"[detector:{CAMERA_ID}] Slot count → {n_slots}  "
+                    f"{_debug_filename('debug_zones.jpg')} updated"
+                )
 
             # ── Occupancy ─────────────────────────────────────────────────────────
             if cam_ok and not rescanning and not rewarming and active:
                 all_b = toy_b if TOY_ONLY_DETECTION else (yolo_b + toy_b)
                 all_t = toy_t if TOY_ONLY_DETECTION else (yolo_t + toy_t)
+                if CAMERA_ROLE != "mixed":
+                    detected = [
+                        (box, kind)
+                        for box, kind in zip(all_b, all_t)
+                        if kind == CAMERA_ROLE
+                    ]
+                    all_b = [box for box, _ in detected]
+                    all_t = [kind for _, kind in detected]
                 zone_status, assigned_boxes = assign_occupancy(
                     active, fg, all_b, use_bg=USE_BG_OCCUPANCY
                 )
@@ -869,7 +911,8 @@ def detection_loop():
                 last_sent_total=n_slots
                 last_sent_zones=dict(zone_status)
                 threading.Thread(target=push_to_backend,
-                    args=(occupied,free,n_slots,pct,round(fps_val,1),zone_status,ann.copy(),car_count,moto_count),
+                    args=(occupied,free,n_slots,pct,round(fps_val,1),zone_status,
+                          ann.copy(),car_count,moto_count,CAMERA_ID,CAMERA_ROLE),
                     daemon=True).start()
 
             consecutive_errors=0
@@ -896,7 +939,7 @@ if __name__=='__main__':
     print("║  Keepout : NO_PARK_RECTS clears entrance geometry       ║")
     print("║  AI      : demand-driven slot packing (30s cycles)      ║")
     print("║  MOG2    : auto re-warms on layout change (no false OCC)║")
-    print(f"║  Camera  : index {WEBCAM_IDX}                                    ║")
+    print(f"║  Camera  : {CAMERA_ID} ({CAMERA_ROLE}), index {WEBCAM_IDX}          ║")
     print(f"║  Stream  : http://localhost:{STREAM_PORT}/stream              ║")
     print("╠══════════════════════════════════════════════════════════╣")
     print("║  TEST LEVELS (edit .env, restart detector):             ║")
