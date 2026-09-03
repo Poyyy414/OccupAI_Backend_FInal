@@ -28,6 +28,9 @@ Audit scope: FastAPI backend, YOLO/camera integration, admin/driver web dashboar
 - [x] Align Flutter Live Feed with the web two-camera workflow: car/motorcycle POV selector, camera-specific MJPEG endpoint, camera health, and detection log.
 - [x] Match NB1 runtime prediction inputs to the 16-feature deployed model artifacts instead of truncating a 23-feature array after scaling.
 - [x] Add the bearer token to the web Reports loader when calling the protected revenue dashboard endpoint.
+- [x] Fix the GCash success-page error branch so a confirmed payment-recording failure is shown as reconciliation-required instead of being misreported as still pending.
+- [x] Align daily duration pricing with the approved flat rates: PHP 50 for cars and PHP 25 for motorcycles; migrate only the old bundled 150/80 defaults.
+- [x] Increase the mobile driver KPI tile height so large accessibility text does not overflow on compact phones.
 
 ## Priority 0: required before deployment
 
@@ -80,37 +83,44 @@ Audit scope: FastAPI backend, YOLO/camera integration, admin/driver web dashboar
 
 ## Priority 1: security and reliability hardening
 
-- [ ] Replace browser/local Flutter token storage with secure, HttpOnly, Secure, SameSite cookies (or a platform secure storage strategy for mobile). Current web `localStorage` tokens are exposed if an XSS bug is introduced.
-- [ ] Add a PayMongo webhook with signature verification and an idempotency key. Redirect polling alone can miss a paid checkout when the user closes the browser; a stuck `processing` checkout also needs timeout/reconciliation handling.
-- [ ] Protect `/api/stream` and review all currently public operational/ML endpoints. The MJPEG camera stream is currently reachable without application authentication.
-- [ ] Move token revocation/session state out of the process memory when deploying multiple backend instances; use a shared store or short-lived access tokens with refresh-token rotation.
-- [ ] Add a strict Content Security Policy, Subresource Integrity or self-hosted assets for dashboard CDN scripts, and a browser XSS test pass for all dynamic `innerHTML` rendering.
-- [ ] Add database rate-limit/session audit logging shared across instances instead of process-local login and request buckets.
+- [x] Replace browser/local Flutter token storage with HttpOnly/Secure/SameSite web session cookies and platform secure storage for mobile. Web `localStorage` retains only non-sensitive display/cache data.
+- [x] Add PayMongo webhook signature verification, durable event tracking, checkout idempotency keys, payment external references, and stale `processing` reconciliation. Configure the secret and endpoint in staging/production before enabling real payments.
+- [x] Protect `/api/stream` and operational/ML endpoints with authenticated user/admin dependencies. The short-lived `/api/stream-token` is used by the mobile MJPEG client; health and GCash availability endpoints remain intentionally public.
+- [x] Move token revocation, login lockout, rate-limit buckets, and auth audit records to database-backed tables when `DATABASE_URL` is configured; local mode keeps an explicit single-process fallback. Verify multi-instance behavior with a shared staging database.
+- [x] Add a per-response script CSP nonce, Chart.js SRI, security headers, and escaping for dashboard dynamic HTML. A browser pass and extraction of the remaining inline styles are still staging cleanup items.
+- [x] Add database-backed rate-limit/session audit logging shared across instances when a database is configured.
 
 ## Priority 2: product/data correctness
 
 - [x] Fix the predictions data-source policy: recent live parking logs now drive hourly and revenue forecasts when available; the bundled CSV is an explicitly labeled fallback for a new system with no live logs.
-- [ ] Return a server-side total count for driver history; the current `total_sessions` is the count of the limited page, not necessarily the user's total history.
-- [ ] Decide whether the public pricing/occupancy/forecast endpoints are intentionally public. If not, add role-based authorization and update web/mobile callers.
-- [ ] Replace the compile-time public Render URL with environment-specific `API_BASE_URL` values for development, staging, and production. Use the debug Android manifest only for local HTTP.
-- [ ] Add integration tests using a disposable/staging database and mocked PayMongo responses. Do not use real charges in automated tests.
+- [x] Return a server-side total count for driver history; the response now separates `total_sessions` from `returned_sessions`.
+- [x] Decide endpoint visibility: operational/ML/pricing/occupancy/forecast data is authenticated, admin settings remain admin-only, and only health/status plus GCash availability are public. Web and mobile callers were updated for the new auth flow.
+- [x] Support environment-specific `API_BASE_URL` overrides while keeping the verified Render backend as the default for plain `flutter run`; local/debug HTTP remains opt-in and release builds should use HTTPS.
+- [ ] Add disposable/staging-database integration tests and mocked PayMongo response tests. The local suite now covers webhook signatures, stream-token purpose, protected routes, and history totals without real charges.
 
 ## Priority 3: UI/QA coverage
 
 - [ ] Run the web dashboards in Chromium at 320px, 375px, 768px, and desktop widths with browser zoom/text scaling; verify no clipping or overflow in tables, charts, sidebars, and payment panels.
 - [ ] Run the Flutter app on a small Android phone with large accessibility text and test onboarding, login, registration, offline camera state, history, profile, admin navigation, and GCash launch.
 - [ ] On staging hardware, perform a cross-platform parity walkthrough at the same time: driver availability/rates/GCash and admin overview/revenue/live-feed/reports/settings, including both car and motorcycle camera POVs.
-- [ ] Decide whether mobile needs a native PDF/share export for Reports and a light/gray theme preference equivalent to the web-only controls; mobile currently provides the report data through Copy CSV and uses its responsive native theme.
-- [ ] Add widget tests for the offline `--` state, password validation, admin navigation, expired-session redirect, and rate/discount switch behavior.
-- [ ] Resolve the remaining non-blocking Flutter `prefer_const` analyzer suggestions as a cleanup task.
+- [x] Keep the existing mobile Reports behavior (source-backed report data plus Copy CSV) and responsive native theme; no new PDF/share or light-theme function was added because parity requires the existing capability set.
+- [ ] **PARTIAL:** Widget tests now cover offline `--`, password validation, and admin navigation. Add dedicated expired-session redirect and rate/discount-switch tests during the device/browser pass.
+- [x] Resolve the Flutter `prefer_const` analyzer suggestions; `flutter analyze` now reports no issues.
 
 ## Verification performed
 
-- Backend: `python -m pytest -q` — **25 passed**.
-- Backend: `python -m py_compile backend/main.py backend/models.py backend/db.py yolo_service/detector_v7.py` — **passed**.
+- Backend: `.venv311\Scripts\python.exe -m pytest -q` — **34 passed** (5 non-failing model-artifact compatibility warnings remain; pin/retrain artifacts before a strict reproducibility release).
+- Backend: `python -m py_compile backend/main.py backend/models.py backend/db.py` — **passed**.
 - Backend: route/model smoke check — protected routes loaded and bounded YOLO validation loaded.
-- Flutter: `flutter test --no-pub` — **1 passed**.
-- Flutter: `flutter analyze --no-pub` — **no errors/warnings; 33 optional lint/performance infos**.
-- Android: `flutter build apk --debug` — **passed**; APK generated at `build/app/outputs/flutter-apk/app-debug.apk`.
+- Flutter: `flutter test` — **5 passed**.
+- Flutter: `flutter analyze` — **no issues**.
+- Android: `flutter build apk --debug` — **passed**; generated `build/app/outputs/flutter-apk/app-debug.apk` after the secure-storage/configuration changes. Gradle emitted only the existing Java 8 deprecation warnings and recovered from a Kotlin daemon connection retry.
 
-Real database connectivity, live camera hardware, browser rendering, and real PayMongo transactions were not exercised in this environment and remain staging/manual test items above.
+### Deployment configuration still required
+
+- Set unique production values for `CAM_TOKEN`, `AUTH_SECRET_KEY`, `ADMIN_PASSWORD`, and `PAYMONGO_WEBHOOK_SECRET`; keep `AUTH_COOKIE_SECURE=true`.
+- Register the PayMongo webhook at `/api/webhooks/paymongo` (the `/webhooks/paymongo` alias is also supported) and use the raw-body signature header from PayMongo.
+- Set exact HTTPS `ALLOWED_ORIGINS` and run the Flutter release build with the production `--dart-define=API_BASE_URL=...` value.
+- Apply the database startup migrations/tables, then test two backend instances against the same database for revocation, lockout, rate limits, webhook retries, and payment idempotency.
+
+Real database connectivity, live camera hardware, browser rendering, Android accessibility/device behavior, two-POV camera operation, and real PayMongo transactions were not exercised in this environment and remain staging/manual test items above.

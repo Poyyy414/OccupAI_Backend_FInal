@@ -774,7 +774,14 @@
     </section>
   </main>
 
-  <script>
+  <script nonce="__OCCUPAI_CSP_NONCE__">
+    const _occupaiFetch = window.fetch.bind(window);
+    window.fetch = async (input, init = {}) => {
+      const response = await _occupaiFetch(input, { ...init, credentials: 'include' });
+      if (response.status === 401 && !String(input).includes('/auth/')) window.location.href = '/login';
+      return response;
+    };
+
     const ADMIN_ROLES = ['admin'];
     let selectedVehicleType = 'car';
     let latestSummary = null;
@@ -840,17 +847,15 @@
         const raw = localStorage.getItem('occupai_user');
         if (!raw || raw === 'undefined' || raw === 'null') return null;
         const parsed = JSON.parse(raw);
-        return parsed && parsed.user_id && localStorage.getItem('occupai_token') ? parsed : null;
+        return parsed && parsed.user_id ? parsed : null;
       } catch (e) {
         localStorage.removeItem('occupai_user');
-        localStorage.removeItem('occupai_token');
         return null;
       }
     }
 
     function authHeaders() {
-      const token = localStorage.getItem('occupai_token');
-      return token ? { 'Authorization': 'Bearer ' + token } : {};
+      return {};
     }
 
     function hydrateUser(u) {
@@ -979,12 +984,9 @@
     }
 
     function signOut() {
-      const token = localStorage.getItem('occupai_token');
       localStorage.removeItem('occupai_user');
-      localStorage.removeItem('occupai_token');
       fetch('/auth/logout', {
         method: 'POST',
-        headers: token ? { 'Authorization': 'Bearer ' + token } : {},
       }).catch(() => {});
       window.location.href = '/login';
     }

@@ -381,7 +381,10 @@
     </section>
   </main>
 
-  <script>
+  <script nonce="__OCCUPAI_CSP_NONCE__">
+    const _occupaiFetch = window.fetch.bind(window);
+    window.fetch = (input, init = {}) => _occupaiFetch(input, { ...init, credentials: 'include' });
+
     function destinationForRole(role) {
       const normalized = String(role || 'driver').toLowerCase();
       return normalized === 'admin' ? '/dashboard' : '/driver';
@@ -405,19 +408,19 @@
         const raw = localStorage.getItem('occupai_user');
         if (!raw || raw === 'undefined' || raw === 'null') {
           localStorage.removeItem('occupai_user');
-          localStorage.removeItem('occupai_token');
           return;
         }
         const u = JSON.parse(raw);
-        if (u && typeof u === 'object' && u.user_id && localStorage.getItem('occupai_token')) {
-          goTo(destinationForRole(u.role));
+        if (u && typeof u === 'object' && u.user_id) {
+          fetch('/api/driver/summary', { cache: 'no-store' }).then((res) => {
+            if (res.ok) goTo(destinationForRole(u.role));
+            else localStorage.removeItem('occupai_user');
+          }).catch(() => localStorage.removeItem('occupai_user'));
         } else {
           localStorage.removeItem('occupai_user');
-          localStorage.removeItem('occupai_token');
         }
       } catch (e) {
         localStorage.removeItem('occupai_user');
-        localStorage.removeItem('occupai_token');
       }
     })();
 
@@ -442,7 +445,7 @@
       try {
         const res = await fetch('/auth/login', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'X-OccupAI-Client': 'web' },
           body: JSON.stringify({ email, password }),
         });
 
@@ -464,7 +467,6 @@
         };
 
         localStorage.setItem('occupai_user', JSON.stringify(userObj));
-        if (data.token) localStorage.setItem('occupai_token', data.token);
         if (!localStorage.getItem('occupai_user')) {
           throw new Error('Could not save session. Check browser storage settings.');
         }

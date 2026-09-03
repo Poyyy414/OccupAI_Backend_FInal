@@ -7,7 +7,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script nonce="__OCCUPAI_CSP_NONCE__" src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"
+    integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g"
+    crossorigin="anonymous"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
     * { margin: 0; padding: 0; }
@@ -2616,7 +2618,14 @@
   </section>
 </main>
 
-<script>
+<script nonce="__OCCUPAI_CSP_NONCE__">
+const _occupaiFetch = window.fetch.bind(window);
+window.fetch = async (input, init = {}) => {
+  const response = await _occupaiFetch(input, { ...init, credentials: 'include' });
+  if (response.status === 401 && !String(input).includes('/auth/')) window.location.href = '/login';
+  return response;
+};
+
 // Gates the data-fetching/polling init block below — stays false (so nothing
 // fires) unless the role check confirms an admin session. window.location.href
 // navigation is asynchronous, so this flag is what actually stops admin-only
@@ -2626,13 +2635,13 @@ let isAuthorizedAdmin = false;
   try {
     const raw = localStorage.getItem('occupai_user');
     if (!raw || raw === 'undefined' || raw === 'null') {
-      localStorage.removeItem('occupai_user'); localStorage.removeItem('occupai_token');
+      localStorage.removeItem('occupai_user');
       window.location.href = '/login';
       return;
     }
     const u = JSON.parse(raw);
-    if (!u || typeof u !== 'object' || !u.user_id || !localStorage.getItem('occupai_token')) {
-      localStorage.removeItem('occupai_user'); localStorage.removeItem('occupai_token');
+    if (!u || typeof u !== 'object' || !u.user_id) {
+      localStorage.removeItem('occupai_user');
       window.location.href = '/login';
       return;
     }
@@ -2643,14 +2652,12 @@ let isAuthorizedAdmin = false;
     isAuthorizedAdmin = true;
   } catch(e) {
     localStorage.removeItem('occupai_user');
-    localStorage.removeItem('occupai_token');
     window.location.href = '/login';
   }
 })();
 
 function authHeaders() {
-  const token = localStorage.getItem('occupai_token');
-  return token ? { 'Authorization': 'Bearer ' + token } : {};
+  return {};
 }
 
 // Render's free tier spins the backend down when idle. The first requests
@@ -2738,10 +2745,8 @@ if (user) {
 }
 
 function signOut() {
-  const headers = authHeaders();
   localStorage.removeItem('occupai_user');
-  localStorage.removeItem('occupai_token');
-  fetch('/auth/logout', { method: 'POST', headers }).catch(() => {});
+  fetch('/auth/logout', { method: 'POST' }).catch(() => {});
   window.location.href = '/login';
 }
 
@@ -3507,7 +3512,7 @@ function renderHistory(items) {
           const rawTime = h.time || h.timestamp || '';
           const time = rawTime ? new Date(rawTime).toLocaleString() : '--';
           const occ = h.occupied != null ? `${h.occupied} / ${h.total ?? '?'}` : '--';
-          return `<tr><td>${escapeHtml(time)}</td><td>${escapeHtml(occ)}</td><td class="col-money">${h.pct ?? 0}%</td></tr>`;
+          return `<tr><td>${escapeHtml(time)}</td><td>${escapeHtml(occ)}</td><td class="col-money">${escapeHtml(Number(h.pct ?? 0))}%</td></tr>`;
         }).join('')
       : '<tr><td colspan="3" class="report-empty">Waiting for detector data.</td></tr>';
   }
@@ -3525,10 +3530,10 @@ function renderHistory(items) {
     const occ = h.occupied != null ? `${h.occupied}/${h.total ?? '?'}` : '';
     return `
       <div class="activity-row">
-        <span class="act-time">${time}</span>
+        <span class="act-time">${escapeHtml(time)}</span>
         <span class="act-badge ${badge}">${label}</span>
-        <span class="act-desc">Occupancy at ${pct}%</span>
-        <span class="act-occ">${occ}</span>
+        <span class="act-desc">Occupancy at ${escapeHtml(Number(pct))}%</span>
+        <span class="act-occ">${escapeHtml(occ)}</span>
       </div>`;
   }).join('');
 }
@@ -3579,7 +3584,7 @@ async function fetchPredictions() {
         const isToday = day === phDay;
         return `
           <div class="revenue-day ${isToday ? 'is-today' : ''}">
-            <div class="revenue-day-name">${day}</div>
+            <div class="revenue-day-name">${escapeHtml(day)}</div>
             <div class="revenue-day-value">PHP ${Number(rev).toLocaleString('en-PH', { maximumFractionDigits: 0 })}</div>
           </div>`;
       }).join('');
@@ -3658,7 +3663,7 @@ function renderFullPredictions(payload) {
         const isToday = day === phDay;
         return `
           <div class="revenue-day ${isToday ? 'is-today' : ''}">
-            <div class="revenue-day-name">${day}</div>
+          <div class="revenue-day-name">${escapeHtml(day)}</div>
             <div class="revenue-day-value">${formatPhp(rev)}</div>
           </div>`;
       }).join('');
@@ -3765,7 +3770,7 @@ async function fetchTransactionLogs() {
     if (body) {
       body.innerHTML = items.length ? items.map(item => {
         const discount = item.discount_type && item.discount_type !== 'none'
-          ? String(item.discount_type).toUpperCase() + (item.discount_id_number ? ` · ${escapeHtml(cleanText(item.discount_id_number))}` : '')
+          ? escapeHtml(String(item.discount_type).toUpperCase()) + (item.discount_id_number ? ` · ${escapeHtml(cleanText(item.discount_id_number))}` : '')
           : '—';
         const vehicle = item.vehicle_type === 'motorcycle' ? 'Motorcycle' : 'Car';
         const durationLabels = { hourly: 'Hourly', daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' };
@@ -3773,7 +3778,7 @@ async function fetchTransactionLogs() {
         return `
           <tr>
             <td>${escapeHtml(cleanText(item.paid_at_ph || ''))}</td>
-            <td>${vehicle}${duration}</td>
+            <td>${escapeHtml(vehicle)}${escapeHtml(duration)}</td>
             <td class="col-money">${escapeHtml(formatPhp(item.final_amount_php, { forceCents: true }))}</td>
             <td>${escapeHtml(cleanText(item.payment_method || 'cash').toUpperCase())}</td>
             <td class="col-discount">${discount}</td>
@@ -4146,7 +4151,7 @@ function renderZones(zones, total, occupied) {
     return `
       <div class="zone-row">
         <div class="zone-dot" style="background:${ZONE_COLORS[i % ZONE_COLORS.length]}"></div>
-        <span class="zone-name">${name}</span>
+        <span class="zone-name">${escapeHtml(name)}</span>
         <span class="zone-badge ${cls}">${label}</span>
       </div>`;
   }).join('');
@@ -4154,7 +4159,7 @@ function renderZones(zones, total, occupied) {
   if (lotGrid) {
     lotGrid.innerHTML = entries.map(([name, isOccupied]) => {
       const cls = isOccupied === true ? 'occ' : isOccupied === false ? 'free' : '';
-      return `<div class="lot-cell ${cls}" title="${name}: ${isOccupied === true ? 'Occupied' : isOccupied === false ? 'Free' : 'Unknown'}"></div>`;
+      return `<div class="lot-cell ${cls}" title="${escapeHtml(name)}: ${isOccupied === true ? 'Occupied' : isOccupied === false ? 'Free' : 'Unknown'}"></div>`;
     }).join('');
   }
 }
@@ -4365,9 +4370,9 @@ async function fetchHeatmap() {
       const cells = Array.from({ length: 24 }, (_, h) => {
         const v = Number((hours[h] || hours[String(h)] || {}).occ_pct || 0);
         const alpha = Math.max(0.05, v / maxPct);
-        return `<div class="heatmap-cell" style="background:rgba(50,230,173,${alpha.toFixed(2)})" title="${label} ${String(h).padStart(2,'0')}:00 — ${v}% avg occupancy"></div>`;
+        return `<div class="heatmap-cell" style="background:rgba(50,230,173,${alpha.toFixed(2)})" title="${escapeHtml(label)} ${String(h).padStart(2,'0')}:00 — ${escapeHtml(v)}% avg occupancy"></div>`;
       }).join('');
-      return `<div class="heatmap-row-label">${label}</div>${cells}`;
+      return `<div class="heatmap-row-label">${escapeHtml(label)}</div>${cells}`;
     }).join('');
 
     wrap.innerHTML = `<div class="heatmap-grid">${hourHeader}${rows}</div>`;
@@ -4625,7 +4630,7 @@ if (isAuthorizedAdmin) {
 }
 </script>
 
-<script>
+<script nonce="__OCCUPAI_CSP_NONCE__">
 // ── Reports Module ──────────────────────────────────────────────
 let reportTab = 'daily';
 let reportData = null;

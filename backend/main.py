@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Header, Request, Depends, Query
+from fastapi import FastAPI, HTTPException, Header, Request, Depends, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -101,13 +101,22 @@ if DEPLOY_MODE != "local":
         )
 
 AUTH_TOKEN_TTL_SECONDS = 60 * 60 * 24  # 24h
+AUTH_COOKIE_NAME = os.getenv("AUTH_COOKIE_NAME", "occupai_session").strip() or "occupai_session"
+_cookie_secure = os.getenv("AUTH_COOKIE_SECURE", "").strip().lower()
+AUTH_COOKIE_SECURE = (
+    _cookie_secure in {"1", "true", "yes", "on"}
+    if _cookie_secure
+    else DEPLOY_MODE != "local"
+)
+STREAM_TOKEN_TTL_SECONDS = max(60, int(os.getenv("STREAM_TOKEN_TTL_SECONDS", "300")))
 
 
-def _sign_auth_token(user_id: int, role: str) -> str:
+def _sign_auth_token(user_id: int, role: str, purpose: str = "auth", ttl_seconds: int = AUTH_TOKEN_TTL_SECONDS) -> str:
     payload = json.dumps({
         "user_id": user_id,
         "role": role,
-        "exp": int(time.time()) + AUTH_TOKEN_TTL_SECONDS,
+        "purpose": purpose,
+        "exp": int(time.time()) + max(1, int(ttl_seconds)),
     }, separators=(",", ":")).encode()
     raw = base64.urlsafe_b64encode(payload).decode().rstrip("=")
     sig = hmac.new(AUTH_SECRET_KEY.encode(), raw.encode(), hashlib.sha256).hexdigest()
@@ -134,6 +143,33 @@ _revoked_tokens_lock = threading.Lock()
 _revoked_tokens = {}  # token string -> exp unix timestamp, so "logout" can actually invalidate a token early
 
 
+def _token_hash(token: str) -> str:
+    return hashlib.sha256((token or "").encode("utf-8")).hexdigest()
+
+
+def _shared_token_is_revoked(token: str) -> bool:
+    """Check durable revocation state when a database is configured.
+
+    The in-process dictionary remains only as a local-development fallback and
+    a fast path. Production revocation is stored as a token hash, never the
+    bearer token itself, so logout works across all backend instances.
+    """
+    if not os.getenv("DATABASE_URL"):
+        return False
+    try:
+        rows = query(
+            "SELECT 1 AS revoked FROM revoked_auth_tokens "
+            "WHERE token_hash=%s AND expires_at > NOW()",
+            (_token_hash(token),),
+        )
+        return bool(rows)
+    except Exception as exc:
+        print(f"[auth] shared revocation lookup failed: {exc}")
+        # Authentication itself performs a database user lookup immediately
+        # after this check; a database outage therefore fails closed there.
+        return False
+
+
 def _prune_revoked_tokens():
     now = int(time.time())
     with _revoked_tokens_lock:
@@ -148,6 +184,16 @@ def _revoke_token(token: str):
     with _revoked_tokens_lock:
         _revoked_tokens[token] = int(payload.get("exp", 0))
     _prune_revoked_tokens()
+    if os.getenv("DATABASE_URL"):
+        try:
+            execute(
+                "INSERT INTO revoked_auth_tokens (token_hash, expires_at) "
+                "VALUES (%s, TO_TIMESTAMP(%s)) "
+                "ON CONFLICT (token_hash) DO UPDATE SET expires_at=EXCLUDED.expires_at",
+                (_token_hash(token), int(payload.get("exp", 0))),
+            )
+        except Exception as exc:
+            print(f"[auth] shared token revocation write failed: {exc}")
 
 
 def _verify_auth_token(token: str):
@@ -157,6 +203,8 @@ def _verify_auth_token(token: str):
     with _revoked_tokens_lock:
         if token in _revoked_tokens:
             return None
+    if _shared_token_is_revoked(token):
+        return None
     return payload
 
 
@@ -168,7 +216,74 @@ _login_attempts_lock = threading.Lock()
 _login_attempts = {}  # email -> {"count": int, "window_start": float, "locked_until": float}
 
 
+def _shared_login_lockout_seconds_left(email: str):
+    if not os.getenv("DATABASE_URL"):
+        return None
+    try:
+        rows = query(
+            "SELECT locked_until FROM auth_login_attempts WHERE email=%s",
+            (email,),
+        )
+        if not rows or not rows[0].get("locked_until"):
+            return 0
+        locked_until = rows[0]["locked_until"]
+        if getattr(locked_until, "tzinfo", None) is None:
+            locked_until = locked_until.replace(tzinfo=PH_TZ)
+        return max(0, int((locked_until - datetime.now(locked_until.tzinfo)).total_seconds()))
+    except Exception as exc:
+        print(f"[auth] shared login lockout lookup failed: {exc}")
+        raise HTTPException(503, "Authentication service temporarily unavailable") from exc
+
+
+def _shared_login_record_failure(email: str):
+    if not os.getenv("DATABASE_URL"):
+        return False
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT * FROM auth_login_attempts WHERE email=%s FOR UPDATE", (email,))
+        row = cur.fetchone()
+        now = datetime.now(PH_TZ)
+        if not row or (now - row["window_started_at"]).total_seconds() > _LOGIN_WINDOW_SECONDS:
+            count = 1
+            window_started_at = now
+        else:
+            count = int(row["failure_count"] or 0) + 1
+            window_started_at = row["window_started_at"]
+        locked_until = now + timedelta(seconds=_LOGIN_LOCKOUT_SECONDS) if count >= _LOGIN_MAX_ATTEMPTS else None
+        cur.execute(
+            "INSERT INTO auth_login_attempts (email, failure_count, window_started_at, locked_until) "
+            "VALUES (%s,%s,%s,%s) ON CONFLICT (email) DO UPDATE SET "
+            "failure_count=EXCLUDED.failure_count, window_started_at=EXCLUDED.window_started_at, "
+            "locked_until=EXCLUDED.locked_until",
+            (email, count, window_started_at, locked_until),
+        )
+        conn.commit()
+        return True
+    except Exception as exc:
+        conn.rollback()
+        print(f"[auth] shared login failure write failed: {exc}")
+        raise HTTPException(503, "Authentication service temporarily unavailable") from exc
+    finally:
+        cur.close()
+        conn.close()
+
+
+def _shared_login_record_success(email: str):
+    if not os.getenv("DATABASE_URL"):
+        return False
+    try:
+        execute("DELETE FROM auth_login_attempts WHERE email=%s", (email,))
+        return True
+    except Exception as exc:
+        print(f"[auth] shared login success cleanup failed: {exc}")
+        raise HTTPException(503, "Authentication service temporarily unavailable") from exc
+
+
 def _login_lockout_seconds_left(email: str):
+    shared = _shared_login_lockout_seconds_left(email)
+    if shared is not None:
+        return shared
     now = time.time()
     with _login_attempts_lock:
         entry = _login_attempts.get(email)
@@ -182,6 +297,8 @@ def _login_lockout_seconds_left(email: str):
 
 
 def _login_record_failure(email: str):
+    if _shared_login_record_failure(email):
+        return
     now = time.time()
     with _login_attempts_lock:
         entry = _login_attempts.get(email)
@@ -194,6 +311,8 @@ def _login_record_failure(email: str):
 
 
 def _login_record_success(email: str):
+    if _shared_login_record_success(email):
+        return
     with _login_attempts_lock:
         _login_attempts.pop(email, None)
 
@@ -209,7 +328,56 @@ def _client_key(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def _audit_auth_event(request: Request, event_type: str, email: str = "", user_id=None):
+    if not os.getenv("DATABASE_URL"):
+        return
+    try:
+        execute(
+            "INSERT INTO auth_audit_log (event_type, email, user_id, client_key) "
+            "VALUES (%s,%s,%s,%s)",
+            (event_type, email or None, user_id, _client_key(request)),
+        )
+    except Exception as exc:
+        # Authentication must not fail just because an audit insert is delayed;
+        # the shared rate-limit and session tables remain authoritative.
+        print(f"[auth] audit log write failed: {exc}")
+
+
 def _rate_limit(request: Request, bucket_name: str, max_calls: int, window_seconds: int):
+    if os.getenv("DATABASE_URL"):
+        conn = get_db()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """
+                INSERT INTO rate_limit_buckets
+                    (bucket_name, client_key, window_started_at, call_count, updated_at)
+                VALUES (%s, %s, NOW(), 1, NOW())
+                ON CONFLICT (bucket_name, client_key) DO UPDATE SET
+                    call_count = CASE
+                        WHEN rate_limit_buckets.window_started_at <= NOW() - (%s * INTERVAL '1 second')
+                        THEN 1 ELSE rate_limit_buckets.call_count + 1 END,
+                    window_started_at = CASE
+                        WHEN rate_limit_buckets.window_started_at <= NOW() - (%s * INTERVAL '1 second')
+                        THEN NOW() ELSE rate_limit_buckets.window_started_at END,
+                    updated_at = NOW()
+                RETURNING call_count
+                """,
+                (bucket_name, _client_key(request), window_seconds, window_seconds),
+            )
+            count = int(cur.fetchone()["call_count"])
+            conn.commit()
+        except Exception as exc:
+            conn.rollback()
+            print(f"[security] shared rate-limit write failed: {exc}")
+            raise HTTPException(503, "Rate-limit service temporarily unavailable") from exc
+        finally:
+            cur.close()
+            conn.close()
+        if count > max_calls:
+            raise HTTPException(429, "Too many requests. Please slow down and try again shortly.")
+        return
+
     key = (bucket_name, _client_key(request))
     now = time.time()
     cutoff = now - window_seconds
@@ -230,8 +398,13 @@ def _auth_payload_from_header(authorization: Optional[str]):
     return _verify_auth_token(token)
 
 
-def require_user(authorization: str = Header(None)):
-    payload = _auth_payload_from_header(authorization)
+def _auth_token_from_request(request: Request, authorization: Optional[str]):
+    if authorization and authorization.lower().startswith("bearer "):
+        return authorization.split(" ", 1)[1].strip()
+    return request.cookies.get(AUTH_COOKIE_NAME)
+
+
+def _active_auth_payload(payload):
     if not payload:
         raise HTTPException(401, "Authentication required")
     try:
@@ -251,8 +424,13 @@ def require_user(authorization: str = Header(None)):
     return {**payload, "role": current_role}
 
 
-def require_admin(authorization: str = Header(None)):
-    payload = require_user(authorization)
+def require_user(request: Request, authorization: str = Header(None)):
+    token = _auth_token_from_request(request, authorization)
+    return _active_auth_payload(_verify_auth_token(token) if token else None)
+
+
+def require_admin(request: Request, authorization: str = Header(None)):
+    payload = require_user(request, authorization)
     if payload.get("role") != "admin":
         raise HTTPException(403, "Admin access required")
     return payload
@@ -261,6 +439,24 @@ def require_admin(authorization: str = Header(None)):
 def _check_cam_token(x_cam_token: Optional[str]):
     if not x_cam_token or not hmac.compare_digest(x_cam_token, CAM_TOKEN):
         raise HTTPException(401, "Unauthorized")
+
+
+def _sign_stream_token(user_id: int, role: str) -> str:
+    return _sign_auth_token(user_id, role, purpose="stream", ttl_seconds=STREAM_TOKEN_TTL_SECONDS)
+
+
+def require_stream_access(
+    request: Request,
+    authorization: str = Header(None),
+    stream_token: Optional[str] = Query(None, min_length=20, max_length=512),
+):
+    token = _auth_token_from_request(request, authorization)
+    payload = _verify_auth_token(token) if token else None
+    if not payload and stream_token:
+        candidate = _verify_auth_token(stream_token)
+        if candidate and candidate.get("purpose") == "stream":
+            payload = candidate
+    return _active_auth_payload(payload)
 DB_LOG_CONFIRM_SECONDS = max(0.0, float(os.getenv("DB_LOG_CONFIRM_SECONDS", "20")))
 DB_LOG_MIN_INTERVAL_SECONDS = max(1.0, float(os.getenv("DB_LOG_MIN_INTERVAL_SECONDS", "20")))
 CAMERA_STATE_TTL_SECONDS = max(5.0, float(os.getenv("CAMERA_STATE_TTL_SECONDS", "15")))
@@ -296,6 +492,13 @@ OCC_HIGH_THRESH = 20.0
 
 PAYMONGO_SECRET_KEY = os.getenv("PAYMONGO_SECRET_KEY", "")
 PAYMONGO_PUBLIC_KEY = os.getenv("PAYMONGO_PUBLIC_KEY", "")
+PAYMONGO_WEBHOOK_SECRET = os.getenv("PAYMONGO_WEBHOOK_SECRET", "").strip()
+PAYMONGO_WEBHOOK_TOLERANCE_SECONDS = max(
+    30, int(os.getenv("PAYMONGO_WEBHOOK_TOLERANCE_SECONDS", "300"))
+)
+GCASH_PROCESSING_TIMEOUT_SECONDS = max(
+    60, int(os.getenv("GCASH_PROCESSING_TIMEOUT_SECONDS", str(30 * 60)))
+)
 
 DEFAULT_MODEL_METRICS = {}
 
@@ -1080,6 +1283,71 @@ def _ensure_core_tables():
         print(f"[DB] core table setup warning: {e}")
 
 
+def _ensure_security_tables():
+    """Create the shared security state used by every backend instance."""
+    try:
+        execute("""
+            CREATE TABLE IF NOT EXISTS revoked_auth_tokens (
+                token_hash TEXT PRIMARY KEY,
+                expires_at TIMESTAMPTZ NOT NULL,
+                revoked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        execute(
+            "CREATE INDEX IF NOT EXISTS idx_revoked_auth_tokens_expires_at "
+            "ON revoked_auth_tokens (expires_at)"
+        )
+        execute("""
+            CREATE TABLE IF NOT EXISTS rate_limit_buckets (
+                bucket_name TEXT NOT NULL,
+                client_key TEXT NOT NULL,
+                window_started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                call_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (bucket_name, client_key)
+            )
+        """)
+        execute("""
+            CREATE TABLE IF NOT EXISTS auth_login_attempts (
+                email TEXT PRIMARY KEY,
+                failure_count INTEGER NOT NULL DEFAULT 0,
+                window_started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                locked_until TIMESTAMPTZ
+            )
+        """)
+        execute("""
+            CREATE TABLE IF NOT EXISTS auth_audit_log (
+                audit_id BIGSERIAL PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                email TEXT,
+                user_id BIGINT,
+                client_key TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        execute(
+            "CREATE INDEX IF NOT EXISTS idx_auth_audit_log_created_at "
+            "ON auth_audit_log (created_at DESC)"
+        )
+        execute("""
+            CREATE TABLE IF NOT EXISTS gcash_webhook_events (
+                event_id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                payload_hash TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'processing',
+                error_message TEXT,
+                received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                processed_at TIMESTAMPTZ
+            )
+        """)
+        execute(
+            "CREATE INDEX IF NOT EXISTS idx_gcash_webhook_events_received_at "
+            "ON gcash_webhook_events (received_at DESC)"
+        )
+    except Exception as e:
+        print(f"[DB] security table setup warning: {e}")
+
+
 def _ensure_parking_log_indexes():
     try:
         execute(
@@ -1115,6 +1383,11 @@ def _ensure_payment_table():
         execute("ALTER TABLE parking_payments ADD COLUMN IF NOT EXISTS user_id INTEGER")
         execute("ALTER TABLE parking_payments ADD COLUMN IF NOT EXISTS vehicle_type TEXT NOT NULL DEFAULT 'car'")
         execute("ALTER TABLE parking_payments ADD COLUMN IF NOT EXISTS discount_id_number TEXT")
+        execute("ALTER TABLE parking_payments ADD COLUMN IF NOT EXISTS external_reference TEXT")
+        execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_parking_payments_external_reference "
+            "ON parking_payments (external_reference) WHERE external_reference IS NOT NULL"
+        )
         # Rate plan the driver paid under — daily, weekly, or monthly flat
         # rate (this lot doesn't sell hourly parking). Payments recorded
         # before this column existed default to 'daily'; rows from before
@@ -1167,6 +1440,18 @@ def _ensure_admin_settings_table():
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
         """)
+        # These were the original bundled daily defaults. Migrate only those
+        # exact legacy values so a deliberate custom admin rate is preserved.
+        execute(
+            "UPDATE admin_settings SET value=%s, updated_at=NOW() "
+            "WHERE key=%s AND TRIM(value) IN ('150', '150.0', '150.00')",
+            ("50.00", "DAILY_RATE_CAR"),
+        )
+        execute(
+            "UPDATE admin_settings SET value=%s, updated_at=NOW() "
+            "WHERE key=%s AND TRIM(value) IN ('80', '80.0', '80.00')",
+            ("25.00", "DAILY_RATE_MOTORCYCLE"),
+        )
     except Exception as e:
         print(f"[DB] admin_settings table setup warning: {e}")
 
@@ -1174,6 +1459,7 @@ def _ensure_admin_settings_table():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _ensure_core_tables()
+    _ensure_security_tables()
     try:
         _ensure_default_admin()
         print(f"[auth] Default admin ready: {ADMIN_EMAIL}")
@@ -1183,6 +1469,10 @@ async def lifespan(app: FastAPI):
     _ensure_payment_table()
     _ensure_gcash_checkout_table()
     _ensure_admin_settings_table()
+    try:
+        _reconcile_stale_gcash_checkouts()
+    except Exception as e:
+        print(f"[GCash] Initial reconciliation warning: {e}")
     _load_settings_cache()
     print("[OccupAI] Loading ML models...")
     try:
@@ -1191,6 +1481,12 @@ async def lifespan(app: FastAPI):
         print(f"[OccupAI] ML warning: {e}")
     t = threading.Thread(target=_insight_scheduler, daemon=True, name="insight-scheduler")
     t.start()
+    gcash_thread = threading.Thread(
+        target=_gcash_reconciliation_scheduler,
+        daemon=True,
+        name="gcash-reconciliation-scheduler",
+    )
+    gcash_thread.start()
     print("[OccupAI] Insight scheduler started (15s warmup, then hourly).")
     yield
     print("[OccupAI] Shutdown.")
@@ -1220,8 +1516,54 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "X-Cam-Token"],
+    allow_headers=["Content-Type", "Authorization", "X-Cam-Token", "X-OccupAI-Client"],
+    allow_credentials=_cors_origins != ["*"],
 )
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    csp_nonce = base64.b64encode(secrets.token_bytes(16)).decode("ascii").rstrip("=")
+    response = await call_next(request)
+    if response.headers.get("content-type", "").lower().startswith("text/html"):
+        # FileResponse streams the template, so replace the marker while the
+        # body is still in this request. This lets the templates keep inline
+        # application code without falling back to script-src unsafe-inline.
+        body = b"".join([chunk async for chunk in response.body_iterator])
+        body = body.replace(b"__OCCUPAI_CSP_NONCE__", csp_nonce.encode("ascii"))
+        headers = dict(response.headers)
+        headers.pop("content-length", None)
+        response = Response(
+            content=body,
+            status_code=response.status_code,
+            headers=headers,
+            background=getattr(response, "background", None),
+        )
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault(
+        "Permissions-Policy", "camera=(), microphone=(), geolocation=()"
+    )
+    # The existing dashboards contain inline application scripts/styles. The
+    # policy still blocks object/plugin injection, framing, and unexpected
+    # origins; moving those inline blocks to nonce-bearing external bundles is
+    # tracked as the final CSP tightening step.
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; "
+        "form-action 'self'; img-src 'self' data: blob:; media-src 'self' blob:; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' data: https://fonts.gstatic.com; "
+        f"script-src 'self' 'nonce-{csp_nonce}' https://cdn.jsdelivr.net; "
+        "connect-src 'self'; frame-src 'self' https://checkout.paymongo.com;",
+    )
+    if DEPLOY_MODE != "local":
+        response.headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+        )
+    return response
+
 
 @app.exception_handler(Exception)
 async def _err(request: Request, exc: Exception):
@@ -1494,7 +1836,10 @@ def status():
 #  MJPEG proxy
 # ══════════════════════════════════════════════════════════════════
 @app.get("/api/stream")
-async def stream_proxy(camera_id: str = Query("main", min_length=1, max_length=40)):
+async def stream_proxy(
+    camera_id: str = Query("main", min_length=1, max_length=40),
+    _auth=Depends(require_stream_access),
+):
     stream_target = _camera_stream_target(camera_id)
     if not stream_target:
         raise HTTPException(404, "This camera stream is not configured")
@@ -1513,6 +1858,20 @@ async def stream_proxy(camera_id: str = Query("main", min_length=1, max_length=4
         media_type="multipart/x-mixed-replace; boundary=--occupaiframe",
         headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
     )
+
+
+@app.get("/api/stream-token")
+def stream_token(_auth=Depends(require_user)):
+    """Issue a short-lived token for native image/MJPEG clients.
+
+    Browsers use the HttpOnly session cookie automatically. Native Flutter
+    image widgets cannot attach an Authorization header, so they use this
+    five-minute, purpose-limited token in the stream URL.
+    """
+    return {
+        "token": _sign_stream_token(int(_auth["user_id"]), _auth.get("role", "driver")),
+        "expires_in": STREAM_TOKEN_TTL_SECONDS,
+    }
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1604,17 +1963,17 @@ def push_frame(data: PushFrame, x_cam_token: str = Header(...)):
 #  Live state
 # ══════════════════════════════════════════════════════════════════
 @app.get("/api/stats")
-def api_stats():
+def api_stats(_auth=Depends(require_user)):
     with state_lock:
         _refresh_aggregated_state_locked()
         return dict(state)
 
 @app.get("/api/history")
-def api_history():
+def api_history(_auth=Depends(require_user)):
     return list(history)
 
 @app.get("/api/occupancy")
-def api_occupancy():
+def api_occupancy(_auth=Depends(require_user)):
     with state_lock:
         _refresh_aggregated_state_locked()
         return {k: state[k] for k in ("occupied","free","total","occupancy_pct","zones")}
@@ -2411,7 +2770,7 @@ def _payment_revenue_dashboard():
     }
 
 
-def _record_parking_payment(payload, verified_by_user_id=None):
+def _record_parking_payment(payload, verified_by_user_id=None, external_reference=None):
     vehicle_type = _normalize_vehicle_type(payload.vehicle_type, default="car")
     duration_type = _normalize_duration_type(getattr(payload, "duration_type", None), default="daily")
     regular_price = _parse_price(
@@ -2438,20 +2797,35 @@ def _record_parking_payment(payload, verified_by_user_id=None):
             INSERT INTO parking_payments (
                 vehicle_type, duration_type, regular_price_php, discount_type, discount_rate,
                 discount_amount_php, final_amount_php, payment_method, notes, paid_at, user_id,
-                discount_id_number, verified_by_user_id
+                discount_id_number, verified_by_user_id, external_reference
             )
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (external_reference) WHERE external_reference IS NOT NULL DO NOTHING
             RETURNING payment_id, vehicle_type, duration_type, regular_price_php, discount_type,
                       discount_rate, discount_amount_php, final_amount_php,
-                      payment_method, notes, paid_at, discount_id_number, verified_by_user_id
+                      payment_method, notes, paid_at, discount_id_number, verified_by_user_id,
+                      external_reference
             """,
             (
                 vehicle_type, duration_type, regular_price, discount_type, discount_rate,
                 discount_amount, final_amount, payment_method, notes, paid_at,
-                payload.user_id, discount_id_number, verified_by_user_id,
+                payload.user_id, discount_id_number, verified_by_user_id, external_reference,
             ),
         )
         row = cur.fetchone()
+        idempotent_replay = False
+        if row is None and external_reference:
+            cur.execute(
+                "SELECT payment_id, vehicle_type, duration_type, regular_price_php, discount_type, "
+                "discount_rate, discount_amount_php, final_amount_php, payment_method, notes, paid_at, "
+                "discount_id_number, verified_by_user_id, external_reference "
+                "FROM parking_payments WHERE external_reference=%s",
+                (external_reference,),
+            )
+            row = cur.fetchone()
+            idempotent_replay = True
+        if row is None:
+            raise RuntimeError("Payment insert returned no row")
         conn.commit()
         paid_at_ph = _coerce_datetime(row["paid_at"]).strftime("%Y-%m-%d %H:%M:%S")
         return {
@@ -2468,6 +2842,8 @@ def _record_parking_payment(payload, verified_by_user_id=None):
             "notes": row["notes"],
             "discount_id_number": row["discount_id_number"],
             "verified_by_user_id": row["verified_by_user_id"],
+            "external_reference": row.get("external_reference"),
+            "idempotent_replay": idempotent_replay,
             "paid_at_ph": paid_at_ph,
         }
     except Exception as e:
@@ -2527,7 +2903,7 @@ def _driver_price_summary(vehicles_hour=None, lot_capacity=None):
 
 
 @app.get("/api/driver/summary")
-def api_driver_summary():
+def api_driver_summary(_auth=Depends(require_user)):
     with state_lock:
         _refresh_aggregated_state_locked()
         snapshot = dict(state)
@@ -2568,7 +2944,7 @@ def api_driver_summary():
 
 
 @app.get("/api/ml/metrics")
-def ml_metrics():
+def ml_metrics(_auth=Depends(require_user)):
     return {
         "source": str(METRICS_PATH),
         "metrics": MODEL_METRICS,
@@ -2577,7 +2953,7 @@ def ml_metrics():
 
 
 @app.get("/api/ml/predict/vehicles")
-def ml_predict_vehicles():
+def ml_predict_vehicles(_auth=Depends(require_user)):
     if not ml._ready: raise HTTPException(503, "ML not loaded")
     df = _db_history()
     if len(df) < NB1_SEQ_LEN:
@@ -2589,7 +2965,7 @@ def ml_predict_vehicles():
 
 
 @app.get("/api/ml/predict/occupancy")
-def ml_predict_occupancy():
+def ml_predict_occupancy(_auth=Depends(require_user)):
     if not ml._ready: raise HTTPException(503, "ML not loaded")
     df = _db_history()
     if len(df) < NB2_OCC_SEQ_LEN:
@@ -2601,7 +2977,7 @@ def ml_predict_occupancy():
 
 
 @app.get("/api/ml/predict/price")
-def ml_predict_price():
+def ml_predict_price(_auth=Depends(require_user)):
     df = _db_history()
     if df.empty: raise HTTPException(422, "No history")
     try:
@@ -2613,7 +2989,7 @@ def ml_predict_price():
 
 
 @app.get("/api/ml/predict/revenue")
-def ml_predict_revenue():
+def ml_predict_revenue(_auth=Depends(require_user)):
     try:
         active_capacity = max(1, int(_active_slot_capacity(LOT_CAPACITY)))
         weekday_revenue, today_forecast, source = _weekday_revenue_forecast(active_capacity)
@@ -2637,7 +3013,7 @@ def ml_predict_revenue():
 
 
 @app.get("/api/ml/dashboard")
-def ml_dashboard():
+def ml_dashboard(_auth=Depends(require_user)):
     df  = _db_history()
     active_capacity = _active_slot_capacity()
     out = {
@@ -2669,7 +3045,7 @@ def ml_dashboard():
 #  Predictions — with PH time + revenue forecast per weekday
 # ══════════════════════════════════════════════════════════════════
 @app.get("/api/predictions")
-def api_predictions():
+def api_predictions(_auth=Depends(require_user)):
     try:
         active_capacity = max(1, int(_active_slot_capacity(LOT_CAPACITY)))
         # Use live database history whenever it has recent observations. The
@@ -2816,6 +3192,13 @@ def api_driver_history(user_id: int, period: str = "all", limit: int = 50, _auth
         elif period == "month":
             period_filter = "AND paid_at >= DATE_TRUNC('month', NOW() AT TIME ZONE 'Asia/Manila')"
 
+        total_rows = query(f"""
+            SELECT COUNT(*) AS total
+            FROM parking_payments
+            WHERE user_id = %s {period_filter}
+        """, (user_id,))
+        total_sessions = int(total_rows[0]["total"]) if total_rows else 0
+
         rows = query(f"""
             SELECT
                 payment_id,
@@ -2857,7 +3240,8 @@ def api_driver_history(user_id: int, period: str = "all", limit: int = 50, _auth
         return {
             "records": records,
             "total_spent_php": round(total_spent, 2),
-            "total_sessions": len(records),
+            "total_sessions": total_sessions,
+            "returned_sessions": len(records),
             "period": period,
         }
     except HTTPException:
@@ -2877,13 +3261,16 @@ class GcashCheckoutPayload(BaseModel):
     user_id: Optional[int] = None
 
 
-def _paymongo_headers():
+def _paymongo_headers(idempotency_key: Optional[str] = None):
     encoded = base64.b64encode(f"{PAYMONGO_SECRET_KEY}:".encode()).decode()
-    return {
+    headers = {
         "Authorization": f"Basic {encoded}",
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
+    if idempotency_key:
+        headers["Idempotency-Key"] = idempotency_key[:255]
+    return headers
 
 
 @app.post("/api/gcash/create-checkout")
@@ -2935,6 +3322,7 @@ def gcash_create_checkout(
                     "description": (payload.description or "OccupAI Parking Payment").strip()[:200],
                 }],
                 "payment_method_types": ["gcash"],
+                "reference_number": ref,
                 "success_url": f"{base_url}/api/gcash/success?ref={ref}",
                 "cancel_url": f"{base_url}/driver",
                 "description": (payload.description or "OccupAI Parking Payment").strip()[:200],
@@ -2945,7 +3333,7 @@ def gcash_create_checkout(
     req = urllib.request.Request(
         "https://api.paymongo.com/v1/checkout_sessions",
         data=body,
-        headers=_paymongo_headers(),
+        headers=_paymongo_headers(idempotency_key=f"checkout:{ref}"),
         method="POST",
     )
     try:
@@ -3033,7 +3421,7 @@ text-decoration:none;font-weight:600}
 _GCASH_MAX_PAGE_RETRIES = 6
 
 
-def _claim_gcash_checkout(ref: str):
+def _claim_gcash_checkout(ref: str, allow_processing: bool = False):
     """Atomically claim a paid checkout before inserting its payment row."""
     conn = get_db()
     cur = conn.cursor()
@@ -3044,7 +3432,10 @@ def _claim_gcash_checkout(ref: str):
             conn.commit()
             return None, "missing"
         status = str(row.get("status") or "pending").lower()
-        if status == "pending":
+        claimable = status in {"pending", "reconciliation_required"}
+        if allow_processing and status == "processing":
+            claimable = True
+        if claimable:
             cur.execute(
                 "UPDATE gcash_checkouts SET status='processing' WHERE ref=%s",
                 (ref,),
@@ -3081,6 +3472,45 @@ def _checkout_is_paid(attributes: dict) -> bool:
         return True
 
     return False
+
+
+def _finalize_gcash_checkout(ref: str, allow_processing: bool = False):
+    """Record one PayMongo-confirmed checkout with a durable idempotency key."""
+    checkout, claim_status = _claim_gcash_checkout(ref, allow_processing=allow_processing)
+    if checkout is None:
+        return None, "missing", None
+    if claim_status == "paid":
+        return checkout, "paid", None
+    if claim_status != "claimed":
+        return checkout, claim_status, None
+
+    try:
+        payment_payload = PaymentRecordPayload(
+            vehicle_type=checkout["vehicle_type"] or "car",
+            duration_type=checkout["duration_type"] or "daily",
+            regular_price_php=float(checkout["regular_price_php"]),
+            discount_type=checkout["discount_type"],
+            discount_id_number=checkout.get("discount_id_number"),
+            payment_method="gcash",
+            notes="Paid via GCash (PayMongo)",
+            user_id=checkout["user_id"],
+        )
+        payment = _record_parking_payment(
+            payment_payload,
+            external_reference=f"paymongo:{checkout.get('checkout_id') or ref}",
+        )
+        execute(
+            "UPDATE gcash_checkouts SET status='paid', error_message=NULL WHERE ref=%s",
+            (ref,),
+        )
+        return checkout, "paid", payment
+    except Exception as exc:
+        print(f"[GCash] Could not auto-record payment {ref}: {exc}")
+        execute(
+            "UPDATE gcash_checkouts SET status='error', error_message=%s WHERE ref=%s",
+            (str(exc)[:500], ref),
+        )
+        return checkout, "error", None
 
 
 @app.get("/api/gcash/success")
@@ -3146,7 +3576,7 @@ def gcash_success(
         return _gcash_result_page(False, "PayMongo has not confirmed this payment yet.")
 
     try:
-        checkout, claim_status = _claim_gcash_checkout(ref)
+        checkout, claim_status, _payment = _finalize_gcash_checkout(ref)
     except Exception as e:
         print(f"[GCash] Could not claim checkout {ref}: {e}")
         return _gcash_result_page(False, "We couldn't finalize this payment yet. Please try again.")
@@ -3157,35 +3587,162 @@ def gcash_success(
         return _gcash_result_page(
             True, f"Your GCash payment of PHP {float(checkout['final_amount_php']):,.2f} has been recorded."
         )
+    if claim_status == "error":
+        return _gcash_result_page(False, "Payment was confirmed by PayMongo, but we couldn't save the record. Please contact support.")
+
     if claim_status != "claimed":
         return _gcash_pending_page(ref, min(attempt + 1, _GCASH_MAX_PAGE_RETRIES))
-
-    try:
-        payment_payload = PaymentRecordPayload(
-            vehicle_type=checkout["vehicle_type"] or "car",
-            duration_type=checkout["duration_type"] or "daily",
-            regular_price_php=float(checkout["regular_price_php"]),
-            discount_type=checkout["discount_type"],
-            discount_id_number=checkout["discount_id_number"],
-            payment_method="gcash",
-            notes="Paid via GCash (PayMongo)",
-            user_id=checkout["user_id"],
-        )
-        _record_parking_payment(payment_payload)
-        execute("UPDATE gcash_checkouts SET status='paid' WHERE ref=%s", (ref,))
-    except Exception as e:
-        print(f"[GCash] Could not auto-record payment: {e}")
-        # PayMongo already charged the customer at this point — flag it so an admin
-        # can find and manually reconcile it, instead of the money silently vanishing.
-        execute(
-            "UPDATE gcash_checkouts SET status='error', error_message=%s WHERE ref=%s",
-            (str(e)[:500], ref),
-        )
-        return _gcash_result_page(False, "Payment was confirmed by PayMongo, but we couldn't save the record. Please contact support.")
 
     return _gcash_result_page(
         True, f"Your GCash payment of PHP {float(checkout['final_amount_php']):,.2f} has been recorded."
     )
+
+
+def _paymongo_signature_parts(header_value: str):
+    parts = {}
+    for item in (header_value or "").split(","):
+        key, separator, value = item.strip().partition("=")
+        if separator and key in {"t", "te", "li"}:
+            parts[key] = value.strip()
+    return parts
+
+
+def _verify_paymongo_webhook_signature(raw_body: bytes, signature_header: str, livemode=False):
+    """Verify PayMongo's timestamped HMAC signature over the raw request body."""
+    parts = _paymongo_signature_parts(signature_header)
+    try:
+        timestamp = int(parts.get("t", "0"))
+    except (TypeError, ValueError):
+        return False
+    if not timestamp or abs(int(time.time()) - timestamp) > PAYMONGO_WEBHOOK_TOLERANCE_SECONDS:
+        return False
+    supplied = parts.get("li" if livemode else "te")
+    if not supplied or not PAYMONGO_WEBHOOK_SECRET:
+        return False
+    signed_payload = f"{timestamp}.".encode("utf-8") + raw_body
+    expected = hmac.new(
+        PAYMONGO_WEBHOOK_SECRET.encode("utf-8"), signed_payload, hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(supplied, expected)
+
+
+def _mark_paymongo_event(event_id: str, event_type: str, raw_body: bytes):
+    payload_hash = hashlib.sha256(raw_body).hexdigest()
+    rows = query("SELECT status FROM gcash_webhook_events WHERE event_id=%s", (event_id,))
+    if rows and rows[0].get("status") == "processed":
+        return False
+    execute(
+        "INSERT INTO gcash_webhook_events (event_id, event_type, payload_hash, status) "
+        "VALUES (%s,%s,%s,'processing') ON CONFLICT (event_id) DO UPDATE SET "
+        "event_type=EXCLUDED.event_type, payload_hash=EXCLUDED.payload_hash, status='processing', "
+        "error_message=NULL",
+        (event_id, event_type, payload_hash),
+    )
+    return True
+
+
+@app.post("/webhooks/paymongo")
+@app.post("/api/webhooks/paymongo")
+async def paymongo_webhook(
+    request: Request,
+    paymongo_signature: str = Header(None, alias="Paymongo-Signature"),
+):
+    """Accept PayMongo payment events as the source of truth for GCash."""
+    if not PAYMONGO_WEBHOOK_SECRET:
+        raise HTTPException(503, "PayMongo webhook verification is not configured")
+    raw_body = await request.body()
+    try:
+        payload = json.loads(raw_body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(400, "Invalid webhook JSON") from exc
+
+    event_data = payload.get("data") if isinstance(payload, dict) else {}
+    event_attributes = event_data.get("attributes") if isinstance(event_data, dict) else {}
+    event_attributes = event_attributes if isinstance(event_attributes, dict) else {}
+    resource = event_attributes.get("data") or event_attributes.get("checkout_session") or {}
+    resource = resource if isinstance(resource, dict) else {}
+    resource_attributes = resource.get("attributes")
+    if not isinstance(resource_attributes, dict):
+        resource_attributes = resource
+    livemode = bool(event_attributes.get("livemode") or resource_attributes.get("livemode"))
+    if not _verify_paymongo_webhook_signature(raw_body, paymongo_signature or "", livemode=livemode):
+        raise HTTPException(401, "Invalid PayMongo webhook signature")
+
+    event_id = str(event_data.get("id") or hashlib.sha256(raw_body).hexdigest())
+    event_type = str(event_attributes.get("type") or payload.get("type") or "unknown")
+    if not _mark_paymongo_event(event_id, event_type, raw_body):
+        return {"ok": True, "duplicate": True, "event_id": event_id}
+
+    try:
+        if event_type != "checkout_session.payment.paid":
+            execute(
+                "UPDATE gcash_webhook_events SET status='processed', processed_at=NOW() WHERE event_id=%s",
+                (event_id,),
+            )
+            return {"ok": True, "ignored": True, "event_id": event_id}
+
+        checkout_id = str(resource.get("id") or resource_attributes.get("id") or "").strip()
+        reference = str(
+            resource_attributes.get("reference_number")
+            or event_attributes.get("reference_number")
+            or ""
+        ).strip()
+        checkout_rows = []
+        if checkout_id:
+            checkout_rows = query(
+                "SELECT ref FROM gcash_checkouts WHERE checkout_id=%s LIMIT 1",
+                (checkout_id,),
+            )
+        if not checkout_rows and reference:
+            checkout_rows = query(
+                "SELECT ref FROM gcash_checkouts WHERE ref=%s LIMIT 1",
+                (reference,),
+            )
+        if not checkout_rows:
+            execute(
+                "UPDATE gcash_webhook_events SET status='unmatched', processed_at=NOW(), "
+                "error_message=%s WHERE event_id=%s",
+                (f"No local checkout for PayMongo checkout {checkout_id or reference or 'unknown'}", event_id),
+            )
+            return {"ok": True, "matched": False, "event_id": event_id}
+
+        ref = checkout_rows[0]["ref"]
+        checkout, status, _payment = _finalize_gcash_checkout(ref, allow_processing=True)
+        if status == "error":
+            raise RuntimeError("Payment was confirmed but local payment recording failed")
+        execute(
+            "UPDATE gcash_webhook_events SET status='processed', processed_at=NOW() WHERE event_id=%s",
+            (event_id,),
+        )
+        return {"ok": True, "matched": True, "status": status, "ref": ref, "event_id": event_id}
+    except Exception as exc:
+        execute(
+            "UPDATE gcash_webhook_events SET status='error', error_message=%s WHERE event_id=%s",
+            (str(exc)[:500], event_id),
+        )
+        raise HTTPException(500, "Webhook processing failed; PayMongo may retry this event") from exc
+
+
+def _reconcile_stale_gcash_checkouts():
+    """Make abandoned processing rows visible for webhook/manual reconciliation."""
+    if not os.getenv("DATABASE_URL"):
+        return
+    execute(
+        "UPDATE gcash_checkouts SET status='reconciliation_required', "
+        "error_message='Payment verification timed out; awaiting PayMongo webhook or admin review' "
+        "WHERE status='processing' AND created_at < NOW() - (%s * INTERVAL '1 second')",
+        (GCASH_PROCESSING_TIMEOUT_SECONDS,),
+    )
+
+
+def _gcash_reconciliation_scheduler():
+    time.sleep(60)
+    while True:
+        try:
+            _reconcile_stale_gcash_checkouts()
+        except Exception as exc:
+            print(f"[GCash] Reconciliation scheduler error: {exc}")
+        time.sleep(300)
 
 
 @app.get("/api/gcash/status")
@@ -3200,11 +3757,12 @@ def gcash_issues(_admin=Depends(require_admin)):
     parking_payments row — the customer was charged and nothing is recorded.
     Needs manual reconciliation.
     """
+    _reconcile_stale_gcash_checkouts()
     rows = query("""
         SELECT ref, user_id, vehicle_type, duration_type, final_amount_php, discount_type,
                error_message, created_at
         FROM gcash_checkouts
-        WHERE status = 'error'
+        WHERE status IN ('error', 'reconciliation_required')
         ORDER BY created_at DESC
         LIMIT 50
     """)
@@ -3222,7 +3780,7 @@ def gcash_issues(_admin=Depends(require_admin)):
 
 
 @app.get("/api/predictions/hourly-by-day")
-def api_hourly_by_day():
+def api_hourly_by_day(_auth=Depends(require_user)):
     """
     Returns average vehicle count per hour per day-of-week
     from the last 30 days of parking_logs, in Philippine Time.
@@ -3310,7 +3868,7 @@ def api_hourly_by_day():
 #  Insights
 # ══════════════════════════════════════════════════════════════════
 @app.get("/api/insights")
-def api_insights():
+def api_insights(_auth=Depends(require_user)):
     with _insight_lock:
         if not _insight_cache:
             result = {
@@ -3530,8 +4088,8 @@ def _discount_settings():
 # runs for insights, forecasting, and the live rate ticker — it's just not a
 # duration a driver can pay for.) Same durable admin_settings-backed pattern
 # as pricing/capacity.
-_DEFAULT_DAILY_RATE_CAR = 150.0
-_DEFAULT_DAILY_RATE_MOTORCYCLE = 80.0
+_DEFAULT_DAILY_RATE_CAR = FLAT_RATE_CAR
+_DEFAULT_DAILY_RATE_MOTORCYCLE = FLAT_RATE_MOTORCYCLE
 _DEFAULT_WEEKLY_RATE_CAR = 800.0
 _DEFAULT_WEEKLY_RATE_MOTORCYCLE = 450.0
 _DEFAULT_MONTHLY_RATE_CAR = 1200.0
@@ -3622,6 +4180,27 @@ def _normalized_auth_role(role: str, email: str) -> str:
     return "admin" if str(role or "").strip().lower() == "admin" else "driver"
 
 
+def _set_session_cookie(response: Response, token: str):
+    response.set_cookie(
+        key=AUTH_COOKIE_NAME,
+        value=token,
+        max_age=AUTH_TOKEN_TTL_SECONDS,
+        expires=AUTH_TOKEN_TTL_SECONDS,
+        httponly=True,
+        secure=AUTH_COOKIE_SECURE,
+        samesite="lax",
+        path="/",
+    )
+
+
+def _auth_response(token: str, user_data: dict, request: Request, response: Response):
+    _set_session_cookie(response, token)
+    result = dict(user_data)
+    if request.headers.get("x-occupai-client", "").strip().lower() != "web":
+        result["token"] = token
+    return result
+
+
 def _ensure_default_admin():
     if not ADMIN_EMAIL or not ADMIN_PASSWORD:
         return
@@ -3708,7 +4287,7 @@ async def receive_slot_adjustment(
 
 
 @app.get("/api/slot_adjustment")
-async def get_slot_adjustment():
+async def get_slot_adjustment(_auth=Depends(require_user)):
     """Dashboard polls this to show current demand level + reason."""
     return _last_slot_adjustment or {
         "demand":       "NORMAL",
@@ -3719,7 +4298,7 @@ async def get_slot_adjustment():
     }
 # ══════════════════════════════════════════════════════════════════
 @app.get("/api/settings/layout-mode")
-def get_layout_mode():
+def get_layout_mode(_admin=Depends(require_admin)):
     raw_mode = _read_setting("FORCE_DEMAND_LEVEL", "").strip().upper()
     enabled = raw_mode in _LAYOUT_MODES
     mode = raw_mode if enabled else "NORMAL"
@@ -3750,7 +4329,7 @@ def set_layout_mode(payload: LayoutModePayload, _admin=Depends(require_admin)):
 #  Auth
 # ══════════════════════════════════════════════════════════════════
 @app.get("/api/settings/pricing")
-def get_pricing_settings():
+def get_pricing_settings(_admin=Depends(require_admin)):
     return _pricing_settings()
 
 @app.post("/api/settings/pricing")
@@ -3784,7 +4363,7 @@ def set_pricing_settings(payload: PricingSettingsPayload, _admin=Depends(require
     return result
 
 @app.get("/api/settings/discounts")
-def get_discount_settings():
+def get_discount_settings(_auth=Depends(require_user)):
     return _discount_settings()
 
 @app.post("/api/settings/discounts")
@@ -3804,7 +4383,7 @@ def set_discount_settings(payload: DiscountSettingsPayload, _admin=Depends(requi
     return result
 
 @app.get("/api/settings/capacity")
-def get_capacity_settings():
+def get_capacity_settings(_admin=Depends(require_admin)):
     return _capacity_settings()
 
 @app.post("/api/settings/capacity")
@@ -3834,7 +4413,7 @@ def set_capacity_settings(payload: CapacitySettingsPayload, _admin=Depends(requi
     return result
 
 @app.get("/api/settings/duration-pricing")
-def get_duration_pricing_settings():
+def get_duration_pricing_settings(_admin=Depends(require_admin)):
     return _duration_pricing_settings()
 
 @app.post("/api/settings/duration-pricing")
@@ -3893,7 +4472,7 @@ def _validate_password_strength(password: str) -> None:
 
 
 @app.post("/auth/register")
-def register(data: UserRegister):
+def register(data: UserRegister, request: Request, response: Response):
     email = _clean_email(data.email)
     if _is_reserved_admin_email(email):
         raise HTTPException(400, "This email is reserved for the admin account")
@@ -3919,7 +4498,7 @@ def register(data: UserRegister):
         if role == "driver":
             cur.execute("INSERT INTO drivers(user_id) VALUES(%s)", (new_id,))
         conn.commit()
-        return {
+        return _auth_response(_sign_auth_token(new_id, role), {
             "ok": True,
             "user_id": new_id,
             "first_name": data.first_name,
@@ -3927,8 +4506,7 @@ def register(data: UserRegister):
             "full_name": f"{data.first_name} {data.last_name}".strip(),
             "email": email,
             "role": role,
-            "token": _sign_auth_token(new_id, role),
-        }
+        }, request, response)
     except HTTPException:
         conn.rollback()
         raise
@@ -3942,11 +4520,12 @@ def register(data: UserRegister):
 
 
 @app.post("/auth/login")
-def login(data: UserLogin, request: Request):
+def login(data: UserLogin, request: Request, response: Response):
     _rate_limit(request, "login", max_calls=10, window_seconds=60)
     email = _clean_email(data.email)
     wait = _login_lockout_seconds_left(email)
     if wait > 0:
+        _audit_auth_event(request, "login_locked", email=email)
         raise HTTPException(429, f"Too many failed attempts. Try again in {max(1, wait // 60 + 1)} minute(s).")
     try:
         if _is_reserved_admin_credentials(email, data.password):
@@ -3962,6 +4541,7 @@ def login(data: UserLogin, request: Request):
         # caller has already proven they know the correct password.
         if not u or not bcrypt.checkpw(data.password.encode(), u["password_hash"].encode()):
             _login_record_failure(email)
+            _audit_auth_event(request, "login_failure", email=email)
             raise HTTPException(401, "Invalid email or password")
         if not u["is_active"]: raise HTTPException(403, "Account disabled")
         _login_record_success(email)
@@ -3970,13 +4550,13 @@ def login(data: UserLogin, request: Request):
             execute("UPDATE users SET role=%s WHERE user_id=%s", (role, u["user_id"]))
         execute("UPDATE users SET last_login=%s WHERE user_id=%s",
                 (datetime.now(PH_TZ), u["user_id"]))
-        return {
+        _audit_auth_event(request, "login_success", email=email, user_id=u["user_id"])
+        return _auth_response(_sign_auth_token(u["user_id"], role), {
             "ok": True, "user_id": u["user_id"],
             "first_name": u["first_name"], "last_name": u["last_name"],
             "full_name":  u["full_name"],  "email":     u["email"],
             "role":       role,
-            "token": _sign_auth_token(u["user_id"], role),
-        }
+        }, request, response)
     except HTTPException: raise
     except Exception as e:
         print(f"[login] {e}")
@@ -3984,9 +4564,11 @@ def login(data: UserLogin, request: Request):
 
 
 @app.post("/auth/logout")
-def logout(authorization: str = Header(None)):
-    if authorization and authorization.lower().startswith("bearer "):
-        _revoke_token(authorization.split(" ", 1)[1].strip())
+def logout(request: Request, response: Response, authorization: str = Header(None)):
+    token = _auth_token_from_request(request, authorization)
+    if token:
+        _revoke_token(token)
+    response.delete_cookie(AUTH_COOKIE_NAME, path="/")
     return {"ok": True}
 
 

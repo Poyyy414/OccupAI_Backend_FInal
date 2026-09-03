@@ -545,7 +545,10 @@
     </div>
   </main>
 
-  <script>
+  <script nonce="__OCCUPAI_CSP_NONCE__">
+    const _occupaiFetch = window.fetch.bind(window);
+    window.fetch = (input, init = {}) => _occupaiFetch(input, { ...init, credentials: 'include' });
+
     function destinationForRole(role) {
       return String(role || 'driver').toLowerCase() === 'admin' ? '/dashboard' : '/driver';
     }
@@ -562,7 +565,6 @@
     });
 
     localStorage.removeItem('occupai_user');
-    localStorage.removeItem('occupai_token');
 
     const form = document.getElementById('registerForm');
     const firstName = document.getElementById('first_name');
@@ -637,7 +639,7 @@
       try {
         const res = await fetch('/auth/register', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'X-OccupAI-Client': 'web' },
           body: JSON.stringify(data),
         });
         const result = await res.json();
@@ -652,7 +654,6 @@
           role: result.role || 'driver',
         };
         localStorage.setItem('occupai_user', JSON.stringify(userObj));
-        if (result.token) localStorage.setItem('occupai_token', result.token);
         if (!localStorage.getItem('occupai_user')) {
           throw new Error('Could not save session. Check browser storage settings.');
         }
