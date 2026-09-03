@@ -4641,7 +4641,7 @@ function switchReportTab(tab, btn) {
 
 async function fetchReports() {
   try {
-    const res = await fetchWithRetry('/api/revenue/dashboard');
+    const res = await fetchWithRetry('/api/revenue/dashboard', { headers: authHeaders() });
     if (!res.ok) throw new Error('Reports request failed: ' + res.status);
     const data = await res.json();
     reportData = data;

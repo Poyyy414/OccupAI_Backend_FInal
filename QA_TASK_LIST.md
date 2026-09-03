@@ -26,6 +26,8 @@ Audit scope: FastAPI backend, YOLO/camera integration, admin/driver web dashboar
 - [x] Align Flutter Reports with the web's daily/weekly/monthly/yearly source data, KPIs, revenue/discount breakdown, AI predicted-vs-actual comparison, and mobile-safe CSV copying.
 - [x] Align Flutter Settings with the backend controls used by the web: manual/dynamic car and motorcycle rates, duration rates, capacity, PWD/Senior switches, and Normal/Busy/High layout override.
 - [x] Align Flutter Live Feed with the web two-camera workflow: car/motorcycle POV selector, camera-specific MJPEG endpoint, camera health, and detection log.
+- [x] Match NB1 runtime prediction inputs to the 16-feature deployed model artifacts instead of truncating a 23-feature array after scaling.
+- [x] Add the bearer token to the web Reports loader when calling the protected revenue dashboard endpoint.
 
 ## Priority 0: required before deployment
 
@@ -68,6 +70,13 @@ Audit scope: FastAPI backend, YOLO/camera integration, admin/driver web dashboar
 ### Final task verdict
 
 **PARTIAL / REQUIRES STAGING.** The application now fails closed and honors deployment environment precedence, but production secret values, uniqueness, and the required post-configuration restart cannot be verified from this local workspace.
+
+## Production log follow-up
+
+- The deployment is running successfully: dashboard, history, stats, predictions, insights, and settings requests returned `200 OK`.
+- **LOG-B01 — Medium:** Vehicle forecasting logged `NB1 feature mismatch: have 23, scaler wants 16`. The three deployed vehicle models have input shape `(None, 24, 16)` and the fallback scaler also expects 16. Fixed by selecting the model's expected named features before scaling. A real local prediction returned all three model outputs without the warning.
+- **LOG-B02 — Medium:** The Reports panel called protected `/api/revenue/dashboard` without the bearer token, producing intermittent `401 Unauthorized` responses. Fixed by passing `authHeaders()` in `fetchReports()`.
+- The observed `401` responses are therefore an application request sequencing/auth-header issue, not a deployment crash. Re-test the Reports panel after the next deployment and confirm the endpoint remains `200 OK` after refresh and tab switching.
 
 ## Priority 1: security and reliability hardening
 

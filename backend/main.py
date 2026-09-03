@@ -498,6 +498,21 @@ def _last_sequence(X, seq_len):
     return X[-seq_len:][np.newaxis, :, :]
 
 
+def _nb1_feature_matrix(df, feature_count):
+    """Build NB1 inputs in the same named-feature order used by the models.
+
+    The deployed NB1 artifacts were trained with the first 16 entries in
+    NB1_FEATURES.  Selecting those columns before scaling keeps the training
+    schema and runtime schema aligned; truncating a completed 23-column array
+    after the fact can otherwise hide an artifact/version mismatch.
+    """
+    width = max(1, int(feature_count))
+    names = list(NB1_FEATURES[:width])
+    if width > len(names):
+        names.extend(f"__missing_nb1_{i}" for i in range(width - len(names)))
+    return df.reindex(columns=names, fill_value=0).to_numpy(dtype=np.float32)
+
+
 # ══════════════════════════════════════════════════════════════════
 #  ML Engine
 # ══════════════════════════════════════════════════════════════════
@@ -579,14 +594,8 @@ class _MLEngine:
 
             train_df = pd.read_csv(TRAINING_DATA_PATH)
             train_df = _engineer_nb1(train_df)
-            feats = [f for f in NB1_FEATURES if f in train_df.columns]
-            X = train_df[feats].values
-
             model_feats = list(self._nb1.values())[0].input_shape[-1]
-            if X.shape[1] > model_feats:
-                X = X[:, :model_feats]
-            elif X.shape[1] < model_feats:
-                X = np.pad(X, ((0, 0), (0, model_feats - X.shape[1])))
+            X = _nb1_feature_matrix(train_df, model_feats)
 
             if self._scX is None:
                 self._scX = MinMaxScaler().fit(X)
@@ -603,13 +612,16 @@ class _MLEngine:
             raise RuntimeError("NB1 models not loaded")
         capacity = max(1, int(capacity or _active_slot_capacity(LOT_CAPACITY)))
         df = _engineer_nb1(history_df)
-        feats = [f for f in NB1_FEATURES if f in df.columns]
-        X = df[feats].values
+        model_feats = list(self._nb1.values())[0].input_shape[-1]
+        X = _nb1_feature_matrix(df, model_feats)
 
         if self._scX is not None:
             expected_n = self._scX.n_features_in_
             if X.shape[1] != expected_n:
-                print(f"[ML] NB1 feature mismatch: have {X.shape[1]}, scaler wants {expected_n}")
+                print(
+                    f"[ML] NB1 scaler/model artifact mismatch: model uses {X.shape[1]}, "
+                    f"scaler wants {expected_n}"
+                )
                 if X.shape[1] > expected_n:
                     X = X[:, :expected_n]
                 else:
@@ -619,7 +631,6 @@ class _MLEngine:
             from sklearn.preprocessing import MinMaxScaler
             Xs = MinMaxScaler().fit(X).transform(X)
 
-        model_feats = list(self._nb1.values())[0].input_shape[-1]
         if Xs.shape[1] != model_feats:
             if Xs.shape[1] > model_feats:
                 Xs = Xs[:, :model_feats]
