@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import hmac
 import json
@@ -103,5 +104,11 @@ def test_html_response_gets_nonce_csp_and_security_headers():
     assert "script-src 'self' 'nonce-" in csp
     script_policy = csp.split('script-src ', 1)[1].split(';', 1)[0]
     assert "'unsafe-inline'" not in script_policy
+    event_policy = csp.split('script-src-attr ', 1)[1].split(';', 1)[0]
+    assert "'unsafe-hashes'" in event_policy
+    expected_handler_hash = "'sha256-" + base64.b64encode(
+        hashlib.sha256(b"switchPanel('overview', this)").digest()
+    ).decode('ascii') + "'"
+    assert expected_handler_hash in event_policy
     assert response.headers['x-content-type-options'] == 'nosniff'
     assert response.headers['x-frame-options'] == 'DENY'

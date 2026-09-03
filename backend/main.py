@@ -7,7 +7,7 @@ CHANGES in v2.2:
   - /api/predictions now includes weekday_revenue and today_revenue_forecast
   - Revenue forecast added to predictions endpoint
 """
-import os, re, math, bcrypt, uvicorn, joblib, threading, warnings, time, json, base64, secrets, hmac, hashlib
+import os, re, math, bcrypt, uvicorn, joblib, threading, warnings, time, json, base64, secrets, hmac, hashlib, html
 import psycopg2
 import numpy as np
 import pandas as pd
@@ -466,6 +466,35 @@ TEMPLATE_DIR = BASE_DIR / "template"
 MODEL_DIR    = Path(__file__).resolve().parent / "models"
 METRICS_PATH = MODEL_DIR / "model_metrics.json"
 TRAINING_DATA_PATH = BASE_DIR / "parking_data_training.csv"
+
+# The legacy dashboard templates still use inline event attributes to keep the
+# existing browser workflow intact. A nonce authorizes <script> blocks, but it
+# does not authorize onclick/onchange/onload attributes. Generate hashes only
+# from these trusted, server-owned templates so the event handlers continue to
+# work without enabling unrestricted `unsafe-inline` script execution.
+_HTML_EVENT_ATTRIBUTE_RE = re.compile(
+    rb"\bon[a-zA-Z][a-zA-Z0-9:_-]*\s*=\s*([\"'])(.*?)\1",
+    re.DOTALL,
+)
+
+
+def _trusted_inline_event_hashes():
+    hashes = set()
+    for template_name in ("dashboard.html", "driver.html", "login.html", "register.html"):
+        try:
+            template = (TEMPLATE_DIR / template_name).read_bytes()
+        except OSError:
+            continue
+        for match in _HTML_EVENT_ATTRIBUTE_RE.finditer(template):
+            # HTML entities are decoded before the browser hashes an event
+            # handler attribute, so normalize them before hashing as well.
+            handler = html.unescape(match.group(2).decode("utf-8")).encode("utf-8")
+            digest = base64.b64encode(hashlib.sha256(handler).digest()).decode("ascii")
+            hashes.add(f"'sha256-{digest}'")
+    return " ".join(sorted(hashes))
+
+
+TRUSTED_INLINE_EVENT_HASHES = _trusted_inline_event_hashes()
 
 INTERNAL_STREAM = f"http://127.0.0.1:{STREAM_PORT}/stream"
 
@@ -1555,7 +1584,9 @@ async def security_headers(request: Request, call_next):
         "form-action 'self'; img-src 'self' data: blob:; media-src 'self' blob:; "
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
         "font-src 'self' data: https://fonts.gstatic.com; "
-        f"script-src 'self' 'nonce-{csp_nonce}' https://cdn.jsdelivr.net; "
+        f"script-src 'self' 'nonce-{csp_nonce}' 'unsafe-hashes' https://cdn.jsdelivr.net "
+        f"{TRUSTED_INLINE_EVENT_HASHES}; "
+        f"script-src-attr 'unsafe-hashes' {TRUSTED_INLINE_EVENT_HASHES}; "
         "connect-src 'self'; frame-src 'self' https://checkout.paymongo.com;",
     )
     if DEPLOY_MODE != "local":
