@@ -45,6 +45,36 @@ If Render shows HTTP 401, the two `CAM_TOKEN` values do not match. If it shows
 timeouts, check the laptop internet connection and Render URL. If only local
 works, check `PUSH_REMOTE_BACKEND=true` and the printed target list.
 
+## Two-camera local setup
+
+The admin web Live Feed shows separate **Car Camera** and **Motorcycle Camera**
+cards. Run one detector process for each physical USB camera, using a different
+camera ID and stream port. The current car camera can remain `main`; using
+`car` is clearer once the second process is ready.
+
+Example settings for the second process:
+
+```text
+CAMERA_ID=motorcycle
+CAMERA_ROLE=motorcycle
+WEBCAM_INDEX=1
+STREAM_PORT=8002
+```
+
+For a clean two-camera setup, use these values for the car process:
+
+```text
+CAMERA_ID=car
+CAMERA_ROLE=car
+WEBCAM_INDEX=0
+STREAM_PORT=8001
+```
+
+The backend combines fresh camera states for the overall total, while each
+camera card keeps its own occupied, free, capacity, and percentage values. Do
+not run the old `main` detector at the same time as the new `car` detector, or
+the same car lot may be counted twice.
+
 ## Important stream limitation
 
 Sending `/yolo/update` makes online occupancy and prediction data work. The

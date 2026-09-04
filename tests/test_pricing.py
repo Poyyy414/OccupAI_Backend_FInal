@@ -83,3 +83,47 @@ def test_motorcycle_and_car_use_independent_flat_rates(env_settings):
     moto = m._dynamic_price_formula(vehicles_hour=0, lot_capacity=44, when=TUESDAY, vehicle_type="motorcycle")
     assert car["flat_rate_php"] == m.FLAT_RATE_CAR
     assert moto["flat_rate_php"] == m.FLAT_RATE_MOTORCYCLE
+
+
+def test_dynamic_duration_prices_use_normal_rates_at_standard_demand(env_settings):
+    env_settings(NO_OVERRIDE)
+    rates = m._effective_duration_pricing(
+        vehicles_hour=10,
+        lot_capacity=44,
+        when=TUESDAY,
+    )
+
+    # 10/44 is in the standard 1.00x demand band. Daily prices therefore stay
+    # at the approved normal rates: PHP 50 for cars and PHP 25 for motorcycles.
+    assert rates["pricing_mode"] == "dynamic"
+    assert rates["demand_pricing_enabled"] is True
+    assert rates["daily_rate_php_car"] == 50.00
+    assert rates["daily_rate_php_motorcycle"] == 25.00
+
+
+def test_dynamic_duration_prices_increase_at_high_demand(env_settings):
+    env_settings(NO_OVERRIDE)
+    rates = m._effective_duration_pricing(
+        vehicles_hour=40,
+        lot_capacity=44,
+        when=TUESDAY,
+    )
+
+    # 40/44 is above 90%, so the configured 1.80x demand multiplier applies.
+    assert rates["pricing_context"]["occupancy_pct"] >= 90
+    assert rates["daily_rate_php_car"] == 90.00
+    assert rates["daily_rate_php_motorcycle"] == 45.00
+
+
+def test_manual_mode_keeps_duration_prices_unchanged(env_settings):
+    env_settings({"PRICE_OVERRIDE_ENABLED": "true"})
+    rates = m._effective_duration_pricing(
+        vehicles_hour=40,
+        lot_capacity=44,
+        when=TUESDAY,
+    )
+
+    assert rates["pricing_mode"] == "manual"
+    assert rates["demand_pricing_enabled"] is False
+    assert rates["daily_rate_php_car"] == 50.00
+    assert rates["daily_rate_php_motorcycle"] == 25.00

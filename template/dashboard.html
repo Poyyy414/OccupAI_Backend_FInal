@@ -964,6 +964,55 @@
       align-items: start;
     }
 
+    .dual-feed-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .camera-feed-card { min-width: 0; }
+
+    .camera-occupancy-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      padding: 10px 12px;
+      border-top: 1px solid var(--border-soft);
+      background: rgba(255, 255, 255, .025);
+    }
+
+    .camera-occupancy-item {
+      min-width: 0;
+      color: var(--muted);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+
+    .camera-occupancy-item strong {
+      display: block;
+      margin-top: 3px;
+      color: var(--text);
+      font-family: "Space Mono", monospace;
+      font-size: 15px;
+      letter-spacing: 0;
+    }
+
+    .camera-occupancy-item strong.good { color: var(--green); }
+    .camera-occupancy-item strong.warn { color: var(--orange); }
+
+    .combined-camera-panel { margin-top: 16px; }
+
+    .combined-camera-summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .combined-camera-summary .camera-metric strong {
+      font-size: 20px;
+    }
+
     .stream-shell {
       overflow: hidden;
       border: 1px solid var(--border);
@@ -1641,6 +1690,8 @@
     }
 
     @media (max-width: 840px) {
+      .dual-feed-grid { grid-template-columns: 1fr; }
+      .camera-occupancy-strip, .combined-camera-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       body { display: block; overflow: auto; }
       .sidebar {
         position: sticky;
@@ -2140,59 +2191,78 @@
   <section class="content" id="content-livefeed">
     <div class="feed-grid">
       <div>
-        <div class="stream-shell">
-          <div class="stream-toolbar">
-            <div class="stream-title">
-              <strong id="streamTitle">Primary detection camera</strong>
-              <span id="streamEndpointLabel">/api/stream?camera_id=main</span>
+        <div class="dual-feed-grid">
+          <article class="stream-shell camera-feed-card" data-camera-card="car">
+            <div class="stream-toolbar">
+              <div class="stream-title">
+                <strong>Car Camera</strong>
+                <span id="carStreamEndpoint">Waiting for car camera</span>
+              </div>
+              <div class="stream-actions">
+                <span class="status-chip warn" id="carStreamInlineStatus">Waiting</span>
+                <button class="ghost-btn" onclick="openCameraFullscreen('car')" aria-label="Open car camera fullscreen"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-maximize"></use></svg>Fullscreen</button>
+                <button class="retry-btn" onclick="retryCameraStream('car')" aria-label="Retry car camera stream"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"></use></svg>Retry</button>
+              </div>
             </div>
-            <div class="stream-actions">
-              <select id="streamCameraSelect" class="ghost-btn" onchange="setStreamCamera(this.value)" aria-label="Select camera feed" style="display:none; min-width:150px"></select>
-              <span class="status-chip warn" id="streamInlineStatus">Connecting</span>
-              <button class="ghost-btn" onclick="openFullscreen()" aria-label="Open camera feed fullscreen"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-maximize"></use></svg>Fullscreen</button>
-              <button class="retry-btn" onclick="retryStream()" aria-label="Retry camera stream"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"></use></svg>Retry</button>
+            <div class="stream-wrap" id="carStreamWrap">
+              <img id="carStreamImg" class="mjpeg" alt="Car parking live feed" onerror="onCameraStreamError(this, 'car')" onload="onCameraStreamLoad(this, 'car')" style="display:none" />
+              <div class="stream-placeholder" id="carStreamPlaceholder">
+                <div class="camera-mark">CAR</div>
+                <div id="carStreamStatusMsg">Waiting for car camera data...</div>
+                <div class="mono" style="font-size:11px;color:var(--muted)">Start the car detector to show this feed.</div>
+              </div>
+              <div class="stream-badge" id="carStreamBadge" style="display:none"><div class="bdot"></div> LIVE</div>
             </div>
-          </div>
+            <div class="camera-occupancy-strip">
+              <div class="camera-occupancy-item">Occupied<strong id="carOcc">--</strong></div>
+              <div class="camera-occupancy-item">Free<strong id="carFree">--</strong></div>
+              <div class="camera-occupancy-item">Capacity<strong id="carTotal">--</strong></div>
+              <div class="camera-occupancy-item">Rate<strong id="carPct">--</strong></div>
+            </div>
+          </article>
 
-          <div class="stream-wrap" id="streamWrap">
-            <img
-              id="streamImg"
-              class="mjpeg"
-              src="/api/stream?camera_id=main"
-              alt="Live parking feed"
-              onerror="onStreamError(this)"
-              onload="onStreamLoad(this)"
-            />
-            <div class="stream-placeholder" id="streamPlaceholder" style="display:none">
-              <div class="camera-mark">CAM</div>
-              <div id="streamStatusMsg">Connecting to /api/stream?camera_id=main...</div>
-              <div class="mono" style="font-size:11px;color:var(--muted)">Start detector.py if the feed is offline.</div>
+          <article class="stream-shell camera-feed-card" data-camera-card="motorcycle">
+            <div class="stream-toolbar">
+              <div class="stream-title">
+                <strong>Motorcycle Camera</strong>
+                <span id="motorcycleStreamEndpoint">Waiting for motorcycle camera</span>
+              </div>
+              <div class="stream-actions">
+                <span class="status-chip warn" id="motorcycleStreamInlineStatus">Waiting</span>
+                <button class="ghost-btn" onclick="openCameraFullscreen('motorcycle')" aria-label="Open motorcycle camera fullscreen"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-maximize"></use></svg>Fullscreen</button>
+                <button class="retry-btn" onclick="retryCameraStream('motorcycle')" aria-label="Retry motorcycle camera stream"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"></use></svg>Retry</button>
+              </div>
             </div>
-            <div class="stream-badge" id="streamBadge" style="display:none">
-              <div class="bdot"></div> LIVE
+            <div class="stream-wrap" id="motorcycleStreamWrap">
+              <img id="motorcycleStreamImg" class="mjpeg" alt="Motorcycle parking live feed" onerror="onCameraStreamError(this, 'motorcycle')" onload="onCameraStreamLoad(this, 'motorcycle')" style="display:none" />
+              <div class="stream-placeholder" id="motorcycleStreamPlaceholder">
+                <div class="camera-mark">MOTO</div>
+                <div id="motorcycleStreamStatusMsg">Waiting for motorcycle camera data...</div>
+                <div class="mono" style="font-size:11px;color:var(--muted)">Start the motorcycle detector to show this feed.</div>
+              </div>
+              <div class="stream-badge" id="motorcycleStreamBadge" style="display:none"><div class="bdot"></div> LIVE</div>
             </div>
-          </div>
+            <div class="camera-occupancy-strip">
+              <div class="camera-occupancy-item">Occupied<strong id="motorcycleOcc">--</strong></div>
+              <div class="camera-occupancy-item">Free<strong id="motorcycleFree">--</strong></div>
+              <div class="camera-occupancy-item">Capacity<strong id="motorcycleTotal">--</strong></div>
+              <div class="camera-occupancy-item">Rate<strong id="motorcyclePct">--</strong></div>
+            </div>
+          </article>
         </div>
 
-        <div class="stream-debug">
-          <span>Source: <strong id="streamSourceLabel">/api/stream?camera_id=main</strong></span>
-          <span id="snapStatus" style="color:var(--muted)">connecting...</span>
-          <span id="streamLastSeen" class="mono">Last seen --</span>
-        </div>
-
-        <section class="panel-card" style="margin-top:14px">
+        <section class="panel-card combined-camera-panel">
           <div class="panel-header">
-            <span class="panel-title">Camera Health</span>
-            <span class="panel-note mono" id="streamPortInfo"></span>
+            <span class="panel-title">Combined Occupancy</span>
+            <span class="status-chip warn" id="combinedCameraStatus">Waiting</span>
           </div>
-          <div class="metric-row">
-            <div class="camera-metric"><span>FPS</span><strong id="camFps">--</strong></div>
-            <div class="camera-metric"><span>Zones</span><strong id="camZones">--</strong></div>
-            <div class="camera-metric"><span>Occupied</span><strong id="camOcc">--</strong></div>
-            <div class="camera-metric"><span>Cars</span><strong id="camCars">--</strong></div>
-            <div class="camera-metric"><span>Motorcycles</span><strong id="camMotos">--</strong></div>
-            <div class="camera-metric"><span>Status</span><strong id="camStatus" style="color:var(--green)">--</strong></div>
+          <div class="combined-camera-summary">
+            <div class="camera-metric"><span>Free Spaces</span><strong id="combinedFree">--</strong></div>
+            <div class="camera-metric"><span>Occupied</span><strong id="combinedOcc">--</strong></div>
+            <div class="camera-metric"><span>Total Capacity</span><strong id="combinedTotal">--</strong></div>
+            <div class="camera-metric"><span>Occupancy Rate</span><strong id="combinedPct">--</strong></div>
           </div>
+          <div class="panel-note" id="combinedCameraNote" style="margin-top:10px">Totals combine fresh data from active car and motorcycle cameras.</div>
         </section>
 
         <section class="panel-card" style="margin-top:14px">
@@ -2213,7 +2283,7 @@
       </div>
 
       <aside class="zone-panel">
-        <div class="zone-title">Zone Status</div>
+        <div class="zone-title">Combined Zone Status</div>
         <div class="zone-summary">
           <div class="zone-stat">
             <span>Free</span>
@@ -3514,6 +3584,125 @@ function liveStatusText(stats) {
   return `The parking lot is currently ${load}. ${free} space${free === 1 ? ' is' : 's are'} available out of ${total} total. ${occupied} vehicle${occupied === 1 ? ' is' : 's are'} parked right now.`;
 }
 
+const CAMERA_CARD_CONFIG = {
+  car: {
+    ids: ['car', 'main'],
+    label: 'Car Camera',
+    noun: 'car',
+  },
+  motorcycle: {
+    ids: ['motorcycle', 'moto'],
+    label: 'Motorcycle Camera',
+    noun: 'motorcycle',
+  },
+};
+
+const _cameraStreamState = {
+  car: { cameraId: '', endpoint: '', retries: 0, timer: null, error: false },
+  motorcycle: { cameraId: '', endpoint: '', retries: 0, timer: null, error: false },
+};
+
+function cameraForCard(cameras, cardKey) {
+  const config = CAMERA_CARD_CONFIG[cardKey];
+  const source = cameras || {};
+  for (const id of config.ids) {
+    if (source[id]) return { id, data: source[id] };
+  }
+  const byRole = Object.entries(source).find(([, info]) =>
+    String(info?.camera_role || '').toLowerCase() === config.noun
+  );
+  return byRole ? { id: byRole[0], data: byRole[1] } : null;
+}
+
+function cameraCardElementId(cardKey, suffix) {
+  return cardKey + 'Stream' + suffix;
+}
+
+function updateCameraCard(cardKey, cameras) {
+  const match = cameraForCard(cameras, cardKey);
+  const state = _cameraStreamState[cardKey];
+  const config = CAMERA_CARD_CONFIG[cardKey];
+  const img = document.getElementById(cameraCardElementId(cardKey, 'Img'));
+  const placeholder = document.getElementById(cameraCardElementId(cardKey, 'Placeholder'));
+  const badge = document.getElementById(cameraCardElementId(cardKey, 'Badge'));
+  const inline = document.getElementById(cameraCardElementId(cardKey, 'InlineStatus'));
+  const endpointLabel = document.getElementById(cameraCardElementId(cardKey, 'Endpoint'));
+  const statusMsg = document.getElementById(cameraCardElementId(cardKey, 'StatusMsg'));
+
+  if (!match) {
+    state.cameraId = '';
+    state.endpoint = '';
+    state.retries = 0;
+    state.error = false;
+    if (state.timer) { clearTimeout(state.timer); state.timer = null; }
+    if (img) {
+      img.removeAttribute('src');
+      img.dataset.endpoint = '';
+      img.style.display = 'none';
+    }
+    if (placeholder) placeholder.style.display = 'flex';
+    if (badge) badge.style.display = 'none';
+    if (inline) { inline.textContent = 'Waiting'; inline.className = 'status-chip warn'; }
+    if (endpointLabel) endpointLabel.textContent = `Waiting for ${config.noun} camera`;
+    if (statusMsg) statusMsg.textContent = `Waiting for ${config.noun} camera data...`;
+    for (const suffix of ['Occ', 'Free', 'Total', 'Pct']) setText(cardKey + suffix, '--');
+    return;
+  }
+
+  const endpoint = '/api/stream?camera_id=' + encodeURIComponent(match.id);
+  const cameraChanged = state.cameraId !== match.id || state.endpoint !== endpoint;
+  if (cameraChanged) {
+    state.cameraId = match.id;
+    state.endpoint = endpoint;
+    state.retries = 0;
+    state.error = false;
+    if (state.timer) { clearTimeout(state.timer); state.timer = null; }
+    if (img) {
+      img.dataset.endpoint = endpoint;
+      img.src = endpoint;
+      img.style.display = 'block';
+    }
+    if (placeholder) placeholder.style.display = 'flex';
+    if (badge) badge.style.display = 'none';
+  }
+
+  const data = match.data || {};
+  const total = Number(data.total ?? 0);
+  const occupied = Number(data.occupied ?? 0);
+  const free = Number(data.free ?? Math.max(0, total - occupied));
+  const pct = clampPct(data.occupancy_pct ?? (total ? occupied / total * 100 : 0));
+  setText(cardKey + 'Occ', total ? occupied : '--');
+  setText(cardKey + 'Free', total ? free : '--');
+  setText(cardKey + 'Total', total || '--');
+  setText(cardKey + 'Pct', total ? Math.round(pct) + '%' : '--');
+  if (endpointLabel) endpointLabel.textContent = endpoint;
+  if (statusMsg && !state.error) statusMsg.textContent = `Connecting to ${endpoint}...`;
+  if (inline && !state.error) { inline.textContent = 'Connecting'; inline.className = 'status-chip warn'; }
+}
+
+function updateDualCameraFeeds(cameras, aggregate) {
+  updateCameraCard('car', cameras);
+  updateCameraCard('motorcycle', cameras);
+
+  const activeCount = Object.keys(cameras || {}).length;
+  const total = Number(aggregate?.total ?? 0);
+  const occupied = Number(aggregate?.occupied ?? 0);
+  const free = Number(aggregate?.free ?? Math.max(0, total - occupied));
+  const pct = clampPct(aggregate?.occupancy_pct ?? (total ? occupied / total * 100 : 0));
+  setText('combinedFree', total ? free : '--');
+  setText('combinedOcc', total ? occupied : '--');
+  setText('combinedTotal', total || '--');
+  setText('combinedPct', total ? Math.round(pct) + '%' : '--');
+  setText('combinedCameraNote', activeCount
+    ? `${activeCount} camera${activeCount === 1 ? '' : 's'} reporting. Totals combine fresh car and motorcycle data.`
+    : 'Waiting for car and motorcycle camera data.');
+  const combinedStatus = document.getElementById('combinedCameraStatus');
+  if (combinedStatus) {
+    combinedStatus.textContent = activeCount ? `${activeCount} camera${activeCount === 1 ? '' : 's'} live` : 'Waiting';
+    combinedStatus.className = activeCount ? 'status-chip good' : 'status-chip warn';
+  }
+}
+
 let _statsSeq = 0;
 async function fetchStats() {
   // Guard against a slow response landing after a newer one already rendered
@@ -3525,7 +3714,7 @@ async function fetchStats() {
     if (!r.ok) throw new Error(r.status);
     const d = await r.json();
     if (seq !== _statsSeq) return;
-    updateCameraSelector(d.cameras || {});
+    updateDualCameraFeeds(d.cameras || {}, d);
 
     const total = d.total ?? d.total_slots ?? 0;
     const occupied = d.occupied ?? d.occupied_slots ?? 0;
@@ -3561,16 +3750,9 @@ async function fetchStats() {
     }
 
     if (d.fps != null) {
-      document.getElementById('fpsLabel').textContent = d.fps + ' fps';
-      document.getElementById('camFps').textContent = d.fps + ' fps';
+      setText('fpsLabel', d.fps + ' fps');
     }
-    document.getElementById('camZones').textContent = total;
-    document.getElementById('camOcc').textContent = occupied + ' / ' + total;
-    setText('camCars', carCount);
-    setText('camMotos', motoCount);
     const detectorOnline = Boolean(d.timestamp) || Number(d.fps) > 0 || total > 0;
-    document.getElementById('camStatus').textContent = !detectorOnline ? 'WAITING' : d.lot_full ? 'FULL' : 'OK';
-    document.getElementById('camStatus').style.color = !detectorOnline ? 'var(--orange)' : d.lot_full ? 'var(--red)' : 'var(--green)';
 
     renderZones(d.zones || {}, total, occupied);
     if (isPanelActive('insights')) {
@@ -4665,6 +4847,61 @@ let _selectedCameraId = 'main';
 function streamEndpoint(withCacheBust = false) {
   const endpoint = '/api/stream?camera_id=' + encodeURIComponent(_selectedCameraId);
   return withCacheBust ? endpoint + '&t=' + Date.now() : endpoint;
+}
+
+function onCameraStreamLoad(img, cardKey) {
+  const state = _cameraStreamState[cardKey];
+  if (!state) return;
+  state.retries = 0;
+  state.error = false;
+  if (state.timer) { clearTimeout(state.timer); state.timer = null; }
+  const placeholder = document.getElementById(cameraCardElementId(cardKey, 'Placeholder'));
+  const badge = document.getElementById(cameraCardElementId(cardKey, 'Badge'));
+  const inline = document.getElementById(cameraCardElementId(cardKey, 'InlineStatus'));
+  if (placeholder) placeholder.style.display = 'none';
+  if (badge) badge.style.display = 'flex';
+  if (inline) { inline.textContent = 'Live'; inline.className = 'status-chip good'; }
+}
+
+function onCameraStreamError(img, cardKey) {
+  const state = _cameraStreamState[cardKey];
+  if (!state || !state.cameraId) return;
+  state.error = true;
+  const placeholder = document.getElementById(cameraCardElementId(cardKey, 'Placeholder'));
+  const badge = document.getElementById(cameraCardElementId(cardKey, 'Badge'));
+  const inline = document.getElementById(cameraCardElementId(cardKey, 'InlineStatus'));
+  const statusMsg = document.getElementById(cameraCardElementId(cardKey, 'StatusMsg'));
+  if (placeholder) placeholder.style.display = 'flex';
+  if (badge) badge.style.display = 'none';
+  if (inline) { inline.textContent = 'Stream offline'; inline.className = 'status-chip bad'; }
+  if (statusMsg) statusMsg.textContent = 'Camera data is available, but the video stream is offline.';
+  state.retries += 1;
+  if (!state.timer) {
+    state.timer = setTimeout(() => {
+      state.timer = null;
+      const endpoint = state.endpoint;
+      if (endpoint && img.dataset.endpoint === endpoint) {
+        img.src = endpoint + '&t=' + Date.now();
+      }
+    }, Math.min(state.retries * 3, 15) * 1000);
+  }
+}
+
+function retryCameraStream(cardKey) {
+  const state = _cameraStreamState[cardKey];
+  const img = document.getElementById(cameraCardElementId(cardKey, 'Img'));
+  const inline = document.getElementById(cameraCardElementId(cardKey, 'InlineStatus'));
+  if (!state || !state.endpoint || !img) return;
+  if (state.timer) { clearTimeout(state.timer); state.timer = null; }
+  state.retries = 0;
+  state.error = false;
+  if (inline) { inline.textContent = 'Retrying'; inline.className = 'status-chip warn'; }
+  img.src = state.endpoint + '&t=' + Date.now();
+}
+
+function openCameraFullscreen(cardKey) {
+  const wrap = document.getElementById(cardKey + 'StreamWrap');
+  if (wrap && wrap.requestFullscreen) wrap.requestFullscreen().catch(() => {});
 }
 
 function updateCameraSelector(cameras) {

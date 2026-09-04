@@ -2609,12 +2609,7 @@ def _check_discount_id_abuse(discount_type: str, id_number: str) -> None:
 
 
 def _current_payment_regular_price(vehicle_type="car"):
-    with state_lock:
-        snapshot = dict(state)
-    total = int(snapshot.get("total") or _active_slot_capacity(LOT_CAPACITY))
-    occupied = int(snapshot.get("occupied") or 0)
-    timestamp = snapshot.get("timestamp") or ""
-    vehicles = occupied if total > 0 and timestamp else 0
+    vehicles, total = _pricing_occupancy_inputs()
     return float(_dynamic_price_formula(vehicles, total, vehicle_type=vehicle_type)["recommended_price_php"])
 
 
@@ -2951,7 +2946,7 @@ def _record_parking_payment(payload, verified_by_user_id=None, external_referenc
     regular_price = _parse_price(
         payload.regular_price_php
         if payload.regular_price_php is not None
-        else _regular_price_for_duration(vehicle_type, duration_type)
+        else _effective_price_for_duration(vehicle_type, duration_type)
     )
     discount_id_number = (getattr(payload, "discount_id_number", None) or "").strip()[:64] or None
     discount_type, discount_rate = _discount_rate_for_type(payload.discount_type, discount_id_number)
@@ -3099,6 +3094,10 @@ def api_driver_summary(_auth=Depends(require_user)):
         occupancy_pct = None
 
     price = _driver_price_summary(occupied if camera_online else None, total)
+    duration_pricing = _effective_duration_pricing(
+        occupied if camera_online else None,
+        total,
+    )
     status_text = "Live parking availability" if camera_online else "Waiting for camera update"
     if free == 0 and camera_online:
         status_text = "Parking area is currently full"
@@ -3114,7 +3113,13 @@ def api_driver_summary(_auth=Depends(require_user)):
         "last_update": timestamp,
         "status_text": status_text,
         "generated_at_ph": datetime.now(PH_TZ).strftime("%Y-%m-%d %H:%M:%S"),
-        "duration_pricing": _duration_pricing_settings(),
+        # The driver receives the same demand-adjusted prices that the
+        # checkout endpoint computes. The base rates remain available inside
+        # this object for transparency and support screens.
+        "duration_pricing": duration_pricing,
+        "pricing_mode": duration_pricing.get("pricing_mode", "dynamic"),
+        "demand_pricing_enabled": duration_pricing.get("demand_pricing_enabled", False),
+        "pricing_context": duration_pricing.get("pricing_context"),
         **price,
     }
 
@@ -3461,7 +3466,11 @@ def gcash_create_checkout(
 
     vehicle_type = _normalize_vehicle_type(payload.vehicle_type, default="car")
     duration_type = _normalize_duration_type(payload.duration_type, default="daily")
-    regular_price = _regular_price_for_duration(vehicle_type, duration_type)
+    # Never trust the amount sent by a browser or mobile client. Recalculate
+    # the active demand price on the server and store that locked quote with
+    # the checkout, so the amount displayed and the amount charged agree.
+    duration_pricing = _effective_duration_pricing()
+    regular_price = float(duration_pricing[f"{duration_type}_rate_php_{vehicle_type}"])
     discount_id_number = (payload.discount_id_number or "").strip()[:64] or None
     discount_type, discount_rate = _discount_rate_for_type(payload.discount_type, discount_id_number)
     # Checked here, before PayMongo charges the customer — a GCash checkout is
@@ -3532,6 +3541,10 @@ def gcash_create_checkout(
         "duration_type": duration_type,
         "discount_type": discount_type,
         "discount_amount_php": discount_amount,
+        "regular_price_php": regular_price,
+        "pricing_mode": duration_pricing.get("pricing_mode", "dynamic"),
+        "demand_pricing_enabled": duration_pricing.get("demand_pricing_enabled", False),
+        "pricing_context": duration_pricing.get("pricing_context"),
     }
 
 
@@ -4243,12 +4256,10 @@ def _discount_settings():
         "pwd_senior_discount_pct": round(PWD_SENIOR_DISCOUNT_RATE * 100, 1),
     }
 
-# Flat daily/weekly/monthly parking rates. This lot doesn't sell hourly
-# parking at all — payments are always one of these three plans. (The
-# occupancy-based dynamic/manual hourly formula elsewhere in this file still
-# runs for insights, forecasting, and the live rate ticker — it's just not a
-# duration a driver can pay for.) Same durable admin_settings-backed pattern
-# as pricing/capacity.
+# Daily/weekly/monthly parking plans use these configured base rates. When
+# manual pricing is off, _effective_duration_pricing applies the same
+# occupancy/day demand multiplier used by the live rate formula to these plans.
+# Same durable admin_settings-backed pattern as pricing/capacity.
 _DEFAULT_DAILY_RATE_CAR = FLAT_RATE_CAR
 _DEFAULT_DAILY_RATE_MOTORCYCLE = FLAT_RATE_MOTORCYCLE
 _DEFAULT_WEEKLY_RATE_CAR = 800.0
@@ -4289,6 +4300,103 @@ def _regular_price_for_duration(vehicle_type="car", duration_type="daily"):
     rates = _duration_pricing_settings()
     key = f"{dt}_rate_php_{vt}"
     return float(rates[key])
+
+
+def _pricing_occupancy_inputs(vehicles_hour=None, lot_capacity=None):
+    """Return the occupancy inputs used for a customer-facing price.
+
+    A live detector reading is preferred.  When the camera is offline, the
+    latest stored detector reading is used instead of silently disabling the
+    pricing formula.  A zero reading is the safe fallback for a new lot with
+    no detector history yet.
+    """
+    capacity = max(1, int(lot_capacity or _active_slot_capacity(LOT_CAPACITY)))
+    if vehicles_hour is not None:
+        return max(0.0, float(vehicles_hour or 0.0)), capacity
+
+    try:
+        with state_lock:
+            _refresh_aggregated_state_locked()
+            snapshot = dict(state)
+        live_total = int(snapshot.get("total") or 0)
+        if live_total > 0 and snapshot.get("timestamp"):
+            return max(0.0, float(snapshot.get("occupied") or 0.0)), live_total
+    except Exception as exc:
+        print(f"[pricing] live occupancy fallback: {exc}")
+
+    try:
+        history = _db_history()
+        if not history.empty and "vehicles_hour" in history.columns:
+            latest = history["vehicles_hour"].iloc[-1]
+            return max(0.0, float(latest or 0.0)), capacity
+    except Exception as exc:
+        print(f"[pricing] history occupancy fallback: {exc}")
+
+    return 0.0, capacity
+
+
+def _effective_duration_pricing(vehicles_hour=None, lot_capacity=None, when=None):
+    """Build the prices shown and charged for daily, weekly, and monthly plans.
+
+    The existing duration rates remain the configured base prices.  When
+    manual pricing is off, the same demand and day multipliers used by the
+    live rate ticker are applied to every plan.  Daily pricing always starts
+    from the approved normal rates (PHP 50 car / PHP 25 motorcycle), even if
+    an old database still contains the former 150/80 daily defaults.
+    """
+    base_rates = _duration_pricing_settings()
+    if _pricing_settings()["mode"] == "manual":
+        return {
+            **base_rates,
+            "pricing_mode": "manual",
+            "demand_pricing_enabled": False,
+            "base_duration_pricing": dict(base_rates),
+        }
+
+    vehicles, capacity = _pricing_occupancy_inputs(vehicles_hour, lot_capacity)
+    reference = _dynamic_price_formula(vehicles, capacity, when=when, vehicle_type="car")
+    context = reference.get("pricing_context", {})
+    occupancy_multiplier = float(context.get("occupancy_multiplier") or 1.0)
+    day_multiplier = float(context.get("day_multiplier") or 1.0)
+    combined_multiplier = occupancy_multiplier * day_multiplier
+
+    effective = dict(base_rates)
+    for vehicle_type in ("car", "motorcycle"):
+        for duration_type in ("daily", "weekly", "monthly"):
+            key = f"{duration_type}_rate_php_{vehicle_type}"
+            # Daily normal rates are the public parking rates. Weekly/monthly
+            # plans keep their configured base and receive the same demand
+            # adjustment.
+            base = (
+                _current_flat_rate(vehicle_type)
+                if duration_type == "daily"
+                else float(base_rates[key])
+            )
+            effective[key] = round(base * combined_multiplier, 2)
+
+    effective.update({
+        "pricing_mode": "dynamic",
+        "demand_pricing_enabled": True,
+        "base_duration_pricing": dict(base_rates),
+        "pricing_context": {
+            "vehicles_hour": round(vehicles, 2),
+            "lot_capacity": capacity,
+            "occupancy_pct": context.get("occupancy_pct", 0.0),
+            "occupancy_multiplier": occupancy_multiplier,
+            "day_multiplier": day_multiplier,
+            "day_rule": context.get("day_rule", "Weekday"),
+            "combined_multiplier": round(combined_multiplier, 4),
+        },
+        "pricing_note": "Demand pricing is based on current occupancy and day type.",
+    })
+    return effective
+
+
+def _effective_price_for_duration(vehicle_type="car", duration_type="daily", vehicles_hour=None, lot_capacity=None, when=None):
+    vt = _normalize_vehicle_type(vehicle_type)
+    dt = _normalize_duration_type(duration_type)
+    rates = _effective_duration_pricing(vehicles_hour, lot_capacity, when)
+    return float(rates[f"{dt}_rate_php_{vt}"])
 
 # Default lot layout: 10 car slots + 20 motorcycle slots = 30 total, per the
 # panel's approved system requirements ("Total Max Count" / "identify how

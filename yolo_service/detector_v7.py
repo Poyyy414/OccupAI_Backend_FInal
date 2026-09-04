@@ -54,6 +54,20 @@ def _es(k, d=""):
     raw = os.getenv(k, d) or ""
     return {s.strip().upper() for s in raw.split(",") if s.strip()}
 
+def _fraction_rects(k):
+    """Read camera-specific ignore rectangles as normalized frame coordinates."""
+    rects = []
+    for chunk in (os.getenv(k, "") or "").split(";"):
+        try:
+            x1, y1, x2, y2 = [float(value.strip()) for value in chunk.split(",")]
+        except (TypeError, ValueError):
+            continue
+        x1, x2 = sorted((max(0.0, min(1.0, x1)), max(0.0, min(1.0, x2))))
+        y1, y2 = sorted((max(0.0, min(1.0, y1)), max(0.0, min(1.0, y2))))
+        if x2 > x1 and y2 > y1:
+            rects.append((x1, y1, x2, y2))
+    return rects
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #   CONFIG
@@ -135,6 +149,9 @@ TOY_MAX_F = _ef("TOY_MAX_AREA_FRAC", 0.10)
 TOY_MIN_FILL_RATIO = _ef("TOY_MIN_FILL_RATIO", 0.22)
 TOY_MIN_W = _ei("TOY_MIN_W", 12)
 TOY_MIN_H = _ei("TOY_MIN_H", 12)
+# Fixed non-vehicle objects visible in the camera, such as plants. Values are
+# normalized frame rectangles and affect only color-based toy detections.
+TOY_IGNORE_RECTS = _fraction_rects("TOY_IGNORE_RECTS")
 # Blobs with contour area (as a fraction of frame area) below this are
 # classified "motorcycle", at/above it "car". Toy motorcycles need to be
 # visibly smaller than toy cars on camera for this to work — point the
@@ -298,6 +315,21 @@ def _center_in(box, zone):
     cx=(box[0]+box[2])/2; cy=(box[1]+box[3])/2
     return zone[0] <= cx <= zone[2] and zone[1] <= cy <= zone[3]
 
+def _box_in_toy_ignore_rect(box, frame_w, frame_h):
+    """Ignore configured fixed background objects from color-based detection."""
+    box_area = _area(box)
+    if box_area <= 0:
+        return False
+    for rx1, ry1, rx2, ry2 in TOY_IGNORE_RECTS:
+        rect = (
+            int(frame_w * rx1), int(frame_h * ry1),
+            int(frame_w * rx2), int(frame_h * ry2),
+        )
+        overlap = _inter_area(box, rect)
+        if _center_in(box, rect) or overlap / box_area >= 0.35:
+            return True
+    return False
+
 def _assignment_score(zone, box):
     inter = _inter_area(zone, box)
     if inter <= 0:
@@ -397,6 +429,10 @@ def find_toy_boxes(frame):
         if not(fa*TOY_MIN_F<ca<fa*TOY_MAX_F): continue
         x,y,bw,bh=cv2.boundingRect(cnt)
         if bw<TOY_MIN_W or bh<TOY_MIN_H:
+            continue
+        if _box_in_toy_ignore_rect(
+            [x, y, x + bw, y + bh], w, h
+        ):
             continue
         fill=np.count_nonzero(mask[y:y+bh,x:x+bw])/max(1,bw*bh)
         if fill<TOY_MIN_FILL_RATIO:
