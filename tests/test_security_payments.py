@@ -112,3 +112,33 @@ def test_html_response_gets_nonce_csp_and_security_headers():
     assert expected_handler_hash in event_policy
     assert response.headers['x-content-type-options'] == 'nosniff'
     assert response.headers['x-frame-options'] == 'DENY'
+
+
+def test_password_reset_pages_and_logo_are_served():
+    with TestClient(m.app) as client:
+        forgot = client.get('/forgot-password')
+        reset = client.get('/reset-password')
+        logo = client.get('/static/occupai_logo.png')
+
+    assert forgot.status_code == 200
+    assert 'Forgot password?' in forgot.text
+    assert '__OCCUPAI_CSP_NONCE__' not in forgot.text
+    assert reset.status_code == 200
+    assert 'Choose a new password' in reset.text
+    assert logo.status_code == 200
+    assert logo.headers['content-type'].startswith('image/png')
+
+
+def test_forgot_password_response_does_not_enumerate_accounts(monkeypatch):
+    monkeypatch.setattr(m, '_rate_limit', lambda *args, **kwargs: None)
+    monkeypatch.setattr(m, '_issue_password_reset_token', lambda email: None)
+    monkeypatch.setattr(m, '_audit_auth_event', lambda *args, **kwargs: None)
+
+    with TestClient(m.app) as client:
+        response = client.post('/auth/forgot-password', json={'email': 'known@example.com'})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        'ok': True,
+        'message': 'If an account exists for that email, a password reset link has been sent.',
+    }

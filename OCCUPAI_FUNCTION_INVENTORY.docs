@@ -1,0 +1,1012 @@
+OCCUPAI FUNCTION INVENTORY
+==========================
+
+Purpose
+-------
+This document lists the user-facing functions available in OccupAI.
+It is organized for QA walkthroughs, demonstrations, and teacher review.
+
+Platforms covered
+-----------------
+1. Admin Web   - template/dashboard.html
+2. Driver Web  - template/driver.html
+3. Admin App   - Flutter DashboardScreen using role=admin
+4. Driver App  - Flutter DashboardScreen using role=driver
+
+The technical reference sections identify implementation functions. Appendix A gives
+teacher-ready summaries using the simple sample-style format.
+Function names are included where the source has a named implementation.
+
+
+1. AUTHENTICATION AND ACCOUNT ACCESS
+====================================
+
+These functions are shared by web roles and mobile roles.
+
+| Function / workflow | Short description | Source |
+|---|---|---|
+| Sign in | Authenticates a user and starts the correct role dashboard. | Web login / LoginScreen |
+| Role redirect | Sends administrators or drivers to their assigned dashboard. | login.html, register.html |
+| Sign out | Revokes the session and returns the user to login. | Web signOut / DashboardScreen._logout |
+| Registration | Creates a driver account with validated personal information. | register.html / RegisterScreen |
+| Password validation | Requires eight characters, letters, and numbers before submission. | backend/models.py, register.dart |
+| Forgot password | Requests a secure reset link without revealing account existence. | forgot-password pages / ForgotPasswordScreen |
+| Reset password | Updates passwords using single-use, expiring reset tokens. | reset-password page / backend main.py |
+| Session persistence | Stores mobile tokens securely and restores authenticated sessions. | ApiService secure storage |
+| Session expiry handling | Clears invalid sessions and redirects users to login. | DashboardScreen, ApiService |
+
+
+2. ADMIN WEB FUNCTIONS
+======================
+
+Source: template/dashboard.html. The admin web contains seven dashboard modules.
+
+2.1 Navigation, access, and interface
+--------------------------------------
+
+| Function | Short description |
+|---|---|
+| switchPanel | Switches between the seven admin dashboard modules. |
+| signOut | Clears the web session and redirects to login. |
+| authHeaders | Builds authenticated headers for backend requests. |
+| getStoredUser | Reads stored administrator display information. |
+| fetchWithRetry | Retries failed requests using delayed backoff. |
+| staggerCalls | Spaces network calls to reduce startup request bursts. |
+| setSkeleton | Shows or hides loading placeholders. |
+| setConnected | Updates the backend connection indicator. |
+| applyTheme | Applies the selected dashboard theme. |
+| initTheme | Restores the saved theme preference. |
+| toggleTheme | Toggles the gray or dark interface theme. |
+| isPanelActive | Checks whether an admin module is currently visible. |
+
+2.2 Overview and live operations
+--------------------------------
+
+| Function | Short description |
+|---|---|
+| fetchStats | Retrieves current occupancy and camera statistics. |
+| fetchHistory | Retrieves recent occupancy activity records. |
+| renderHistory | Displays recent occupancy activity rows. |
+| updateTrendChart | Draws the recent occupancy trend chart. |
+| renderStatusVisual | Displays capacity, occupancy, and connection status. |
+| renderTrendVisual | Displays historical occupancy movement visually. |
+| renderForecastVisual | Displays near-term occupancy forecast visually. |
+| renderZones | Displays occupied and available parking zones. |
+| liveStatusText | Creates a readable current parking status label. |
+| clampPct | Restricts percentages to safe display limits. |
+| pctClass | Selects visual styling for occupancy percentages. |
+| hourLabel24 | Formats a twenty-four-hour label for charts. |
+
+2.3 Revenue and payment management
+-----------------------------------
+
+| Function | Short description |
+|---|---|
+| fetchRevenueDashboard | Loads revenue totals, trends, and payment information. |
+| renderRevenueCharts | Draws revenue trends and payment breakdown charts. |
+| fetchGcashIssues | Loads unresolved GCash reconciliation issues. |
+| toggleGcashAlertDetails | Expands or collapses GCash issue details. |
+| fetchTransactionLogs | Loads paginated recent payment transactions. |
+| txLogsPrevPage | Moves to the previous payment-log page. |
+| txLogsNextPage | Moves to the next payment-log page. |
+| suggestedPaymentAmount | Calculates the selected vehicle payment suggestion. |
+| onPaymentVehicleTypeChange | Recalculates payment fields after vehicle changes. |
+| onPaymentDiscountChange | Updates discount requirements and payment amount. |
+| recordPayment | Saves an administrator-verified parking payment. |
+| formatPhp | Formats amounts using Philippine peso notation. |
+| formatCompactPhp | Formats large peso values compactly. |
+
+The payment form supports vehicle type, duration, discount, method, amount,
+discount identification, notes, and backend payment recording.
+
+2.4 Live camera feed
+--------------------
+
+| Function | Short description |
+|---|---|
+| streamEndpoint | Builds the selected authenticated camera stream URL. |
+| updateCameraSelector | Populates available car and motorcycle cameras. |
+| setStreamCamera | Changes the active camera point of view. |
+| onStreamLoad | Marks the selected camera stream as available. |
+| onStreamError | Shows an unavailable camera stream message. |
+| retryStream | Attempts to reload the failed camera feed. |
+| openFullscreen | Opens the selected camera feed fullscreen. |
+
+The live feed supports the diorama car and motorcycle camera POVs.
+
+2.5 AI Insights
+---------------
+
+| Function | Short description |
+|---|---|
+| fetchInsights | Loads AI-generated operational insights and recommendations. |
+| fetchHeatmap | Loads occupancy heatmap information for analysis. |
+| fetchMlConfidence | Loads model confidence and evaluation information. |
+| renderInsightBars | Draws insight metric comparison bars. |
+| renderMlConfidence | Displays model confidence and accuracy details. |
+| renderRecommendationCards | Displays recommended operational actions. |
+| forceRefreshInsights | Requests a fresh AI insights calculation. |
+| cleanText | Normalizes values before displaying insight text. |
+| extractRecommendedPrice | Extracts a recommended price from insight text. |
+| renderPricingVisual | Displays dynamic pricing factors and reasoning. |
+
+2.6 Predictions
+---------------
+
+| Function | Short description |
+|---|---|
+| fetchPredictions | Loads the prediction summary from backend models. |
+| fetchFullPredictions | Loads hourly, daily, and revenue predictions. |
+| renderFullPredictions | Displays complete forecast information and metrics. |
+| renderPeakVisual | Displays the predicted peak occupancy hour. |
+| renderForecastVisual | Displays forecast values across the selected period. |
+| updateTrendChart | Updates forecast or historical chart values. |
+
+Displayed prediction content includes hourly occupancy, peak hour, busy days,
+quiet days, weekday revenue, model confidence, and current forecast timestamp.
+
+2.7 Reports
+-----------
+
+| Function | Short description |
+|---|---|
+| switchReportTab | Changes daily, weekly, monthly, or yearly reports. |
+| fetchReports | Loads source-backed report data from the backend. |
+| renderReports | Displays report tables, totals, and summaries. |
+| updateReportKpis | Updates report revenue and payment indicators. |
+| getReportTabRows | Selects rows for the chosen report period. |
+| getReportTabColumns | Selects columns for the chosen report period. |
+| buildWeeklyRows | Aggregates daily records into weekly rows. |
+| buildYearlyRows | Aggregates monthly records into yearly rows. |
+| getReportChartLabel | Creates labels for report chart points. |
+| renderReportChart | Draws the selected report chart. |
+| fetchPredVsActual | Loads predicted-versus-actual report comparisons. |
+| downloadReportCSV | Downloads report information as CSV. |
+| downloadReportPDF | Downloads a formatted report as PDF. |
+| phpFmt | Formats report currency values. |
+
+2.8 Settings and administrative controls
+-----------------------------------------
+
+| Function | Short description |
+|---|---|
+| fetchLayoutMode | Loads the current layout override settings. |
+| setLayoutMode | Applies Normal, Busy, or High layout mode. |
+| toggleLayoutOverride | Enables or disables manual layout override. |
+| setLayoutUi | Updates layout controls and selected mode. |
+| fetchPricingSettings | Loads manual pricing configuration. |
+| setPricingUi | Updates pricing controls and displayed values. |
+| savePricingSettings | Saves manual car and motorcycle pricing. |
+| togglePricingOverride | Enables or disables manual pricing override. |
+| fetchDurationPricingSettings | Loads daily, weekly, and monthly rates. |
+| setDurationPricingUi | Updates duration-rate controls and values. |
+| saveDurationPricingSettings | Saves duration rates for both vehicle types. |
+| fetchCapacitySettings | Loads car and motorcycle capacity settings. |
+| setCapacityUi | Updates parking capacity controls. |
+| saveCapacitySettings | Saves configured car and motorcycle capacities. |
+| fetchDiscountSettings | Loads PWD and senior discount settings. |
+| setDiscountUi | Updates discount switch controls. |
+| toggleDiscountSetting | Changes PWD or senior discount availability. |
+
+2.9 Admin web rendering and safety helpers
+-------------------------------------------
+
+| Function | Short description |
+|---|---|
+| cacheGet | Reads a cached dashboard response. |
+| cacheSet | Stores a dashboard response for temporary fallback. |
+| setText | Writes text without creating unsafe HTML. |
+| escapeHtml | Escapes dynamic values before HTML rendering. |
+| cleanText | Removes invalid or unexpected display text. |
+| _delay | Waits between retry attempts. |
+| formatPhp | Formats ordinary peso amounts. |
+| formatCompactPhp | Formats shortened peso amounts. |
+| buildWeeklyRows | Builds weekly report aggregation data. |
+| buildYearlyRows | Builds yearly report aggregation data. |
+| getReportTabRows | Selects report rows for the active tab. |
+| getReportTabColumns | Selects report columns for the active tab. |
+
+
+3. DRIVER WEB FUNCTIONS
+=======================
+
+Source: template/driver.html. The driver web provides availability, rates,
+discounts, and GCash checkout without administrator controls.
+
+3.1 Driver dashboard and availability
+--------------------------------------
+
+| Function | Short description |
+|---|---|
+| getUser | Reads the current driver session information. |
+| hydrateUser | Displays driver identity and account information. |
+| authHeaders | Builds authenticated driver request headers. |
+| fetchSummary | Loads live availability and parking pricing. |
+| updateSummary | Updates driver availability and pricing cards. |
+| renderSpaceMap | Displays available and occupied spaces visually. |
+| setLiveState | Updates the live connection and lot status. |
+| formatPrice | Formats driver-facing peso rates. |
+| showError | Displays a recoverable driver dashboard error. |
+| signOut | Ends the driver session and returns to login. |
+
+3.2 Vehicle, duration, discount, and payment functions
+-------------------------------------------------------
+
+| Function | Short description |
+|---|---|
+| selectVehicleType | Selects car or motorcycle parking. |
+| updateGcashAmount | Recalculates checkout amount from current selections. |
+| onGcashDurationChange | Recalculates amount after duration changes. |
+| onGcashDiscountChange | Applies the selected discount to checkout. |
+| fetchDiscountAvailability | Loads current PWD and senior eligibility switches. |
+| checkGcash | Checks whether GCash checkout is available. |
+| payWithGcash | Creates and opens a GCash checkout session. |
+| checkout status polling | Confirms payment completion after returning from GCash. |
+
+The driver web displays the approved daily rates: car PHP 50 and motorcycle
+PHP 25, plus configured weekly, monthly, and discount values.
+
+
+4. ADMIN APP FUNCTIONS
+======================
+
+Source: C:\flutter\occupai_thesis_app_flutter\lib\screens\dashboard.dart.
+The Flutter app uses one dashboard shell and displays admin functions when the
+authenticated account has role=admin.
+
+4.1 App startup and navigation
+------------------------------
+
+| Function / implementation | Short description |
+|---|---|
+| Splash session check | Restores a valid session before showing dashboard. |
+| DashboardScreen._initialize | Loads user role and starts dashboard services. |
+| DashboardScreen._fetchAll | Retrieves initial statistics and forecast data. |
+| DashboardScreen._fetchLiveData | Refreshes live occupancy and camera data. |
+| DashboardScreen._fetchForecastData | Refreshes predictions, revenue, and insights. |
+| DashboardScreen._fetchStreamToken | Requests short-lived camera stream authorization. |
+| DashboardScreen._content | Selects the administrator interface by role. |
+| Mobile navigation | Opens Overview, Revenue, Feed, Insights, Predictions, Reports, Settings. |
+| Desktop sidebar | Opens every administrator module on wide screens. |
+| DashboardScreen._logout | Clears mobile session and returns to login. |
+
+4.2 Admin Overview
+------------------
+
+| Function / workflow | Short description |
+|---|---|
+| Live occupancy summary | Shows total, occupied, free, and occupancy percentage. |
+| Camera health summary | Shows camera availability, FPS, and latest updates. |
+| Detection activity | Shows recent occupancy events and status. |
+| Parking zones | Displays per-zone occupied or available status. |
+| Revenue forecast | Displays source-backed forecast revenue information. |
+| GCash reconciliation banner | Shows unresolved payment issues for administrator action. |
+| AI recommendation | Displays current operational recommendation and status. |
+
+4.3 Admin Revenue
+-----------------
+
+| Function / implementation | Short description |
+|---|---|
+| _AdminPaymentFormState._save | Records verified cash or payment transactions. |
+| Vehicle selection | Selects car or motorcycle payment type. |
+| Duration selection | Selects daily, weekly, or monthly payment duration. |
+| Discount selection | Applies enabled PWD or senior discounts. |
+| Payment method selection | Selects cash or supported electronic payment method. |
+| Transaction logs | Displays recent paginated payment records. |
+| Revenue trends | Displays daily, monthly, and payment-method trends. |
+| GCash issue review | Displays payment records requiring reconciliation. |
+
+4.4 Admin Live Feed
+-------------------
+
+| Function / implementation | Short description |
+|---|---|
+| _selectCamera | Selects the car or motorcycle camera POV. |
+| Stream token loading | Authorizes the short-lived camera stream request. |
+| Stream placeholder | Shows offline or unavailable camera state. |
+| Stream retry | Attempts to reload a failed camera stream. |
+| Camera health panel | Displays individual camera connection and detection metrics. |
+| Detection log | Displays recent detector updates and timestamps. |
+| Zone status panel | Displays current zone occupancy information. |
+
+4.5 Admin AI Insights and Predictions
+-------------------------------------
+
+| Function / implementation | Short description |
+|---|---|
+| Insights page | Displays AI status, metrics, and recommendations. |
+| Prediction page | Displays complete twenty-four-hour occupancy forecasts. |
+| Peak-hour card | Displays the highest predicted occupancy period. |
+| Busy-day cards | Displays predicted busiest weekdays. |
+| Quiet-day cards | Displays predicted quietest weekdays. |
+| Weekday revenue forecast | Displays source-backed daily revenue predictions. |
+| Model metrics | Displays model accuracy and comparison metrics. |
+
+4.6 Admin Reports
+-----------------
+
+| Function / implementation | Short description |
+|---|---|
+| _ReportsPageState._refresh | Refreshes report data from the backend. |
+| Daily report | Displays daily revenue and transaction information. |
+| Weekly report | Displays weekly aggregated revenue information. |
+| Monthly report | Displays monthly revenue and discount information. |
+| Yearly report | Displays yearly aggregated revenue information. |
+| Prediction comparison | Compares predicted values with actual results. |
+| Copy CSV | Copies mobile-safe report data as CSV. |
+
+The mobile admin app intentionally provides Copy CSV instead of web PDF
+download, while preserving the same report data and workflow.
+
+4.7 Admin Settings
+------------------
+
+| Function / implementation | Short description |
+|---|---|
+| _SettingsPageState._load | Loads all administrator settings. |
+| _savePricing | Saves manual car and motorcycle rates. |
+| _saveDuration | Saves daily, weekly, and monthly rates. |
+| _saveCapacity | Saves car and motorcycle slot capacities. |
+| _saveDiscounts | Saves PWD and senior discount switches. |
+| _saveLayout | Saves Normal, Busy, or High layout mode. |
+| Pricing override | Enables administrator-controlled manual pricing. |
+| Discount controls | Enables or disables eligible discounts. |
+| Capacity controls | Configures tracked parking capacity. |
+| Layout controls | Configures parking-layout override behavior. |
+
+
+5. DRIVER APP FUNCTIONS
+=======================
+
+Source: C:\flutter\occupai_thesis_app_flutter\lib\screens and services.
+The same Flutter dashboard displays driver functions when role=driver.
+
+5.1 Onboarding and authentication
+----------------------------------
+
+| Function / implementation | Short description |
+|---|---|
+| Onboarding pages | Explains availability, payment, and AI capabilities. |
+| OnboardingScreen._next | Advances to the next onboarding page. |
+| OnboardingScreen._finish | Saves completion and opens mobile login. |
+| LoginScreen._login | Authenticates driver credentials with backend. |
+| RegisterScreen._register | Creates a validated driver account. |
+| ForgotPasswordScreen._submit | Requests a secure password reset email. |
+| Password visibility toggle | Shows or hides the entered password. |
+| Session restoration | Opens the dashboard when saved session remains valid. |
+
+5.2 Driver parking dashboard
+-----------------------------
+
+| Function / implementation | Short description |
+|---|---|
+| _DriverParkingPage | Displays the complete driver parking workflow. |
+| Live camera state | Shows whether detector data is currently available. |
+| Availability cards | Shows capacity, occupied, free, and occupancy values. |
+| Camera unavailable state | Shows dashes instead of invented zero values. |
+| _DriverStatsGrid | Displays four live parking KPI cards. |
+| _DriverTipsCard | Displays helpful parking guidance and status tips. |
+| Vehicle rate selection | Selects car or motorcycle parking rates. |
+| Duration selection | Selects daily, weekly, or monthly parking plan. |
+| Discount selection | Selects regular, PWD, or senior pricing. |
+| Dynamic price display | Displays backend-configured active parking rates. |
+
+5.3 Driver GCash checkout
+-------------------------
+
+| Function / implementation | Short description |
+|---|---|
+| _DriverRateCardState._payWithGcash | Creates and opens a GCash checkout. |
+| Discount identification | Collects required PWD or senior identification. |
+| Checkout status | Displays processing, success, or failure state. |
+| Payment history update | Refreshes driver data after successful payment. |
+
+5.4 Driver history
+------------------
+
+| Function / implementation | Short description |
+|---|---|
+| HistoryScreen._fetchHistory | Loads the driver's parking history. |
+| Period filter | Filters history by selected time period. |
+| History refresh | Reloads history records from backend. |
+| Summary cards | Shows sessions count and total spending. |
+| Empty history state | Explains when no parking records exist. |
+| Error retry | Retries history loading after a request failure. |
+| History card | Displays vehicle, duration, discount, slot, and payment. |
+
+5.5 Driver profile
+------------------
+
+| Function / implementation | Short description |
+|---|---|
+| ProfileScreen | Displays driver identity and account status. |
+| Profile statistics | Shows role, active status, and free slots. |
+| ProfileScreen.onLogout | Ends the driver session securely. |
+| OccupAiMark | Displays the shared OccupAI logo and wordmark. |
+
+
+6. MOBILE API INTEGRATION FUNCTIONS
+===================================
+
+Source: C:\flutter\occupai_thesis_app_flutter\lib\services\api_service.dart.
+These methods connect mobile workflows to the FastAPI backend.
+
+| API method | Short description |
+|---|---|
+| register | Sends a new driver registration request. |
+| login | Sends credentials and receives authenticated user data. |
+| logout | Ends the current backend session. |
+| requestPasswordReset | Requests a password reset email. |
+| getStatus | Checks backend health and deployment status. |
+| getStats | Retrieves current parking statistics. |
+| getHistory | Retrieves general occupancy history. |
+| getOccupancy | Retrieves current occupancy information. |
+| getPredictions | Retrieves the prediction summary. |
+| getHourlyByDay | Retrieves hourly and weekday forecast data. |
+| getMlDashboard | Retrieves combined model dashboard data. |
+| predictVehicles | Retrieves vehicle-count predictions. |
+| predictOccupancy | Retrieves occupancy predictions. |
+| predictPrice | Retrieves dynamic price predictions. |
+| predictRevenue | Retrieves revenue predictions. |
+| getDriverSummary | Retrieves driver availability and pricing. |
+| getRevenueDashboard | Retrieves administrator revenue data. |
+| getRecentPayments | Retrieves paginated administrator payments. |
+| getGcashIssues | Retrieves unresolved GCash issues. |
+| recordPayment | Records an administrator payment. |
+| getDriverHistory | Retrieves authenticated driver history. |
+| createGcashCheckout | Creates a PayMongo GCash checkout. |
+| getGcashStatus | Checks GCash availability. |
+| getDiscountSettings | Retrieves discount switches. |
+| setDiscountSettings | Saves discount switches. |
+| getLayoutMode | Retrieves layout override settings. |
+| setLayoutMode | Saves the selected layout mode. |
+| getPricingSettings | Retrieves manual pricing settings. |
+| setPricingSettings | Saves manual pricing settings. |
+| getCapacitySettings | Retrieves capacity settings. |
+| setCapacitySettings | Saves capacity settings. |
+| getDurationPricingSettings | Retrieves duration pricing settings. |
+| setDurationPricingSettings | Saves duration pricing settings. |
+| getMlMetrics | Retrieves model accuracy metrics. |
+| getInsights | Retrieves AI insights. |
+| refreshInsights | Requests fresh AI insights. |
+| getRecentParkingLogs | Retrieves recent detector parking logs. |
+| getSlotAdjustment | Retrieves current slot-adjustment data. |
+| getStreamToken | Retrieves short-lived camera authorization. |
+| streamUrlFor | Builds a camera stream URL. |
+| sendSlotAdjustment | Sends detector slot-adjustment data. |
+| sendYoloUpdate | Sends authenticated detector occupancy updates. |
+| pushFrame | Sends a camera frame to backend processing. |
+| getSnapshot | Retrieves a current camera snapshot. |
+| saveSession | Stores user and secure token data. |
+| getToken | Retrieves or migrates secure session token. |
+| getUser | Retrieves saved user metadata. |
+| clearSession | Removes saved user and token data. |
+
+
+7. BACKEND ENDPOINTS USED BY THE FOUR SURFACES
+==============================================
+
+Source: backend/main.py. These endpoints provide the server-side functions.
+
+7.1 Authentication endpoints
+----------------------------
+
+| Endpoint | Function |
+|---|---|
+| POST /auth/register | Creates a driver account. |
+| POST /auth/login | Authenticates an administrator or driver. |
+| POST /auth/logout | Revokes the current authentication token. |
+| POST /auth/forgot-password | Creates and emails a reset token. |
+| POST /auth/reset-password | Updates password using a valid reset token. |
+| GET /forgot-password | Serves the web reset-request page. |
+| GET /reset-password | Serves the web password-update page. |
+
+7.2 Shared parking and camera endpoints
+----------------------------------------
+
+| Endpoint | Function |
+|---|---|
+| GET /api/stats | Returns live parking statistics. |
+| GET /api/occupancy | Returns current occupancy details. |
+| GET /api/history | Returns general occupancy history. |
+| GET /api/driver/summary | Returns driver availability and price data. |
+| GET /api/stream-token | Returns authenticated short-lived stream token. |
+| GET /api/stream | Proxies the selected camera stream. |
+| GET /api/parking_logs_recent | Returns recent detector logs with camera token. |
+| GET /api/slot_adjustment | Returns current slot adjustment. |
+| POST /yolo/update | Receives detector occupancy updates. |
+| POST /yolo/push-frame | Receives camera frames for processing. |
+
+7.3 Prediction and AI endpoints
+-------------------------------
+
+| Endpoint | Function |
+|---|---|
+| GET /api/predictions | Returns complete parking forecasts. |
+| GET /api/predictions/hourly-by-day | Returns hourly weekday prediction data. |
+| GET /api/ml/dashboard | Returns combined model results. |
+| GET /api/ml/metrics | Returns model metrics and accuracy. |
+| GET /api/ml/predict/vehicles | Returns vehicle-count prediction. |
+| GET /api/ml/predict/occupancy | Returns occupancy prediction. |
+| GET /api/ml/predict/price | Returns dynamic price prediction. |
+| GET /api/ml/predict/revenue | Returns revenue prediction. |
+| GET /api/insights | Returns AI operational insights. |
+| POST /api/insights/refresh | Refreshes administrator AI insights. |
+
+7.4 Revenue and GCash endpoints
+-------------------------------
+
+| Endpoint | Function |
+|---|---|
+| GET /api/revenue/dashboard | Returns administrator revenue dashboard data. |
+| GET /api/payments/recent | Returns paginated payment records. |
+| POST /api/payments | Records a verified administrator payment. |
+| POST /api/gcash/create-checkout | Creates a PayMongo checkout. |
+| GET /api/gcash/status | Returns GCash configuration status. |
+| GET /api/gcash/issues | Returns unresolved GCash reconciliation issues. |
+| GET /api/gcash/success | Handles the checkout success redirect. |
+| POST /api/webhooks/paymongo | Processes signed PayMongo webhook events. |
+
+7.5 Administrator settings endpoints
+------------------------------------
+
+| Endpoint | Function |
+|---|---|
+| GET/POST /api/settings/layout-mode | Reads or saves layout override. |
+| GET/POST /api/settings/pricing | Reads or saves manual pricing. |
+| GET/POST /api/settings/discounts | Reads or saves discount switches. |
+| GET/POST /api/settings/capacity | Reads or saves parking capacity. |
+| GET/POST /api/settings/duration-pricing | Reads or saves duration rates. |
+
+
+8. QA WALKTHROUGH CHECKLIST
+===========================
+
+Admin Web
+---------
+[ ] Sign in as administrator.
+[ ] Open Overview, Revenue, Live Feed, AI Insights, Predictions, Reports, Settings.
+[ ] Select both car and motorcycle camera POVs.
+[ ] Record a cash payment with and without discount.
+[ ] Review GCash issues and transaction pagination.
+[ ] Refresh predictions, insights, reports, and live data.
+[ ] Save pricing, capacity, discount, duration, and layout settings.
+[ ] Download CSV and PDF reports.
+[ ] Sign out and verify login redirect.
+
+Driver Web
+----------
+[ ] Register a driver account and sign in.
+[ ] Verify availability, occupancy, rates, and space map.
+[ ] Select car and motorcycle rates.
+[ ] Select duration and eligible discount.
+[ ] Start GCash checkout and verify return status.
+[ ] Sign out and verify login redirect.
+
+Admin App
+---------
+[ ] Sign in as administrator on a small Android device.
+[ ] Open all seven admin modules from mobile navigation.
+[ ] Verify live feed and both camera POVs.
+[ ] Record payment and review revenue logs.
+[ ] Verify predictions, insights, reports, and Copy CSV.
+[ ] Save each Settings section successfully.
+[ ] Test large accessibility text without overflow banners.
+[ ] Sign out and verify session cleanup.
+
+Driver App
+----------
+[ ] Complete onboarding and sign in.
+[ ] Verify live availability and offline dash state.
+[ ] Select car and motorcycle rates.
+[ ] Select duration, regular, PWD, and senior pricing.
+[ ] Start GCash checkout and verify payment state.
+[ ] Filter, refresh, and review parking history.
+[ ] Open Profile and sign out.
+[ ] Test forgot-password email request.
+[ ] Test small-screen and large-text layouts.
+
+
+9. SOURCE AND RELEASE NOTES
+===========================
+
+The web templates share authentication but separate administrator and driver
+workflows. The Flutter application shares one dashboard shell but selects the
+administrator or driver workflow from the authenticated role.
+
+Web reports support CSV and PDF downloads. Mobile reports preserve the same
+report data and provide Copy CSV for mobile-safe export.
+
+The deployed backend must configure password-reset SMTP variables before the
+forgot-password feature can deliver real email messages:
+PASSWORD_RESET_URL_BASE, SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD,
+SMTP_FROM, and SMTP_USE_TLS.
+
+Document generated: 2026-09-04
+
+
+APPENDIX A — BEGINNER-FRIENDLY FUNCTION LIST
+=============================================
+
+Every explanation below contains exactly ten words and uses beginner-friendly wording.
+The layout follows the sample: role, feature group, function, and explanation.
+
+
+SHARED FUNCTIONS
+================
+
+- Onboarding walkthrough - Guides new drivers through parking features before they create accounts.
+- User registration - Creates a driver account using the information they provide successfully.
+- Login and password visibility toggle - Lets users sign in and show or hide their password.
+- Password validation - Checks password length, letters, and numbers before accepting it securely.
+- Role-based routing - Sends each user to the correct screen after signing in.
+- Session restoration - Keeps users signed in when they reopen the application again.
+- Logout - Ends the current session and returns users to the login.
+- Session expiration handling - Sends users back to login when their session has ended.
+- API connection/error handling - Shows a message when the app cannot reach the server.
+- Render backend integration - Connects the website and app to the online parking system.
+- Secure mobile token storage - Keeps mobile login details safely stored on the device securely.
+- Web authenticated session cookies - Keeps users signed in safely while using the website system.
+
+
+ADMIN WEB
+=========
+
+Navigation
+----------
+
+- Admin navigation - Opens seven administrator modules through responsive dashboard navigation controls easily.
+- Sign out - Ends administrator session and returns safely to login page immediately.
+- Theme toggle - Switches between dark and gray dashboard presentation preferences for administrators.
+- Authenticated requests - Adds authenticated authorization headers before protected administrator requests are sent.
+- Loading states - Shows skeleton placeholders while dashboard data requests are still pending.
+
+Overview
+--------
+
+- Camera connection status - Reports whether configured cameras are currently reachable and streaming live.
+- Lot pressure/status - Summarizes current parking demand and overall lot operating condition clearly.
+- Last detector update - Displays the latest timestamp received from parking detection workers accurately.
+- Free parking slots - Shows currently available parking spaces using live occupancy data only.
+- Occupied slots - Shows currently occupied parking spaces using live occupancy data only.
+- Total capacity - Displays total configured parking capacity for current parking operations clearly.
+- Maximum vehicle count - Shows highest observed or predicted vehicle count for administrators today.
+- Occupancy percentage - Displays current lot occupancy percentage derived from live counts accurately.
+- Peak vehicles today - Shows today's highest vehicle count from current parking observations clearly.
+- Today's revenue - Displays estimated or recorded revenue for the current day clearly.
+- Dynamic pricing status - Shows whether occupancy-based pricing is currently active for parking users.
+- Parking occupancy trend chart - Visualizes recent occupancy movement across recorded parking history periods clearly.
+- AI next-hour forecast - Displays predicted occupancy for the next operating hour automatically onscreen.
+- Predicted peak time - Identifies the forecast period with highest expected parking demand today.
+- Occupancy trend description - Explains recent parking demand changes using readable generated status text.
+- AI recommendation - Presents an operational action recommendation based on current parking intelligence.
+- Refresh AI forecast - Requests the newest forecast and updates administrator prediction displays immediately.
+- Recent detection events - Lists recent detector activity with occupancy values timestamps and status.
+- Refresh detection history - Reloads recent detection records from the backend when requested manually.
+- Weekday revenue forecast - Shows predicted revenue totals for each weekday using forecast data.
+- Parking lot zone status - Reports each configured zone's current occupied or free condition clearly.
+- Free/occupied zone display - Visualizes parking zones using distinct free and occupied states clearly.
+
+Revenue
+-------
+
+- Today's revenue - Shows total revenue recorded or forecast for the current day.
+- Weekly revenue - Shows aggregated revenue across the current reporting week period clearly.
+- Monthly revenue - Shows aggregated revenue across the current reporting month period clearly.
+- Average transaction amount - Displays average payment value across recorded parking transactions for administrators.
+- Transaction count - Counts recorded parking payments within the selected reporting period accurately.
+- GCash payment count - Counts completed GCash transactions visible within selected revenue data periods.
+- Monthly revenue chart - Charts monthly revenue movement across available historical reporting periods clearly.
+- Revenue by vehicle type - Compares revenue produced by cars and motorcycles across records visually.
+- Revenue by payment method - Compares revenue received through cash GCash cards or other methods.
+- Discount analysis - Summarizes discounts applied across parking payments and eligible customer categories.
+- Record parking payment - Saves administrator-entered payment details after verifying amount and customer information.
+- Select car or motorcycle - Chooses whether the recorded parking payment belongs to cars motorcycles.
+- Select parking duration - Chooses daily weekly or monthly duration for recorded parking payments.
+- Enter regular payment amount - Accepts the actual regular amount paid by the parking customer.
+- Apply PWD discount - Applies configured PWD discount after required eligibility information is provided.
+- Apply Senior discount - Applies configured senior discount after required eligibility information is provided.
+- Enter discount ID number - Records required identification number supporting PWD or senior discount eligibility.
+- Select payment method - Selects cash GCash card or other method for payment records.
+- Add payment notes - Adds optional notes explaining payment details or exceptional circumstances clearly.
+- Transaction logs - Displays detailed recorded payment transactions for administrative review and reconciliation.
+- Transaction pagination - Moves between pages when many payment transactions require review efficiently.
+- GCash reconciliation warnings - Highlights GCash records requiring administrator reconciliation or further payment review.
+- View GCash issue details - Opens additional information explaining unresolved GCash payment reconciliation issues clearly.
+
+Live Feed
+---------
+
+- View MJPEG camera stream - Displays live camera video through the authenticated MJPEG stream endpoint.
+- Select camera POV - Changes between configured diorama camera points of view for monitoring.
+- Primary/mixed camera - Shows combined parking view when one mixed camera is selected.
+- Cars camera - Displays the dedicated vehicle camera perspective for cars specifically only.
+- Motorcycle camera - Displays the dedicated motorcycle camera perspective for motorcycles specifically only.
+- Fullscreen camera view - Opens selected camera video across the entire available display area.
+- Retry camera stream - Attempts to reload unavailable camera video after connection failure occurs.
+- Camera source display - Identifies selected camera identifier and configured source information for operators.
+- Stream connection status - Indicates whether selected camera streaming is currently healthy or unavailable.
+- Last camera activity - Displays latest camera detector timestamp received from selected viewpoint accurately.
+- FPS - Shows frames processed per second for selected camera monitoring performance.
+- Zone count - Displays number of detected parking zones from camera analysis results.
+- Occupied count - Displays occupied vehicle count reported by selected camera detector currently.
+- Car count - Shows detected cars from selected camera viewpoint currently to operators.
+- Motorcycle count - Shows detected motorcycles from selected camera viewpoint currently to operators.
+- Camera health status - Summarizes camera online state frames and detection freshness for operators.
+- Detection logs - Lists detector updates associated with camera timestamps counts and zones.
+- Zone status - Shows each monitored zone's current free or occupied state clearly.
+- Free/occupied zone counts - Summarizes free and occupied zones for selected camera view currently.
+
+AI Insights
+-----------
+
+- Current parking load - Summarizes current parking demand using occupancy measurements and capacity information.
+- Forecast peak - Identifies predicted busiest period using available occupancy forecast values automatically.
+- AI-recommended rate - Presents recommended parking rate calculated from occupancy and configured rules.
+- Recommendation cards - Displays several operational recommendations generated from current intelligence results clearly.
+- Model confidence - Shows reported confidence scores for available prediction models and tasks.
+- Vehicle-count confidence - Displays confidence for vehicle count forecasting model predictions specifically today.
+- Occupancy confidence - Displays confidence for occupancy prediction model results specifically today clearly.
+- Current status gauge - Visualizes current occupancy status using a clear status gauge indicator.
+- Recent trend chart - Visualizes recent parking occupancy movement across available historical measurements clearly.
+- Vehicle forecast six hours - Shows predicted vehicle counts for upcoming six operating hours visually.
+- Occupancy forecast - Shows predicted occupancy percentages for future operating periods clearly onscreen.
+- Dynamic pricing comparison - Compares current recommended pricing against configured parking rate alternatives visually.
+- Flat-rate versus AI-rate comparison - Compares standard flat rates against AI recommended prices using demand.
+- Peak-hour pattern - Shows repeated daily demand patterns around predicted busy hours clearly.
+- Refresh AI insights - Requests newly calculated recommendations and model insights from backend services.
+
+Predictions
+-----------
+
+- Current occupancy - Displays current occupancy percentage from live parking statistics accurately today.
+- Peak hour - Displays predicted highest occupancy hour for administrator planning purposes clearly.
+- Forecast accuracy - Shows model accuracy and evaluation metrics alongside prediction outputs clearly.
+- Active capacity - Displays capacity currently tracked by configured parking zones for operations.
+- Today's revenue forecast - Displays projected revenue for today using available prediction information clearly.
+- Twenty-four-hour occupancy forecast - Displays occupancy predictions for all twenty-four operating hours in sequence.
+- Hourly prediction cards - Shows individual occupancy forecast cards for every operating hour clearly.
+- Weekly occupancy heatmap - Visualizes weekly occupancy intensity across weekdays and operating hours clearly.
+- Busy days - Identifies weekdays predicted to experience highest parking demand levels overall.
+- Quiet days - Identifies weekdays predicted to experience lowest parking demand levels overall.
+- Weekday revenue forecast - Displays predicted revenue totals for each weekday across the week.
+- Refresh predictions - Reloads latest forecast values and evaluation metrics from backend services.
+
+Reports
+-------
+
+- Daily report - Displays summarized revenue and transaction data for one day only.
+- Weekly report - Displays summarized revenue and transaction data for one reporting week.
+- Monthly report - Displays summarized revenue and transaction data for one reporting month.
+- Yearly report - Displays summarized revenue and transaction data for one reporting year.
+- Today revenue KPI - Shows current day revenue as a report performance indicator clearly.
+- Weekly revenue KPI - Shows current week revenue as a report performance indicator clearly.
+- Monthly revenue KPI - Shows current month revenue as a report performance indicator clearly.
+- Yearly revenue KPI - Shows current year revenue as a report performance indicator clearly.
+- Revenue summary chart - Visualizes report revenue movement across selected reporting periods clearly onscreen.
+- AI predicted versus actual revenue - Compares predicted revenue with actual recorded revenue for accuracy review.
+- Accuracy comparison - Compares model forecast accuracy against baseline or actual results clearly.
+- Revenue breakdown table - Lists revenue by vehicle payment method discount and selected period.
+- CSV download - Exports selected report data into a downloadable CSV file format.
+- PDF download - Exports selected report data into a formatted PDF document file.
+- Refresh reports - Reloads selected report data from the backend on demand manually.
+
+Settings
+--------
+
+- Gray UI theme toggle - Changes dashboard appearance between dark and gray interface themes manually.
+- Manual pricing toggle - Enables administrator controlled pricing instead of automatic occupancy pricing calculations.
+- Dynamic pricing mode - Uses occupancy demand to calculate active parking prices automatically today.
+- Car hourly rate - Displays configured hourly car rate used by pricing calculations currently.
+- Motorcycle hourly rate - Displays configured motorcycle hourly rate used by pricing calculations currently.
+- Car daily rate - Displays configured daily car rate used by payment calculations currently.
+- Motorcycle daily rate - Displays configured daily motorcycle rate used by payment calculations currently.
+- Car weekly rate - Displays configured weekly car rate used by payment calculations currently.
+- Motorcycle weekly rate - Displays configured weekly motorcycle rate used by payment calculations currently.
+- Car monthly rate - Displays configured monthly car rate used by payment calculations currently.
+- Motorcycle monthly rate - Displays configured monthly motorcycle rate used by payment calculations currently.
+- Car slot capacity - Configures total parking slots available for cars in operations currently.
+- Motorcycle slot capacity - Configures total parking slots available for motorcycles in operations currently.
+- PWD discount toggle - Enables or disables PWD discount eligibility during payment processing workflows.
+- Senior discount toggle - Enables or disables senior discount eligibility during payment processing workflows.
+- Automatic parking layout - Lets the system choose parking layout from current demand conditions.
+- Manual layout override - Lets administrators override automatic layout selection when operational conditions require.
+- Normal layout mode - Applies normal parking layout configuration for ordinary demand conditions only.
+- Busy layout mode - Applies busy parking layout configuration for elevated demand conditions only.
+- High-demand layout mode - Applies high demand layout configuration for heavy demand conditions only.
+- Save and refresh settings - Saves changed settings then refreshes displayed values from backend again.
+
+
+DRIVER WEB
+==========
+
+- Driver name display - Displays authenticated driver's name on the parking dashboard header clearly.
+- Live parking availability - Shows current parking availability using live backend occupancy data only.
+- Total spaces - Displays total configured parking spaces for driver planning purposes clearly.
+- Occupied spaces - Displays currently occupied parking spaces from latest detector data accurately.
+- Available spaces - Displays currently free parking spaces from latest detector data accurately.
+- Occupancy percentage - Displays current occupancy percentage for the parking lot clearly onscreen.
+- Parking-space preview map - Visualizes parking space availability before the driver begins parking navigation.
+- Camera/live status - Shows whether camera detector data is current and available now.
+- Car parking rate - Displays active car parking rate using backend pricing settings currently.
+- Motorcycle parking rate - Displays active motorcycle parking rate using backend pricing settings currently.
+- PWD/Senior discounted rate - Displays discounted eligible rate after PWD or senior selection clearly.
+- Dynamic price note - Explains why displayed parking prices change with occupancy demand levels.
+- Select car - Selects car as the driver's intended parking vehicle type manually.
+- Select motorcycle - Selects motorcycle as the driver's intended parking vehicle type manually.
+- Select parking duration - Chooses daily weekly or monthly duration for intended parking usage.
+- Select regular rate - Selects standard pricing without an eligible customer discount applied currently.
+- Select PWD discount - Selects PWD discount for eligible drivers providing required identification details.
+- Select Senior discount - Selects senior discount for eligible drivers providing required identification details.
+- Enter PWD/Senior ID - Records identification number required to support selected discount eligibility claims.
+- Pay with GCash - Starts secure GCash checkout using selected vehicle duration and discount.
+- GCash checkout redirect - Opens the PayMongo GCash checkout page for driver payment completion.
+- Payment status/error display - Shows success pending or failed payment result after checkout return.
+- Automatic availability refresh - Refreshes parking availability automatically while the driver dashboard remains open.
+- Automatic discount availability refresh - Refreshes discount eligibility settings automatically before payment selections are displayed.
+- Parking location display - Displays the configured parking location for arriving drivers clearly onscreen.
+- Pre-parking instructions - Provides short pre-parking guidance before drivers choose parking payment options.
+- Sign out - Ends driver web session and returns to login page safely.
+
+
+ADMIN MOBILE APP
+================
+
+The administrator and driver mobile views share DashboardScreen role selection.
+
+- Overview - Opens administrator overview with live operations and summary metrics displayed.
+- Revenue - Opens administrator payment recording revenue analysis and reconciliation tools together.
+- Live Feed - Opens administrator camera monitoring with selectable car motorcycle POVs available.
+- AI Insights - Opens administrator operational recommendations model readings and trend analysis screens.
+- Predictions - Opens forecast metrics hourly occupancy and revenue prediction cards together.
+- Reports - Opens period-based revenue reports with mobile-safe CSV copying available locally.
+- Settings - Opens administrator controls for rates capacity discounts and layouts together.
+- Mobile navigation - Provides touch-friendly navigation across all administrator dashboard modules on mobile.
+- Desktop/sidebar navigation - Provides wide-screen navigation across all administrator modules efficiently on desktop.
+- Sign out - Clears admin mobile session and returns user to login safely.
+- Pull-to-refresh - Refreshes dashboard data when administrator pulls content downward manually once.
+- Free slots - Displays current available spaces from live occupancy data for administrators.
+- Occupied slots - Displays current occupied spaces from live occupancy data for administrators.
+- Capacity - Displays configured parking capacity used by current operations calculations today.
+- Occupancy rate - Displays current occupancy rate from live camera statistics accurately today.
+- Peak vehicles - Shows highest predicted vehicle count for current forecast planning purposes.
+- Today's revenue - Shows projected current-day revenue from backend forecast information for administrators.
+- Dynamic pricing - Shows active occupancy-based price status and calculation context clearly today.
+- Camera status - Summarizes camera online state freshness and detector activity for administrators.
+- Parking lot status - Displays overall parking lot occupancy and capacity condition clearly today.
+- Recent activity - Lists recent detector events with timestamps occupancy values and statuses.
+- Revenue forecast - Displays projected revenue totals using current forecast data for administrators.
+- AI forecast refresh - Requests new insights and forecasts from backend services when selected.
+- Revenue KPIs - Displays revenue totals transaction counts averages and payment indicators together.
+- Revenue trends - Charts revenue movement across available reporting periods using current data.
+- Recent payments - Lists latest payment records for administrator review and reconciliation purposes.
+- Record payment - Records verified parking payment with vehicle duration discount method details.
+- GCash issue banner - Displays unresolved GCash payment issues requiring administrator attention clearly today.
+- Transaction pagination - Moves through administrator payment records using page navigation controls easily.
+- Refresh transaction logs - Reloads recent transaction records from backend services on administrator request.
+- Camera stream - Displays authenticated live camera video inside the administrator app securely.
+- Camera selector - Selects either car or motorcycle camera perspective for monitoring clearly.
+- Camera health - Displays per-camera online freshness and detection performance details for administrators.
+- Detection log - Lists recent detector updates with counts timestamps and camera identities.
+- Zone status - Displays parking zones and their current occupancy states clearly onscreen.
+- FPS - Shows processed frames per second for selected camera monitoring clearly.
+- Car count - Displays cars detected by the selected camera viewpoint currently now.
+- Motorcycle count - Displays motorcycles detected by the selected camera viewpoint currently now.
+- Occupied count - Displays vehicles currently occupying spaces in selected camera data accurately.
+- Stream status - Shows whether selected camera streaming is available or offline currently.
+- Current load - Displays current parking demand using live occupancy measurements accurately today.
+- Recent trend - Visualizes recent occupancy movement using available parking history data today.
+- Vehicle forecast - Shows expected vehicle numbers during the next hours for administrators.
+- Occupancy forecast - Shows expected parking fullness during the next hours for administrators.
+- Dynamic pricing - Displays occupancy-driven price calculations and current pricing context clearly onscreen.
+- Peak-hour chart - Visualizes predicted parking demand around the busiest operating periods clearly.
+- Model readout - Shows the prediction method and how trustworthy its answer is.
+- Busy days - Displays weekdays predicted to experience the highest parking demand overall.
+- Quiet days - Displays weekdays predicted to experience the lowest parking demand overall.
+- Twenty-four-hour forecast - Displays complete hourly occupancy predictions for an entire operating day.
+- Weekday revenue forecast - Displays predicted revenue totals across every weekday in sequence clearly.
+- Refresh predictions and insights - Gets newest predictions and helpful information from the online system.
+- Daily weekly monthly yearly filters - Selects report period granularity for administrator review and comparison together.
+- Revenue summary - Displays report totals and revenue movement for selected periods clearly.
+- Revenue breakdown - Displays revenue grouped by vehicle method discount and period clearly.
+- AI predicted versus actual revenue - Compares predicted and recorded revenue values for administrator review accurately.
+- Copy CSV - Copies current report data as comma-separated text for sharing conveniently.
+- Refresh reports - Reloads current report data and recalculates displayed administrator summaries successfully.
+- Manual/dynamic pricing - Chooses between fixed prices and prices based on parking demand.
+- Vehicle duration rates - Displays configured car and motorcycle rates across durations for drivers.
+- Parking capacity - Saves configured car and motorcycle capacity values for operations securely.
+- PWD discount - Enables or disables PWD eligibility using administrator settings controls securely.
+- Senior discount - Enables or disables senior eligibility using administrator settings controls securely.
+- Manual layout override - Enables administrator control over automatic parking layout selection when required.
+- Normal Busy High layouts - Selects layout mode matching current parking demand conditions for operations.
+- Save settings - Persists administrator configuration changes using protected backend requests successfully online.
+- Refresh settings - Reloads saved administrator settings after configuration changes complete successfully online.
+
+
+DRIVER MOBILE APP
+=================
+
+Onboarding and authentication
+-----------------------------
+
+- Onboarding pages - Explains parking spaces, payments, and smart predictions before account access.
+- Skip onboarding - Skips the introduction and goes straight to account access quickly.
+- Next onboarding page - Moves the introduction to the next information screen for users.
+- Get Started - Finishes introduction and opens the driver login screen for access.
+- Login - Checks driver login details with the OccupAI parking system securely.
+- Password visibility toggle - Shows or hides the password while the user types it.
+- Registration - Makes a new driver account from information provided today securely.
+- Confirm password - Checks both passwords match before creating the account successfully today.
+- Email validation - Checks email format before allowing a new account to continue.
+- Weak-password validation - Rejects passwords missing required length letters or numbers before submission.
+- Sign up - Sends entered information to create the driver account successfully online.
+- Sign in - Sends login details and opens the driver parking screen successfully.
+- Logout - Removes driver login details and returns to the login screen.
+
+Parking
+-------
+
+- Live parking availability - Shows current parking spaces using information from the online system.
+- Available spaces - Shows free spaces using the latest camera information right now.
+- Occupied spaces - Shows occupied spaces using the latest camera information right now.
+- Total spaces - Shows all parking spaces so drivers can plan ahead easily.
+- Occupancy percentage - Shows how full the parking area is for drivers today.
+- Camera data availability - Shows whether camera information is available and updated right now.
+- Parking full status - Tells drivers when no parking spaces are left available today.
+- Parking location - Shows the parking place address clearly for arriving drivers today.
+- Car rate - Shows the current daily price for parking a car today.
+- Motorcycle rate - Shows the current daily price for parking a motorcycle today.
+- PWD/Senior rate - Shows the lower price after a PWD or senior discount.
+- Dynamic pricing information - Explains why the parking price changes when demand changes today.
+- Car/motorcycle selection - Lets drivers choose a car or motorcycle before paying online.
+- Daily/weekly/monthly duration - Lets drivers choose daily, weekly, or monthly parking time beforehand.
+- Regular rate - Uses the normal parking price without a discount for payment.
+- PWD discount - Uses the PWD discount after the required identification is entered.
+- Senior discount - Uses the senior discount after the required identification is entered.
+- Discount ID entry - Collects the identification number needed for the chosen discount today.
+- GCash checkout - Starts GCash payment using the driver's selected parking choices securely.
+- GCash error/status message - Shows payment progress, errors, or completion messages to drivers clearly.
+- Pull-to-refresh - Updates parking information when drivers pull downward on screen manually.
+- Offline/loading state - Shows waiting marks or dashes when parking information is unavailable.
+
+History
+-------
+
+- All-time history - Shows all parking records available for the driver account today.
+- Today's history - Shows parking records made during the current day only here.
+- This week's history - Shows parking records made during the current week only here.
+- This month's history - Shows parking records made during the current month only here.
+- Total sessions - Shows how many parking visits the driver has made overall.
+- Total amount spent - Shows how much money the driver has spent overall here.
+- Parking payment records - Lists each driver payment with its important details shown clearly.
+- Vehicle type display - Shows whether each payment was for a car or motorcycle.
+- Duration display - Shows how long each parking visit lasted for drivers clearly.
+- Payment method display - Shows whether payment used cash, GCash, card, or something else.
+- Discount display - Shows which discount and discount amount each payment received had.
+- Date and time display - Shows when each payment happened, including date and time clearly.
+- Retry loading history - Tries loading parking history again after a problem occurs online.
+- Refresh history - Loads the driver's parking history again from the online system.
+
+Profile
+-------
+
+- Profile name - Shows the driver's full name in the profile section clearly.
+- Email - Shows the driver's email address in the profile section clearly.
+- User role - Shows whether the account belongs to a driver or administrator.
+- Account status - Shows whether the driver's account is active and usable today.
+- Current free-slot count - Shows free parking spaces beside the driver's profile information clearly.
+- Sign out - Ends the driver session and returns to login safely again.
+
+
+NOTES FOR QA REVIEW
+===================
+
+1. Admin Web has PDF and CSV report downloads.
+2. Admin App keeps equivalent report data and provides Copy CSV.
+3. Driver Web focuses on parking availability, rates, and GCash.
+4. Driver App additionally provides History and Profile screens.
+5. Both admin platforms support separate car and motorcycle camera POVs.
+6. Driver platforms show combined availability and rates, not camera selection.
+7. All rates, predictions, capacity, discounts, and statuses come from backend data.
+8. The QA teacher can verify each platform using the checklist above.

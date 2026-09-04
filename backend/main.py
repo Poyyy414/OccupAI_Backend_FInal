@@ -7,7 +7,8 @@ CHANGES in v2.2:
   - /api/predictions now includes weekday_revenue and today_revenue_forecast
   - Revenue forecast added to predictions endpoint
 """
-import os, re, math, bcrypt, uvicorn, joblib, threading, warnings, time, json, base64, secrets, hmac, hashlib, html
+import os, re, math, bcrypt, uvicorn, joblib, threading, warnings, time, json, base64, secrets, hmac, hashlib, html, smtplib
+from email.message import EmailMessage
 import psycopg2
 import numpy as np
 import pandas as pd
@@ -17,6 +18,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Optional
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 
@@ -28,7 +30,14 @@ from fastapi.staticfiles import StaticFiles
 import httpx
 from pydantic import BaseModel
 from backend.db     import get_db, query, execute
-from backend.models import UserRegister, UserLogin, YoloUpdate, PushFrame
+from backend.models import (
+    UserRegister,
+    UserLogin,
+    ForgotPasswordPayload,
+    ResetPasswordPayload,
+    YoloUpdate,
+    PushFrame,
+)
 
 warnings.filterwarnings("ignore")
 # Local .env is useful during development, but deployment-provided environment
@@ -109,6 +118,18 @@ AUTH_COOKIE_SECURE = (
     else DEPLOY_MODE != "local"
 )
 STREAM_TOKEN_TTL_SECONDS = max(60, int(os.getenv("STREAM_TOKEN_TTL_SECONDS", "300")))
+PASSWORD_RESET_TTL_MINUTES = max(
+    5, min(24 * 60, int(os.getenv("PASSWORD_RESET_TTL_MINUTES", "30")))
+)
+PASSWORD_RESET_URL_BASE = os.getenv("PASSWORD_RESET_URL_BASE", "").strip().rstrip("/")
+SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
+SMTP_PORT = max(1, int(os.getenv("SMTP_PORT", "587")))
+SMTP_USER = os.getenv("SMTP_USER", "").strip()
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER).strip()
+SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").strip().lower() not in {
+    "0", "false", "no", "off"
+}
 
 
 def _sign_auth_token(user_id: int, role: str, purpose: str = "auth", ttl_seconds: int = AUTH_TOKEN_TTL_SECONDS) -> str:
@@ -460,6 +481,13 @@ def require_stream_access(
 DB_LOG_CONFIRM_SECONDS = max(0.0, float(os.getenv("DB_LOG_CONFIRM_SECONDS", "20")))
 DB_LOG_MIN_INTERVAL_SECONDS = max(1.0, float(os.getenv("DB_LOG_MIN_INTERVAL_SECONDS", "20")))
 CAMERA_STATE_TTL_SECONDS = max(5.0, float(os.getenv("CAMERA_STATE_TTL_SECONDS", "15")))
+# A short local detector run must not replace the complete historical pattern
+# with one or two populated hours. These thresholds are configurable so a
+# smaller staging lot can tune them without changing prediction code.
+LIVE_FORECAST_MIN_SAMPLES = max(1, int(os.getenv("LIVE_FORECAST_MIN_SAMPLES", "24")))
+LIVE_FORECAST_MIN_HOURLY_BUCKETS = max(
+    1, int(os.getenv("LIVE_FORECAST_MIN_HOURLY_BUCKETS", "6"))
+)
 
 BASE_DIR     = Path(__file__).resolve().parent.parent
 TEMPLATE_DIR = BASE_DIR / "template"
@@ -1373,6 +1401,23 @@ def _ensure_security_tables():
             "CREATE INDEX IF NOT EXISTS idx_gcash_webhook_events_received_at "
             "ON gcash_webhook_events (received_at DESC)"
         )
+        execute("""
+            CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                token_hash TEXT PRIMARY KEY,
+                user_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                expires_at TIMESTAMPTZ NOT NULL,
+                used_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        execute(
+            "CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user "
+            "ON password_reset_tokens (user_id, created_at DESC)"
+        )
+        execute(
+            "CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_expiry "
+            "ON password_reset_tokens (expires_at)"
+        )
     except Exception as e:
         print(f"[DB] security table setup warning: {e}")
 
@@ -1688,6 +1733,19 @@ def _refresh_aggregated_state_locked():
     state.update(_aggregate_camera_states_locked())
 
 
+def _live_forecast_history_is_sufficient(rows) -> bool:
+    """Reject sparse live history before it can distort a forecast."""
+    if not rows or len(rows) < LIVE_FORECAST_MIN_HOURLY_BUCKETS:
+        return False
+    sample_count = 0
+    for row in rows:
+        try:
+            sample_count += int(row.get("sample_count") or row.get("samples") or 0)
+        except (AttributeError, TypeError, ValueError):
+            continue
+    return sample_count >= LIVE_FORECAST_MIN_SAMPLES
+
+
 def _layout_capacity_from_env(mode=None):
     level = (mode or _read_setting("FORCE_DEMAND_LEVEL", "") or "").strip().upper()
     if level not in {"NORMAL", "BUSY", "HIGH"}:
@@ -1833,6 +1891,12 @@ def root():            return FileResponse(str(TEMPLATE_DIR / "login.html"))
 def login_page():      return FileResponse(str(TEMPLATE_DIR / "login.html"))
 @app.get("/register",  response_class=FileResponse)
 def register_page():   return FileResponse(str(TEMPLATE_DIR / "register.html"))
+@app.get("/forgot-password", response_class=FileResponse)
+def forgot_password_page():
+    return FileResponse(str(TEMPLATE_DIR / "forgot_password.html"))
+@app.get("/reset-password", response_class=FileResponse)
+def reset_password_page():
+    return FileResponse(str(TEMPLATE_DIR / "reset_password.html"))
 @app.get("/dashboard", response_class=FileResponse)
 def dashboard_page():  return FileResponse(str(TEMPLATE_DIR / "dashboard.html"))
 @app.get("/driver",    response_class=FileResponse)
@@ -2091,11 +2155,18 @@ def _logged_hourly_vehicle_avg():
     try:
         rows = query("""
             SELECT EXTRACT(HOUR FROM logged_at AT TIME ZONE 'Asia/Manila') AS hour,
-                   AVG(occupied) AS avg_vehicles
+                   AVG(occupied) AS avg_vehicles,
+                   COUNT(*) AS sample_count
             FROM parking_logs
             WHERE logged_at >= NOW() - INTERVAL '7 days'
             GROUP BY hour ORDER BY hour
         """)
+        if not _live_forecast_history_is_sufficient(rows):
+            print(
+                "[predictions] live hourly history is too sparse; "
+                "using training fallback"
+            )
+            return {}
         return {
             int(row["hour"]): max(0.0, float(row["avg_vehicles"] or 0.0))
             for row in (rows or [])
@@ -2119,6 +2190,48 @@ def _hourly_occupancy_percent(vehicle_by_hour, capacity):
 def _training_hourly_occ_pct(capacity=None):
     capacity = max(1, int(capacity or _active_slot_capacity(LOT_CAPACITY)))
     return _hourly_occupancy_percent(_training_hourly_vehicle_avg(), capacity)
+
+
+def _training_hourly_by_day(active_capacity):
+    """Build the hourly-by-day fallback directly from the bundled CSV."""
+    day_map = {
+        day: {
+            hour: {"vehicles": 0.0, "occ_pct": 0.0, "samples": 0}
+            for hour in range(24)
+        }
+        for day in range(7)
+    }
+    df = _load_training_df()
+    if df is None:
+        return day_map
+
+    try:
+        required = {"day_of_week", "hour", "vehicles_hour"}
+        if not required.issubset(df.columns):
+            return day_map
+        work = df[list(required)].copy()
+        for column in required:
+            work[column] = pd.to_numeric(work[column], errors="coerce")
+        work = work.dropna(subset=list(required))
+        grouped = work.groupby(["day_of_week", "hour"], as_index=False).agg(
+            vehicles=("vehicles_hour", "mean")
+        )
+        for row in grouped.itertuples(index=False):
+            csv_day = int(row.day_of_week)
+            hour = int(row.hour)
+            if not 0 <= csv_day <= 6 or not 0 <= hour <= 23:
+                continue
+            # The CSV uses Monday=0; the API uses Sunday=0.
+            api_day = (csv_day + 1) % 7
+            vehicles = max(0.0, float(row.vehicles or 0.0))
+            day_map[api_day][hour] = {
+                "vehicles": round(vehicles, 1),
+                "occ_pct": round(min(vehicles / active_capacity * 100, 100.0), 1),
+                "samples": 0,
+            }
+    except Exception as exc:
+        print(f"[hourly-by-day] training fallback unavailable: {exc}")
+    return day_map
 
 
 def _historical_peak_context(now=None):
@@ -2364,13 +2477,18 @@ def _logged_weekday_revenue_forecast(capacity=None):
             SELECT DATE(logged_at AT TIME ZONE 'Asia/Manila') AS date,
                    EXTRACT(DOW FROM logged_at AT TIME ZONE 'Asia/Manila') AS dow,
                    EXTRACT(HOUR FROM logged_at AT TIME ZONE 'Asia/Manila') AS hour,
-                   AVG(occupied) AS avg_vehicles
+                   AVG(occupied) AS avg_vehicles,
+                   COUNT(*) AS sample_count
             FROM parking_logs
             WHERE logged_at >= NOW() - INTERVAL '30 days'
             GROUP BY date, dow, hour
             ORDER BY date, hour
         """)
-        if not rows:
+        if not _live_forecast_history_is_sufficient(rows):
+            print(
+                "[predictions revenue] live history is too sparse; "
+                "using training fallback"
+            )
             return {day: 0.0 for day in ordered_days}, None
 
         daily_totals = defaultdict(float)
@@ -2570,6 +2688,32 @@ def _empty_payment_dashboard(error=None):
     if error:
         out["error"] = str(error)
     return out
+
+
+REVENUE_DASHBOARD_CACHE_TTL_SECONDS = max(
+    5.0, float(os.getenv("REVENUE_DASHBOARD_CACHE_TTL_SECONDS", "15"))
+)
+_revenue_dashboard_cache = {"computed_at": 0.0, "value": None}
+_revenue_dashboard_cache_lock = threading.Lock()
+
+
+def _cached_payment_revenue_dashboard():
+    """Share the expensive aggregate read among concurrent dashboard callers."""
+    now = time.monotonic()
+    with _revenue_dashboard_cache_lock:
+        cached = _revenue_dashboard_cache["value"]
+        if cached is not None and now - _revenue_dashboard_cache["computed_at"] < REVENUE_DASHBOARD_CACHE_TTL_SECONDS:
+            return cached
+        value = _payment_revenue_dashboard()
+        _revenue_dashboard_cache["computed_at"] = time.monotonic()
+        _revenue_dashboard_cache["value"] = value
+        return value
+
+
+def _invalidate_payment_revenue_dashboard_cache():
+    with _revenue_dashboard_cache_lock:
+        _revenue_dashboard_cache["computed_at"] = 0.0
+        _revenue_dashboard_cache["value"] = None
 
 
 def _payment_revenue_dashboard():
@@ -2858,6 +3002,7 @@ def _record_parking_payment(payload, verified_by_user_id=None, external_referenc
         if row is None:
             raise RuntimeError("Payment insert returned no row")
         conn.commit()
+        _invalidate_payment_revenue_dashboard_cache()
         paid_at_ph = _coerce_datetime(row["paid_at"]).strftime("%Y-%m-%d %H:%M:%S")
         return {
             "ok": True,
@@ -3079,9 +3224,9 @@ def ml_dashboard(_auth=Depends(require_user)):
 def api_predictions(_auth=Depends(require_user)):
     try:
         active_capacity = max(1, int(_active_slot_capacity(LOT_CAPACITY)))
-        # Use live database history whenever it has recent observations. The
-        # bundled CSV is only a fallback for a newly deployed system with no
-        # parking logs yet; it must not mask current camera/database data.
+        # Use live database history only after it has enough hourly coverage.
+        # A short or mostly-empty local detector run must not mask the real
+        # historical pattern in the bundled training data.
         live_hourly = _logged_hourly_vehicle_avg()
         if live_hourly:
             hourly = _hourly_occupancy_percent(live_hourly, active_capacity)
@@ -3141,7 +3286,7 @@ def api_predictions(_auth=Depends(require_user)):
 @app.get("/api/revenue/dashboard")
 def api_revenue_dashboard(_admin=Depends(require_admin)):
     try:
-        return _payment_revenue_dashboard()
+        return _cached_payment_revenue_dashboard()
     except Exception as e:
         print(f"[revenue dashboard] {e}")
         return _empty_payment_dashboard()
@@ -3832,8 +3977,7 @@ def api_hourly_by_day(_auth=Depends(require_user)):
             ORDER BY dow, hour
         """)
 
-        # Build dow->hour->value map
-        # dow: 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
+        # Build dow->hour->value map. dow: 0=Sun, 1=Mon, ..., 6=Sat.
         day_map = {i: {h: {"vehicles": 0.0, "occ_pct": 0.0, "samples": 0}
                        for h in range(24)} for i in range(7)}
 
@@ -3846,25 +3990,11 @@ def api_hourly_by_day(_auth=Depends(require_user)):
                 "samples":  int(r["sample_count"] or 0),
             }
 
-        # If no DB data yet, fall back to historical pattern from training data
-        # Mon=1 is busiest (144/day), Sat=6 quietest (85/day)
-        DAY_AVG_HIST = {0:90, 1:144, 2:138, 3:135, 4:130, 5:125, 6:85}
-        PROFILE = [0,0,0,0,0,2,6,14,18,13,9,8,11,8,7,6,8,6,4,3,2,1,0,0]
-        prof_sum = sum(PROFILE)
-        has_data = any(
-            day_map[d][h]["samples"] > 0
-            for d in range(7) for h in range(24)
-        )
+        # Sparse logs are not a reliable forecast. Use the real training CSV
+        # until the database has enough hourly coverage and samples.
+        has_data = _live_forecast_history_is_sufficient(rows)
         if not has_data:
-            for d in range(7):
-                total = DAY_AVG_HIST[d]
-                for h in range(24):
-                    v = round(PROFILE[h] / prof_sum * total, 1)
-                    day_map[d][h] = {
-                        "vehicles": v,
-                        "occ_pct":  round(min(v / active_capacity * 100, 100.0), 1),
-                        "samples":  0,
-                    }
+            day_map = _training_hourly_by_day(active_capacity)
 
         # Also compute overall daily totals and peak hours
         day_labels = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"]
@@ -4500,6 +4630,164 @@ def _validate_password_strength(password: str) -> None:
         raise HTTPException(400, "Password must be at least 8 characters long")
     if not any(c.isalpha() for c in pw) or not any(c.isdigit() for c in pw):
         raise HTTPException(400, "Password must contain at least one letter and one number")
+
+
+def _password_reset_url(request: Request, raw_token: str) -> str:
+    base_url = PASSWORD_RESET_URL_BASE or str(request.base_url).rstrip("/")
+    return f"{base_url}/reset-password?token={quote(raw_token, safe='')}"
+
+
+def _send_password_reset_email(recipient: str, reset_url: str) -> bool:
+    """Send a reset link without exposing the token through an API response or log."""
+    if not SMTP_HOST or not SMTP_FROM:
+        print("[auth] Password reset email unavailable: SMTP_HOST/SMTP_FROM is not configured.")
+        return False
+
+    message = EmailMessage()
+    message["Subject"] = "Reset your OccupAI password"
+    message["From"] = SMTP_FROM
+    message["To"] = recipient
+    message.set_content(
+        "We received a request to reset your OccupAI password.\n\n"
+        f"Open this link within {PASSWORD_RESET_TTL_MINUTES} minutes to choose a new password:\n"
+        f"{reset_url}\n\n"
+        "If you did not request this, you can safely ignore this email."
+    )
+
+    try:
+        if SMTP_USE_TLS:
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
+                server.ehlo()
+                server.starttls()
+                server.ehlo()
+                if SMTP_USER:
+                    server.login(SMTP_USER, SMTP_PASSWORD)
+                server.send_message(message)
+        else:
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=10) as server:
+                if SMTP_USER:
+                    server.login(SMTP_USER, SMTP_PASSWORD)
+                server.send_message(message)
+        return True
+    except Exception as exc:
+        print(f"[auth] Password reset email delivery failed: {exc}")
+        return False
+
+
+def _issue_password_reset_token(email: str):
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT user_id, email FROM users "
+            "WHERE LOWER(email)=LOWER(%s) AND is_active=TRUE",
+            (email,),
+        )
+        user = cur.fetchone()
+        if not user:
+            conn.commit()
+            return None
+
+        raw_token = secrets.token_urlsafe(48)
+        token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+        cur.execute(
+            "UPDATE password_reset_tokens SET used_at=COALESCE(used_at, NOW()) "
+            "WHERE user_id=%s AND used_at IS NULL",
+            (user["user_id"],),
+        )
+        cur.execute(
+            "INSERT INTO password_reset_tokens (token_hash, user_id, expires_at) "
+            "VALUES (%s, %s, NOW() + (%s * INTERVAL '1 minute'))",
+            (token_hash, user["user_id"], PASSWORD_RESET_TTL_MINUTES),
+        )
+        conn.commit()
+        return raw_token, user["email"], user["user_id"]
+    except Exception as exc:
+        conn.rollback()
+        print(f"[auth] Password reset token creation failed: {exc}")
+        raise HTTPException(503, "Password reset service temporarily unavailable") from exc
+    finally:
+        cur.close()
+        conn.close()
+
+
+@app.post("/auth/forgot-password")
+def forgot_password(data: ForgotPasswordPayload, request: Request):
+    _rate_limit(request, "password_reset", max_calls=5, window_seconds=300)
+    email = _clean_email(data.email)
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise HTTPException(400, "Enter a valid email address")
+
+    issued = _issue_password_reset_token(email)
+    if issued:
+        raw_token, recipient, user_id = issued
+        sent = _send_password_reset_email(
+            recipient,
+            _password_reset_url(request, raw_token),
+        )
+        _audit_auth_event(
+            request,
+            "password_reset_requested" if sent else "password_reset_delivery_failed",
+            email=email,
+            user_id=user_id,
+        )
+    else:
+        _audit_auth_event(request, "password_reset_requested", email=email)
+
+    # Keep the response identical for known and unknown accounts.
+    return {
+        "ok": True,
+        "message": "If an account exists for that email, a password reset link has been sent.",
+    }
+
+
+@app.post("/auth/reset-password")
+def reset_password(data: ResetPasswordPayload, request: Request):
+    _rate_limit(request, "password_reset", max_calls=10, window_seconds=300)
+    _validate_password_strength(data.password)
+    token_hash = hashlib.sha256(data.token.strip().encode("utf-8")).hexdigest()
+
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT user_id FROM password_reset_tokens "
+            "WHERE token_hash=%s AND used_at IS NULL AND expires_at > NOW() FOR UPDATE",
+            (token_hash,),
+        )
+        token_row = cur.fetchone()
+        if not token_row:
+            conn.rollback()
+            raise HTTPException(400, "Reset link is invalid or expired")
+
+        password_hash = bcrypt.hashpw(
+            data.password.encode("utf-8"), bcrypt.gensalt()
+        ).decode("utf-8")
+        user_id = token_row["user_id"]
+        cur.execute(
+            "UPDATE users SET password_hash=%s WHERE user_id=%s AND is_active=TRUE",
+            (password_hash, user_id),
+        )
+        if cur.rowcount != 1:
+            conn.rollback()
+            raise HTTPException(400, "Reset link is invalid or expired")
+        cur.execute(
+            "UPDATE password_reset_tokens SET used_at=NOW() "
+            "WHERE user_id=%s AND used_at IS NULL",
+            (user_id,),
+        )
+        conn.commit()
+        _audit_auth_event(request, "password_reset_completed", user_id=user_id)
+        return {"ok": True, "message": "Password updated. You can now sign in."}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        conn.rollback()
+        print(f"[auth] Password reset failed: {exc}")
+        raise HTTPException(503, "Password reset service temporarily unavailable") from exc
+    finally:
+        cur.close()
+        conn.close()
 
 
 @app.post("/auth/register")

@@ -165,8 +165,11 @@
       width: 40px;
       height: 40px;
       border-radius: var(--radius);
-      font-size: 14px;
+      overflow: hidden;
+      background: #000;
     }
+
+    .logo-icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
 
     .logo-text {
       display: flex;
@@ -1743,7 +1746,7 @@
 </svg>
 <aside class="sidebar">
   <div class="logo">
-    <div class="logo-icon">AI</div>
+    <div class="logo-icon"><img src="/static/occupai_logo.png" alt="OccupAI logo" /></div>
     <div class="logo-text">
       <div class="logo-name">OccupAI</div>
       <div class="logo-meta">Parking Ops</div>
@@ -2484,11 +2487,12 @@
     <div class="insight-tools">
       <div>
         <div class="eyebrow">Model readout</div>
-        <div class="page-sub">Raw forecast data from /api/predictions</div>
+        <div class="page-sub">Forecast data from the parking history and training data</div>
       </div>
       <div>
         <button class="refresh-btn" onclick="fetchFullPredictions()" aria-label="Refresh predictions"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"></use></svg>Refresh</button>
         <div class="insight-ts" id="predFullTs">--</div>
+        <div class="insight-ts" id="predFullSource">--</div>
       </div>
     </div>
 
@@ -2506,7 +2510,7 @@
       <article class="insight-summary-card">
         <span>Forecast accuracy</span>
         <strong id="predFullAccuracy">--</strong>
-        <small>Trained model confidence score.</small>
+         <small>Reported training metric, not live accuracy.</small>
       </article>
       <article class="insight-summary-card">
         <span>Active capacity</span>
@@ -2674,20 +2678,86 @@ function _delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function fetchWithRetry(url, options, retries = 1, backoffMs = 1500) {
+const _requestMemoryCache = new Map();
+const _requestInflight = new Map();
+
+function _requestCacheTtl(url) {
+  let path = url;
+  try { path = new URL(url, window.location.href).pathname; } catch (_) {}
+  if (path === '/api/stats' || path === '/api/occupancy') return 0;
+  if (path === '/api/history') return 5000;
+  if (path === '/api/predictions') return 30000;
+  if (path === '/api/predictions/hourly-by-day') return 60000;
+  if (path === '/api/insights') return 15000;
+  if (path === '/api/ml/dashboard' || path === '/api/ml/metrics') return 30000;
+  if (path === '/api/revenue/dashboard') return 30000;
+  if (path === '/api/payments/recent') return 10000;
+  if (path === '/api/gcash/status' || path === '/api/gcash/issues') return 15000;
+  if (path.startsWith('/api/settings/')) return 60000;
+  return 0;
+}
+
+function _responseFromJson(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { 'Content-Type': 'application/json', 'X-OccupAI-Cache': 'HIT' },
+  });
+}
+
+async function _networkGet(url, options, retries, backoffMs) {
   try {
     return await fetch(url, options);
   } catch (err) {
     if (retries > 0) {
       await _delay(backoffMs);
-      return fetchWithRetry(url, options, retries - 1, backoffMs);
+      return _networkGet(url, options, retries - 1, backoffMs);
     }
     throw err;
   }
 }
 
-function staggerCalls(fns, gapMs = 120) {
-  fns.forEach((fn, i) => setTimeout(fn, i * gapMs));
+async function fetchWithRetry(url, options, retries = 1, backoffMs = 1500) {
+  const method = String(options?.method || 'GET').toUpperCase();
+  const noStore = options?.cache === 'no-store';
+  const ttl = method === 'GET' && !noStore ? _requestCacheTtl(url) : 0;
+  if (!ttl) return _networkGet(url, options, retries, backoffMs);
+
+  const key = `${cacheScope()}|${url}`;
+  const memory = _requestMemoryCache.get(key);
+  if (memory && Date.now() - memory.savedAt < ttl) {
+    return _responseFromJson(memory.data, memory.status);
+  }
+
+  const persisted = cacheGet(`request:${url}`, ttl);
+  if (persisted != null) {
+    const entry = { data: persisted, savedAt: Date.now(), status: 200 };
+    _requestMemoryCache.set(key, entry);
+    return _responseFromJson(entry.data);
+  }
+
+  const current = _requestInflight.get(key);
+  if (current) return current.then(entry => _responseFromJson(entry.data, entry.status));
+
+  const pending = (async () => {
+    const response = await _networkGet(url, options, retries, backoffMs);
+    if (!response.ok) return { data: null, status: response.status };
+    try {
+      const data = await response.clone().json();
+      const entry = { data, savedAt: Date.now(), status: response.status };
+      _requestMemoryCache.set(key, entry);
+      cacheSet(`request:${url}`, data);
+      return entry;
+    } catch (_) {
+      return { data: null, status: response.status, response };
+    }
+  })();
+  _requestInflight.set(key, pending);
+  try {
+    const entry = await pending;
+    return entry.response || _responseFromJson(entry.data, entry.status);
+  } finally {
+    _requestInflight.delete(key);
+  }
 }
 
 // Stale-while-revalidate cache for read-only panel data (localStorage, so it
@@ -2698,10 +2768,28 @@ function staggerCalls(fns, gapMs = 120) {
 // instead of a blank "--" while the first real fetch is in flight.
 const CACHE_PREFIX = 'occupai_cache_';
 
+function cacheScope() {
+  const stored = getStoredUser();
+  const id = stored?.user_id ?? 'anonymous';
+  const role = String(stored?.role || 'user').toLowerCase();
+  return `${id}_${role}`;
+}
+
+function _cacheStorageKey(key) {
+  return `${CACHE_PREFIX}${cacheScope()}_${encodeURIComponent(key)}`;
+}
+
 function cacheGet(key) {
   try {
-    const raw = localStorage.getItem(CACHE_PREFIX + key);
-    return raw ? JSON.parse(raw) : null;
+    const raw = localStorage.getItem(_cacheStorageKey(key));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && Object.prototype.hasOwnProperty.call(parsed, 'data')) {
+      const maxAge = arguments.length > 1 ? arguments[1] : Infinity;
+      if (Date.now() - Number(parsed.savedAt || 0) >= maxAge) return null;
+      return parsed.data;
+    }
+    return parsed;
   } catch (e) {
     return null;
   }
@@ -2709,11 +2797,31 @@ function cacheGet(key) {
 
 function cacheSet(key, data) {
   try {
-    localStorage.setItem(CACHE_PREFIX + key, JSON.stringify(data));
+    localStorage.setItem(_cacheStorageKey(key), JSON.stringify({
+      savedAt: Date.now(),
+      data,
+    }));
   } catch (e) {
     // Storage full or unavailable (private browsing) — caching is a nicety,
     // not something worth failing the page load over.
   }
+}
+
+function clearDashboardCache() {
+  _requestMemoryCache.clear();
+  _requestInflight.clear();
+  try {
+    const prefix = `${CACHE_PREFIX}${cacheScope()}_`;
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(prefix)) localStorage.removeItem(key);
+    }
+  } catch (_) {}
+}
+
+function invalidateDashboardCache() {
+  clearDashboardCache();
+  _panelLoadedAt.clear();
 }
 
 function setSkeleton(selector, isLoading) {
@@ -2745,6 +2853,7 @@ if (user) {
 }
 
 function signOut() {
+  clearDashboardCache();
   localStorage.removeItem('occupai_user');
   fetch('/auth/logout', { method: 'POST' }).catch(() => {});
   window.location.href = '/login';
@@ -2909,6 +3018,7 @@ async function setLayoutMode(mode) {
     if (!r.ok) throw new Error(r.status);
     const d = await r.json();
     setLayoutUi(d.mode || normalized, false, Boolean(d.enabled));
+    invalidateDashboardCache();
     const hint = document.getElementById('layoutModeHint');
     if (hint) hint.textContent = 'Saved. Detector updates within about 30 seconds.';
   } catch (e) {
@@ -2930,6 +3040,7 @@ async function toggleLayoutOverride() {
     if (!r.ok) throw new Error(r.status);
     const d = await r.json();
     setLayoutUi(d.mode || layoutSelectedMode, false, Boolean(d.enabled));
+    invalidateDashboardCache();
     const hint = document.getElementById('layoutModeHint');
     if (hint) {
       hint.textContent = d.enabled
@@ -3044,6 +3155,7 @@ async function fetchDiscountSettings() {
     const r = await fetchWithRetry('/api/settings/discounts');
     if (!r.ok) throw new Error(r.status);
     setDiscountUi(await r.json(), false);
+    invalidateDashboardCache();
   } catch (e) {
     console.warn('Could not load discount settings:', e);
   }
@@ -3061,6 +3173,7 @@ async function toggleDiscountSetting(kind) {
     });
     if (!r.ok) throw new Error(r.status);
     setDiscountUi(await r.json(), false);
+    invalidateDashboardCache();
   } catch (e) {
     setDiscountUi({ ...discountSettings, [key]: !nextValue }, false);
   }
@@ -3176,6 +3289,7 @@ async function saveDurationPricingSettings() {
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || d.error || r.status);
     setDurationPricingUi(d, false);
+    invalidateDashboardCache();
     onPaymentVehicleTypeChange();
     await fetchRevenueDashboard();
   } catch (e) {
@@ -3220,6 +3334,7 @@ async function saveCapacitySettings() {
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || d.error || r.status);
     setCapacityUi(d, false);
+    invalidateDashboardCache();
     await Promise.all([fetchPredictions(), fetchRevenueDashboard(), fetchInsights().catch(() => {})]);
   } catch (e) {
     setCapacityUi(previous, false);
@@ -3252,6 +3367,7 @@ async function savePricingSettings(forceEnabled = true) {
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || d.error || r.status);
     setPricingUi(d, false);
+    invalidateDashboardCache();
     await Promise.all([fetchPredictions(), fetchRevenueDashboard(), fetchInsights().catch(() => {})]);
   } catch (e) {
     setPricingUi(previous, false);
@@ -3275,6 +3391,7 @@ async function togglePricingOverride() {
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || d.error || r.status);
     setPricingUi(d, false);
+    invalidateDashboardCache();
     await Promise.all([fetchPredictions(), fetchRevenueDashboard(), fetchInsights().catch(() => {})]);
   } catch (e) {
     setPricingUi(previous, false);
@@ -3294,9 +3411,7 @@ function switchPanel(name, btn) {
   document.getElementById('pageTitle').textContent = meta.title;
   document.getElementById('pageSub').textContent = meta.sub;
 
-  if (name === 'insights') { staggerCalls([fetchInsights, fetchMlConfidence]); }
-  if (name === 'revenue') { staggerCalls([fetchRevenueDashboard, fetchTransactionLogs]); }
-  if (name === 'predictions') { staggerCalls([fetchFullPredictions, fetchMlConfidence, fetchHeatmap]); }
+  _loadPanelData(name);
 }
 
 function cleanText(value) {
@@ -3343,6 +3458,50 @@ function setConnected(ok) {
 function isPanelActive(name) {
   const panel = document.getElementById('content-' + name);
   return Boolean(panel && panel.classList.contains('active'));
+}
+
+const _panelLoadedAt = new Map();
+const _panelInflight = new Map();
+const _panelTtls = {
+  overview: 10000,
+  revenue: 30000,
+  livefeed: 5000,
+  insights: 15000,
+  predictions: 30000,
+  reports: 30000,
+  settings: 60000,
+};
+
+function _loadPanelData(name, force = false) {
+  const ttl = _panelTtls[name] || 30000;
+  const previous = _panelLoadedAt.get(name) || 0;
+  if (!force && Date.now() - previous < ttl) return;
+  const inFlight = _panelInflight.get(name);
+  if (inFlight) return inFlight;
+
+  let requests = [];
+  if (name === 'overview') {
+    requests = [fetchStats, fetchHistory, fetchPredictions, fetchRevenueDashboard, fetchInsights, fetchGcashIssues];
+  } else if (name === 'revenue') {
+    requests = [fetchRevenueDashboard, fetchTransactionLogs];
+  } else if (name === 'insights') {
+    requests = [fetchInsights, fetchMlConfidence];
+  } else if (name === 'predictions') {
+    requests = [fetchFullPredictions, fetchMlConfidence, fetchHeatmap];
+  } else if (name === 'reports') {
+    requests = [fetchReports];
+  } else if (name === 'settings') {
+    requests = [fetchLayoutMode, fetchPricingSettings, fetchDiscountSettings,
+      fetchCapacitySettings, fetchDurationPricingSettings];
+  }
+  if (!requests.length) return;
+
+  const pending = Promise.all(requests.map(request => request())).finally(() => {
+    _panelInflight.delete(name);
+    _panelLoadedAt.set(name, Date.now());
+  });
+  _panelInflight.set(name, pending);
+  return pending;
 }
 
 function liveStatusText(stats) {
@@ -3608,6 +3767,17 @@ function renderFullPredictions(payload) {
   setText('predFullTodayRevenue', d.today_revenue_forecast != null
     ? formatPhp(d.today_revenue_forecast) : '--');
   setText('predFullTs', d.generated_at_ph ? `Generated ${cleanText(d.generated_at_ph)}` : '--');
+  const hourlySource = d.hourly_source === 'last_7_days'
+    ? 'Recent parking logs'
+    : d.hourly_source === 'training_data_fallback'
+      ? 'Historical training data'
+      : 'Unavailable';
+  const revenueSource = d.revenue_source === 'deduplicated_live_logs'
+    ? 'Recent parking logs'
+    : d.revenue_source === 'training_data_fallback'
+      ? 'Historical training data'
+      : 'Unavailable';
+  setText('predFullSource', `Forecast: ${hourlySource} · Revenue: ${revenueSource}`);
   if (payload.currentOccPct != null) {
     setText('predFullCurrentOcc', `${Math.round(payload.currentOccPct)}%`);
   }
@@ -3674,7 +3844,7 @@ function renderFullPredictions(payload) {
 }
 
 async function fetchFullPredictions() {
-  const cached = cacheGet(PREDICTIONS_CACHE_KEY);
+  const cached = cacheGet(PREDICTIONS_CACHE_KEY, 30000);
   if (cached) {
     renderFullPredictions(cached);
   } else {
@@ -3682,18 +3852,17 @@ async function fetchFullPredictions() {
   }
 
   try {
-    const r = await fetchWithRetry('/api/predictions');
-    if (!r.ok) throw new Error(r.status);
-    const d = await r.json();
-
     let currentOccPct = cached ? cached.currentOccPct : null;
-    try {
-      const statsR = await fetchWithRetry('/api/stats');
-      if (statsR.ok) {
-        const s = await statsR.json();
-        currentOccPct = s.occupancy_pct ?? (s.total ? Math.round((s.occupied || 0) / s.total * 100) : 0);
-      }
-    } catch (_) {}
+    const [predictionResult, statsResult] = await Promise.all([
+      fetchWithRetry('/api/predictions'),
+      fetchWithRetry('/api/stats'),
+    ]);
+    if (!predictionResult.ok) throw new Error(predictionResult.status);
+    const d = await predictionResult.json();
+    if (statsResult.ok) {
+      const s = await statsResult.json();
+      currentOccPct = s.occupancy_pct ?? (s.total ? Math.round((s.occupied || 0) / s.total * 100) : 0);
+    }
 
     const payload = { predictions: d, currentOccPct };
     cacheSet(PREDICTIONS_CACHE_KEY, payload);
@@ -3914,7 +4083,7 @@ function renderRevenueCharts(d) {
 
 async function fetchRevenueDashboard() {
   try {
-    const r = await fetchWithRetry('/api/revenue/dashboard', { cache: 'no-store', headers: authHeaders() });
+    const r = await fetchWithRetry('/api/revenue/dashboard', { headers: authHeaders() });
     if (!r.ok) {
       let detail = r.status;
       try { const errBody = await r.json(); detail = errBody.detail || errBody.error || detail; } catch (_) {}
@@ -4098,6 +4267,7 @@ async function recordPayment() {
     document.getElementById('paymentDiscount').value = 'none';
     onPaymentDiscountChange();
     txLogsOffset = 0;
+    invalidateDashboardCache();
     await Promise.all([fetchRevenueDashboard(), fetchTransactionLogs()]);
   } catch (e) {
     if (status) status.textContent = cleanText(e.message || 'Could not record payment.');
@@ -4322,7 +4492,7 @@ function renderMlConfidence(d) {
 }
 
 async function fetchMlConfidence() {
-  const cached = cacheGet(ML_CONFIDENCE_CACHE_KEY);
+  const cached = cacheGet(ML_CONFIDENCE_CACHE_KEY, 30000);
   if (cached) {
     renderMlConfidence(cached);
   } else {
@@ -4398,14 +4568,12 @@ function renderRecommendationCards(items) {
 
 async function fetchInsights() {
   try {
-    const staggeredFetch = (url, delayMs) =>
-      _delay(delayMs).then(() => fetchWithRetry(url)).catch(() => null);
     const [r, statsReq, predReq, hourlyReq, histReq] = await Promise.all([
       fetchWithRetry('/api/insights'),
-      staggeredFetch('/api/stats', 100),
-      staggeredFetch('/api/predictions', 200),
-      staggeredFetch('/api/predictions/hourly-by-day', 300),
-      staggeredFetch('/api/history', 400),
+      fetchWithRetry('/api/stats'),
+      fetchWithRetry('/api/predictions'),
+      fetchWithRetry('/api/predictions/hourly-by-day'),
+      fetchWithRetry('/api/history'),
     ]);
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
@@ -4476,6 +4644,7 @@ async function forceRefreshInsights() {
   try {
     const r = await fetch('/api/insights/refresh', { method: 'POST', headers: authHeaders() });
     if (!r.ok) throw new Error('Refresh request failed: ' + r.status);
+    invalidateDashboardCache();
     setTimeout(async () => {
       try {
         await fetchInsights();
@@ -4600,33 +4769,27 @@ initTheme();
 if (isAuthorizedAdmin) {
   // Spread the initial load out instead of firing ~12 requests in the same
   // instant — see the fetchWithRetry/staggerCalls comment above for why.
-  staggerCalls([
-    fetchLayoutMode,
-    fetchPricingSettings,
-    fetchDiscountSettings,
-    fetchCapacitySettings,
-    fetchDurationPricingSettings,
-    fetchStats,
-    fetchHistory,
-    fetchPredictions,
-    fetchRevenueDashboard,
-    fetchTransactionLogs,
-    fetchInsights,
-    fetchGcashIssues,
-  ]);
+  _loadPanelData('overview', true);
 
   // Several of these share a 30s (or a multiple of it) period, which would
   // otherwise re-synchronize into the same repeating burst — offset each
   // one's start slightly so their ticks land apart instead of together.
-  setInterval(fetchGcashIssues, 60000);
+  setInterval(() => {
+    if (isPanelActive('overview') || isPanelActive('revenue')) fetchGcashIssues();
+  }, 60000);
   setInterval(fetchStats, 3000);
-  setInterval(fetchHistory, 5000);
-  setInterval(fetchInsights, 10000);
-  setTimeout(() => setInterval(fetchPredictions, 30000), 100);
-  setTimeout(() => setInterval(fetchRevenueDashboard, 30000), 250);
-  setTimeout(() => setInterval(fetchLayoutMode, 30000), 400);
-  setTimeout(() => setInterval(fetchPricingSettings, 30000), 550);
-  setTimeout(() => setInterval(fetchDiscountSettings, 30000), 700);
+  setInterval(() => {
+    if (isPanelActive('overview') || isPanelActive('livefeed')) fetchHistory();
+  }, 5000);
+  setInterval(() => {
+    if (isPanelActive('overview') || isPanelActive('insights')) fetchInsights();
+  }, 30000);
+  setInterval(() => {
+    if (isPanelActive('overview') || isPanelActive('predictions') || isPanelActive('insights')) fetchPredictions();
+  }, 30000);
+  setInterval(() => {
+    if (isPanelActive('overview') || isPanelActive('revenue') || isPanelActive('reports')) fetchRevenueDashboard();
+  }, 30000);
 }
 </script>
 
@@ -4960,16 +5123,7 @@ function downloadReportPDF() {
   w.document.close();
 }
 
-// Auto-load reports when switching to reports panel
-document.addEventListener('DOMContentLoaded', function() {
-  const origSwitch = window.switchPanel;
-  if (origSwitch) {
-    window.switchPanel = function(name, btn) {
-      origSwitch(name, btn);
-      if (name === 'reports') fetchReports();
-    };
-  }
-});
+// Reports are loaded by the shared panel loader when first opened.
 </script>
 </body>
 </html>

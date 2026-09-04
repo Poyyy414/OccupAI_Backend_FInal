@@ -12,6 +12,13 @@ class UserLogin(BaseModel):
     email:    str = Field(min_length=3, max_length=254)
     password: str = Field(min_length=1, max_length=128)
 
+class ForgotPasswordPayload(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+
+class ResetPasswordPayload(BaseModel):
+    token: str = Field(min_length=32, max_length=256)
+    password: str = Field(min_length=8, max_length=128)
+
 class YoloUpdate(BaseModel):
     occupied:      int      = Field(ge=0)
     free:          int      = Field(default=0, ge=0)

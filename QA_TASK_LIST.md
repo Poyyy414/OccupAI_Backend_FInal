@@ -31,6 +31,10 @@ Audit scope: FastAPI backend, YOLO/camera integration, admin/driver web dashboar
 - [x] Fix the GCash success-page error branch so a confirmed payment-recording failure is shown as reconciliation-required instead of being misreported as still pending.
 - [x] Align daily duration pricing with the approved flat rates: PHP 50 for cars and PHP 25 for motorcycles; migrate only the old bundled 150/80 defaults.
 - [x] Increase the mobile driver KPI tile height so large accessibility text does not overflow on compact phones.
+- [x] Replace the legacy AI badge with the shared OccupAI parking-garage logo in web and Flutter branding.
+- [x] Add web and mobile forgot-password entry points with hashed, single-use, expiring reset tokens.
+- [x] Make driver KPI, hourly prediction, and revenue cards responsive to accessibility text scaling; add compact-screen regression tests.
+- [x] Document admin web, driver web, admin app, driver app, and backend functions in [OCCUPAI_FUNCTION_INVENTORY.docs](OCCUPAI_FUNCTION_INVENTORY.docs).
 
 ## Priority 0: required before deployment
 
@@ -112,7 +116,7 @@ Audit scope: FastAPI backend, YOLO/camera integration, admin/driver web dashboar
 - Backend: `.venv311\Scripts\python.exe -m pytest -q` — **34 passed** (5 non-failing model-artifact compatibility warnings remain; pin/retrain artifacts before a strict reproducibility release).
 - Backend: `python -m py_compile backend/main.py backend/models.py backend/db.py` — **passed**.
 - Backend: route/model smoke check — protected routes loaded and bounded YOLO validation loaded.
-- Flutter: `flutter test` — **5 passed**.
+- Flutter: `flutter test --dart-define=API_BASE_URL=` — **7 passed**, including forgot-password validation and compact large-text overflow regressions.
 - Flutter: `flutter analyze` — **no issues**.
 - Android: `flutter build apk --debug` — **passed**; generated `build/app/outputs/flutter-apk/app-debug.apk` after the secure-storage/configuration changes. Gradle emitted only the existing Java 8 deprecation warnings and recovered from a Kotlin daemon connection retry.
 
@@ -121,6 +125,7 @@ Audit scope: FastAPI backend, YOLO/camera integration, admin/driver web dashboar
 - Set unique production values for `CAM_TOKEN`, `AUTH_SECRET_KEY`, `ADMIN_PASSWORD`, and `PAYMONGO_WEBHOOK_SECRET`; keep `AUTH_COOKIE_SECURE=true`.
 - Register the PayMongo webhook at `/api/webhooks/paymongo` (the `/webhooks/paymongo` alias is also supported) and use the raw-body signature header from PayMongo.
 - Set exact HTTPS `ALLOWED_ORIGINS` and run the Flutter release build with the production `--dart-define=API_BASE_URL=...` value.
+- Set `PASSWORD_RESET_URL_BASE` to the public HTTPS backend URL and configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, and `SMTP_USE_TLS` so reset emails can be delivered.
 - Apply the database startup migrations/tables, then test two backend instances against the same database for revocation, lockout, rate limits, webhook retries, and payment idempotency.
 
 Real database connectivity, live camera hardware, browser rendering, Android accessibility/device behavior, two-POV camera operation, and real PayMongo transactions were not exercised in this environment and remain staging/manual test items above.

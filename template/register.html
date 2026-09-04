@@ -106,12 +106,12 @@
       width: 38px;
       height: 38px;
       border-radius: var(--radius);
-      background: linear-gradient(135deg, var(--green), var(--green-2));
-      color: #06110d;
-      font-family: "Space Mono", monospace;
-      font-weight: 800;
+      overflow: hidden;
+      background: #000;
       box-shadow: 0 14px 35px rgba(69, 223, 173, .26);
     }
+
+    .brand-mark img { width: 100%; height: 100%; object-fit: cover; display: block; }
 
     .brand-name { font-size: 20px; font-weight: 800; text-shadow: 0 2px 12px rgba(0,0,0,.3); }
     .brand-meta { margin-top: 2px; color: rgba(246, 249, 251, .68); font-size: 11px; text-transform: uppercase; letter-spacing: .16em; }
@@ -476,7 +476,7 @@
   <main class="page">
     <header class="topbar">
       <div class="brand">
-        <div class="brand-mark">AI</div>
+        <div class="brand-mark"><img src="/static/occupai_logo.png" alt="OccupAI logo" /></div>
         <div>
           <div class="brand-name">OccupAI</div>
           <div class="brand-meta">Parking Ops</div>
