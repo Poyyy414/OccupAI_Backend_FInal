@@ -61,11 +61,17 @@ def _es(k, d=""):
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 LOCAL_BACKEND_URL = os.getenv("LOCAL_BACKEND_URL", "http://127.0.0.1:8000")
+# Optional second destination for a detector running on a local computer.
+# This lets the same camera publish to localhost and the deployed backend.
+REMOTE_BACKEND_URL = os.getenv("REMOTE_BACKEND_URL", "")
 # A detector running without explicit mode must not silently use local
 # behavior or a development camera token.
 DEPLOY_MODE = os.getenv("DEPLOY_MODE", "production").strip().lower()
 PUSH_LOCAL_BACKEND = _eb("PUSH_LOCAL_BACKEND", DEPLOY_MODE == "local")
-PUSH_REMOTE_BACKEND = _eb("PUSH_REMOTE_BACKEND", DEPLOY_MODE != "local")
+PUSH_REMOTE_BACKEND = _eb(
+    "PUSH_REMOTE_BACKEND",
+    DEPLOY_MODE != "local" or bool(REMOTE_BACKEND_URL.strip()),
+)
 CAMERA_ID = re.sub(r"[^A-Za-z0-9_-]", "-", os.getenv("CAMERA_ID", "main").strip())[:40] or "main"
 CAMERA_ROLE = os.getenv("CAMERA_ROLE", "mixed").strip().lower()
 if CAMERA_ROLE not in {"mixed", "car", "motorcycle"}:
@@ -159,6 +165,7 @@ _stream_frame = None
 _stream_lock  = threading.Lock()
 _pushing      = False
 _push_lock    = threading.Lock()
+_push_health  = {}
 _cam_q: queue.Queue = queue.Queue(maxsize=1)
 _cam_ok      = True
 _cam_ok_lock = threading.Lock()
@@ -171,14 +178,15 @@ def _norm_url(url):
 
 def _backend_targets():
     targets = []
+    remote_target = REMOTE_BACKEND_URL.strip() or BACKEND_URL
     if DEPLOY_MODE == "local":
         candidates = (
             LOCAL_BACKEND_URL if PUSH_LOCAL_BACKEND else "",
-            BACKEND_URL if PUSH_REMOTE_BACKEND else "",
+            remote_target if PUSH_REMOTE_BACKEND else "",
         )
     else:
         candidates = (
-            BACKEND_URL,
+            remote_target,
             LOCAL_BACKEND_URL if PUSH_LOCAL_BACKEND else "",
         )
     for url in candidates:
@@ -659,9 +667,17 @@ def push_to_backend(occupied,free,total,pct,fps,zone_status,snapshot_frame,
                 r = requests.post(f"{target}/yolo/update",json=payload,
                                   headers=HEADERS,timeout=3)
                 if r.status_code >= 400:
-                    print(f"[push] {target}: HTTP {r.status_code} {r.text[:120]}")
+                    if _push_health.get(target) != r.status_code:
+                        print(f"[push] {target}: HTTP {r.status_code} {r.text[:120]}")
+                    _push_health[target] = r.status_code
+                else:
+                    if _push_health.get(target) is not True:
+                        print(f"[push] {target}: connected (HTTP {r.status_code})")
+                    _push_health[target] = True
             except Exception as e:
-                print(f"[push] {target}: {e}")
+                if _push_health.get(target) != "error":
+                    print(f"[push] {target}: {e}")
+                _push_health[target] = "error"
     except Exception as e: print(f"[push] {e}")
     finally:
         with _push_lock: _pushing=False
@@ -725,7 +741,8 @@ def detection_loop():
         adjuster=SlotAdjusterThread(
             slot_state=slot_state, models_dir=MODELS_DIR,
             db_fn=_fetch_db_history, frame_w=actual_w, frame_h=actual_h,
-            backend_url=BACKEND_URL, cam_token=CAM_TOKEN,
+            backend_url=REMOTE_BACKEND_URL.strip() or BACKEND_URL,
+            cam_token=CAM_TOKEN,
         )
         adjuster.start()
         print(f"[adjuster] Started — cycles every {SlotAdjusterThread.ADJUST_INTERVAL}s")
@@ -953,4 +970,10 @@ if __name__=='__main__':
     threading.Thread(target=start_mjpeg_server,daemon=True,
                      name="mjpeg-server").start()
     print(f"[mjpeg] Streaming on :{STREAM_PORT}\n")
+    targets = _backend_targets()
+    print(f"[push] Targets: {', '.join(targets) if targets else 'none'}")
+    if any(target.startswith("http") and not target.startswith("http://127.0.0.1")
+           and not target.startswith("http://localhost") for target in targets):
+        if CAM_TOKEN == _CAM_TOKEN_LOCAL_DEFAULT:
+            print("[push] WARNING: remote target needs the same unique CAM_TOKEN configured in Render.")
     detection_loop()
