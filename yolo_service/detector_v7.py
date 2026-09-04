@@ -175,6 +175,18 @@ MIN_SLOTS         = _ei("MIN_SLOTS", 4)
 
 # MOG2 warmup frames when re-warming after layout change
 BG_REWARM_N = _ei("BG_REWARM_N", 20)
+# A valid parking scene may remain still for minutes.  Camera health must not
+# confuse that normal state with a blocked lens.  This timeout only detects a
+# capture pipeline that has stopped delivering fresh frames.
+CAMERA_FRAME_TIMEOUT_SECONDS = max(
+    1.0, _ef("CAMERA_FRAME_TIMEOUT_SECONDS", 2.5)
+)
+# Keep a confirmed occupied slot briefly when one color-detection pass misses
+# it because of lighting/compression noise.  This prevents visible flicker
+# without making a removed vehicle look occupied for long.
+ZONE_DETECTION_HOLD_SECONDS = max(
+    0.0, _ef("ZONE_DETECTION_HOLD_SECONDS", 1.2)
+)
 
 HEADERS = {"x-cam-token": CAM_TOKEN, "Content-Type": "application/json"}
 
@@ -186,6 +198,8 @@ _push_health  = {}
 _cam_q: queue.Queue = queue.Queue(maxsize=1)
 _cam_ok      = True
 _cam_ok_lock = threading.Lock()
+_cam_last_frame_at = 0.0
+_cam_frame_lock = threading.Lock()
 
 slot_state = SlotState()
 
@@ -274,11 +288,27 @@ def _save_debug_zones(frame_or_bg, slots):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def is_blocked(frame, prev_gray):
+    """Return whether a frame is unusable, not whether it is unchanged.
+
+    A parked lot is expected to be visually unchanged between health checks.
+    The old frame-difference test therefore marked healthy car cameras as
+    blocked whenever no vehicle moved.  Only empty/invalid frames are blocked
+    here; capture freshness is checked separately in the main loop.
+    """
+    if frame is None or getattr(frame, "size", 0) == 0:
+        return True, prev_gray
+
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    if prev_gray is None: return False, gray
-    diff = float(np.mean(np.abs(
-        gray.astype(np.float32) - prev_gray.astype(np.float32))))
-    return diff < STATIC_THRESH, gray
+    mean = float(np.mean(gray))
+    spread = float(np.std(gray))
+    # A truly black/white or nearly uniform image is what the detector can
+    # identify reliably as a covered, disabled, or unusable camera feed.
+    unusable = (
+        mean <= 4.0 or
+        mean >= 251.0 or
+        spread <= 1.0
+    )
+    return unusable, gray
 
 
 def edge_region_diff(fg, rg):
@@ -599,6 +629,7 @@ def draw_scanning(frame, msg="LOADING LAYOUT..."):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def camera_reader(cap, tw, th):
+    global _cam_last_frame_at
     while True:
         try:
             ret,f=cap.read()
@@ -608,6 +639,8 @@ def camera_reader(cap, tw, th):
             continue
         if not ret or f is None: time.sleep(0.005); continue
         if f.shape[1]!=tw or f.shape[0]!=th: f=cv2.resize(f,(tw,th))
+        with _cam_frame_lock:
+            _cam_last_frame_at = time.monotonic()
         if _cam_q.full():
             try: _cam_q.get_nowait()
             except queue.Empty: pass
@@ -810,6 +843,7 @@ def detection_loop():
     last_push_t=0.0
     last_sent_total=None
     last_sent_zones={}
+    last_zone_seen = {}
 
     consecutive_errors=0
     while True:
@@ -828,6 +862,10 @@ def detection_loop():
                 with _cam_ok_lock: _cam_ok=not blocked
 
             with _cam_ok_lock: cam_ok=_cam_ok
+            with _cam_frame_lock:
+                frame_age = time.monotonic() - _cam_last_frame_at
+            if frame_age > CAMERA_FRAME_TIMEOUT_SECONDS:
+                cam_ok = False
 
             # ── MOG2 rewarm when layout changes (fixes false OCC after switch) ────
             if slot_state.check_and_clear_bg_reset() and not rewarming:
@@ -913,16 +951,30 @@ def detection_loop():
                 all_b = toy_b if TOY_ONLY_DETECTION else (yolo_b + toy_b)
                 all_t = toy_t if TOY_ONLY_DETECTION else (yolo_t + toy_t)
                 if CAMERA_ROLE != "mixed":
-                    detected = [
-                        (box, kind)
-                        for box, kind in zip(all_b, all_t)
-                        if kind == CAMERA_ROLE
-                    ]
-                    all_b = [box for box, _ in detected]
-                    all_t = [kind for _, kind in detected]
+                    # A dedicated camera already defines the vehicle type.
+                    # Do not discard a small toy car that the blob-size
+                    # heuristic classified as a motorcycle (or the reverse).
+                    # Every valid detection in the car feed belongs to cars;
+                    # every valid detection in the motorcycle feed belongs to
+                    # motorcycles.
+                    all_t = [CAMERA_ROLE for _ in all_b]
                 zone_status, assigned_boxes = assign_occupancy(
                     active, fg, all_b, use_bg=USE_BG_OCCUPANCY
                 )
+                # Keep an occupied zone stable across an occasional missed
+                # color pass.  The next confirmed empty frame clears it after
+                # the short hold window, so live departures remain responsive.
+                for name in list(last_zone_seen):
+                    if name not in active:
+                        last_zone_seen.pop(name, None)
+                for name, occupied_now in zone_status.items():
+                    if occupied_now:
+                        last_zone_seen[name] = now
+                    elif (
+                        now - last_zone_seen.get(name, 0.0)
+                        <= ZONE_DETECTION_HOLD_SECONDS
+                    ):
+                        zone_status[name] = True
             else:
                 zone_status={name:False for name in active}
                 assigned_boxes=[]

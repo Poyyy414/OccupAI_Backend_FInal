@@ -966,7 +966,7 @@
 
     .dual-feed-grid {
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: minmax(0, 1fr);
       gap: 16px;
     }
 
@@ -1063,7 +1063,9 @@
     .stream-wrap {
       position: relative;
       overflow: hidden;
-      aspect-ratio: 16 / 9;
+      /* The detector sends 640x480 landscape frames. Matching that ratio
+         keeps the whole image visible and makes the parking toys larger. */
+      aspect-ratio: 4 / 3;
       background: #030507;
     }
 
@@ -1089,6 +1091,25 @@
       color: var(--muted);
       text-align: center;
       font-size: 13px;
+    }
+
+    .stream-placeholder.blocked {
+      background:
+        linear-gradient(135deg, rgba(255, 92, 122, .14), transparent),
+        var(--surface);
+    }
+
+    .stream-placeholder.blocked .camera-mark {
+      border-color: var(--red);
+      color: var(--red);
+    }
+
+    .camera-status-message.blocked {
+      color: var(--red);
+      font-family: "Space Mono", monospace;
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: .08em;
     }
 
     .camera-mark {
@@ -2208,7 +2229,7 @@
               <img id="carStreamImg" class="mjpeg" alt="Car parking live feed" onerror="onCameraStreamError(this, 'car')" onload="onCameraStreamLoad(this, 'car')" style="display:none" />
               <div class="stream-placeholder" id="carStreamPlaceholder">
                 <div class="camera-mark">CAR</div>
-                <div id="carStreamStatusMsg">Waiting for car camera data...</div>
+                <div id="carStreamStatusMsg" class="camera-status-message">Waiting for car camera data...</div>
                 <div class="mono" style="font-size:11px;color:var(--muted)">Start the car detector to show this feed.</div>
               </div>
               <div class="stream-badge" id="carStreamBadge" style="display:none"><div class="bdot"></div> LIVE</div>
@@ -2237,7 +2258,7 @@
               <img id="motorcycleStreamImg" class="mjpeg" alt="Motorcycle parking live feed" onerror="onCameraStreamError(this, 'motorcycle')" onload="onCameraStreamLoad(this, 'motorcycle')" style="display:none" />
               <div class="stream-placeholder" id="motorcycleStreamPlaceholder">
                 <div class="camera-mark">MOTO</div>
-                <div id="motorcycleStreamStatusMsg">Waiting for motorcycle camera data...</div>
+                <div id="motorcycleStreamStatusMsg" class="camera-status-message">Waiting for motorcycle camera data...</div>
                 <div class="mono" style="font-size:11px;color:var(--muted)">Start the motorcycle detector to show this feed.</div>
               </div>
               <div class="stream-badge" id="motorcycleStreamBadge" style="display:none"><div class="bdot"></div> LIVE</div>
@@ -3598,9 +3619,11 @@ const CAMERA_CARD_CONFIG = {
 };
 
 const _cameraStreamState = {
-  car: { cameraId: '', endpoint: '', retries: 0, timer: null, error: false },
-  motorcycle: { cameraId: '', endpoint: '', retries: 0, timer: null, error: false },
+  car: { cameraId: '', endpoint: '', retries: 0, timer: null, error: false, missingSince: 0 },
+  motorcycle: { cameraId: '', endpoint: '', retries: 0, timer: null, error: false, missingSince: 0 },
 };
+
+const CAMERA_BLOCKED_AFTER_MS = 10000;
 
 function cameraForCard(cameras, cardKey) {
   const config = CAMERA_CARD_CONFIG[cardKey];
@@ -3630,6 +3653,8 @@ function updateCameraCard(cardKey, cameras) {
   const statusMsg = document.getElementById(cameraCardElementId(cardKey, 'StatusMsg'));
 
   if (!match) {
+    if (!state.missingSince) state.missingSince = Date.now();
+    const blocked = Date.now() - state.missingSince >= CAMERA_BLOCKED_AFTER_MS;
     state.cameraId = '';
     state.endpoint = '';
     state.retries = 0;
@@ -3640,14 +3665,31 @@ function updateCameraCard(cardKey, cameras) {
       img.dataset.endpoint = '';
       img.style.display = 'none';
     }
-    if (placeholder) placeholder.style.display = 'flex';
+    if (placeholder) {
+      placeholder.style.display = 'flex';
+      placeholder.classList.toggle('blocked', blocked);
+    }
     if (badge) badge.style.display = 'none';
-    if (inline) { inline.textContent = 'Waiting'; inline.className = 'status-chip warn'; }
-    if (endpointLabel) endpointLabel.textContent = `Waiting for ${config.noun} camera`;
-    if (statusMsg) statusMsg.textContent = `Waiting for ${config.noun} camera data...`;
+    if (inline) {
+      inline.textContent = blocked ? 'Blocked' : 'Waiting';
+      inline.className = blocked ? 'status-chip bad' : 'status-chip warn';
+    }
+    if (endpointLabel) endpointLabel.textContent = blocked
+      ? `${config.label} is not reporting`
+      : `Waiting for ${config.noun} camera`;
+    if (statusMsg) {
+      statusMsg.textContent = blocked
+        ? 'CAMERA BLOCKED'
+        : `Waiting for ${config.noun} camera data...`;
+      statusMsg.classList.toggle('blocked', blocked);
+    }
     for (const suffix of ['Occ', 'Free', 'Total', 'Pct']) setText(cardKey + suffix, '--');
     return;
   }
+
+  state.missingSince = 0;
+  if (placeholder) placeholder.classList.remove('blocked');
+  if (statusMsg) statusMsg.classList.remove('blocked');
 
   const endpoint = '/api/stream?camera_id=' + encodeURIComponent(match.id);
   const cameraChanged = state.cameraId !== match.id || state.endpoint !== endpoint;
