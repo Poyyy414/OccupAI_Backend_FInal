@@ -1794,6 +1794,93 @@
       0% { background-position: 100% 50%; }
       100% { background-position: 0% 50%; }
     }
+
+    /* Compact header and mobile navigation drawer. */
+    .topbar { align-items: center; min-height: 80px; flex-shrink: 0; padding: 10px 24px; gap: 16px; }
+    .topbar-heading { min-width: 0; }
+    .page-title { font-size: 22px; }
+    .page-sub { overflow-wrap: anywhere; }
+    .logo { min-height: 80px; }
+    .mobile-menu-toggle, .mobile-menu-close, .menu-backdrop, .mobile-page-context { display: none; }
+    .mobile-menu-toggle, .mobile-menu-close { align-items: center; justify-content: center; flex-shrink: 0; width: 44px; height: 44px; border-radius: var(--radius); color: var(--text); background: var(--surface-2); }
+    .mobile-menu-toggle:focus-visible, .mobile-menu-close:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+    .mobile-menu-toggle .icon { width: 22px; height: 22px; }
+    .mobile-menu-close { margin-left: auto; order: 1; font-size: 28px; }
+    @media (max-width: 840px) {
+      body.menu-open { overflow: hidden; }
+      .sidebar { position: fixed; inset: 0 auto 0 0; z-index: 60; width: min(300px, calc(100vw - 48px)); height: 100vh; height: 100dvh; overflow-y: auto; visibility: hidden; transform: translateX(-100%); transition: transform .2s ease, visibility .2s; }
+      body.menu-open .sidebar { visibility: visible; transform: translateX(0); }
+      .sidebar .logo { min-height: 64px; padding: 10px 12px; flex-shrink: 0; gap: 10px; }
+      .sidebar .logo-icon { width: 32px; height: 32px; }
+      .sidebar .nav { flex-direction: column; overflow: visible; padding: 12px; }
+      .sidebar .nav-item { width: 100%; min-height: 44px; }
+      .sidebar-footer { display: block; flex-shrink: 0; padding-bottom: max(16px, env(safe-area-inset-bottom)); }
+      .signout-btn { min-height: 44px; }
+      .mobile-menu-toggle, .mobile-menu-close { display: flex; }
+      .menu-backdrop:not([hidden]) { display: block; position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,.55); }
+      .main { width: 100%; min-height: 100vh; min-height: 100dvh; margin-left: 0; }
+      .topbar { position: sticky; top: 0; z-index: 30; display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; min-height: 64px; padding: 10px 12px; gap: 8px; }
+      .topbar .eyebrow { display: none; }
+      .topbar .page-title { margin: 0; font-size: 18px; line-height: 1.25; overflow-wrap: anywhere; }
+      .topbar-status { min-width: 0; max-width: 110px; align-items: flex-end; }
+      .topbar .status-pill { min-height: 28px; padding: 5px 8px; gap: 6px; font-size: 11px; max-width: 100%; }
+      .topbar .status-pill .dot { flex-shrink: 0; width: 6px; height: 6px; }
+      #connLabel { overflow-wrap: anywhere; min-width: 0; }
+      .topbar #fpsLabel, .topbar #updatedAt { display: none; }
+      .mobile-page-context { display: block; padding: 10px 18px 0; }
+      .mobile-page-context .page-sub { margin: 0; font-size: 12px; line-height: 1.5; }
+    }
+    @media (prefers-reduced-motion: reduce) { .sidebar { transition: none; } }
+
+    /* Responsive admin containers */
+    .feed-grid > *, .overview-grid > *, .overview-bottom-grid > * { min-width: 0; }
+    .content canvas { max-width: 100%; }
+    .empty-state { grid-column: 1 / -1; min-width: 0; overflow-wrap: anywhere; }
+
+    .content { min-width: 0; container-type: inline-size; }
+    .stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .stat-card { min-width: 0; min-height: 140px; padding: 16px; }
+    .stat-icon { flex-shrink: 0; }
+    .stat-label, .stat-sub, .panel-note, .payment-status, .report-footer { overflow-wrap: anywhere; }
+    .stat-value { line-height: 1.2; overflow-wrap: anywhere; }
+    #content-revenue .stat-value { font-size: 24px; }
+    .revenue-basis-note { color: var(--muted); font-size: 12px; line-height: 1.5; margin: -4px 0 16px; }
+    .panel-header, .revenue-head, .report-chart-title { flex-wrap: wrap; gap: 10px; }
+    .panel-header > *, .revenue-head > * { min-width: 0; }
+    .payment-form { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: end; gap: 12px; }
+    .payment-form label { font-size: 12px; }
+    .payment-input { min-width: 0; min-height: 40px; font-size: 14px; }
+    #paymentRecordBtn { min-height: 40px; }
+    .report-kpi-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .report-kpi, .insight-summary-card, .insight-card, .metric-box { min-width: 0; overflow-wrap: anywhere; }
+    .report-kpi strong { overflow-wrap: anywhere; }
+    .reports-tabs, .reports-actions { flex-wrap: wrap; }
+    .report-table-wrap { max-width: 100%; overflow-x: auto; }
+    .report-table { min-width: 620px; }
+    .report-chart-wrap, .trend-chart-wrap { min-width: 0; max-width: 100%; }
+    .insight-overview.cols-5 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    #insRecommendationCards { grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); }
+    #predFullGrid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .status-chip { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+    @container (min-width: 1500px) {
+      .stat-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+      .report-kpi-row { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .insight-overview.cols-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+    }
+    @container (max-width: 900px) {
+      .overview-grid, .feed-grid, .overview-bottom-grid { grid-template-columns: 1fr; }
+      .camera-occupancy-strip, .combined-camera-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @container (max-width: 760px) {
+      .stat-grid, .payment-form, .insight-overview, .insight-overview.cols-5, #predFullGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .summary-strip { grid-template-columns: 1fr; }
+    }
+    @container (max-width: 480px) {
+      .stat-grid, .payment-form, .report-kpi-row, .insight-overview, .insight-overview.cols-5, #predFullGrid, .insight-grid, .metric-row { grid-template-columns: 1fr; }
+      .stat-card { min-height: 0; }
+      .summary-item { flex-wrap: wrap; }
+      .summary-item strong { text-align: left; overflow-wrap: anywhere; }
+    }
 </style>
 </head>
 <body>
@@ -1816,8 +1903,9 @@
   <symbol id="i-dollar" viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M17 7.5c-1-1-2.5-1.5-4.2-1.5-2.5 0-4.3 1.1-4.3 2.8 0 4 9 2.1 9 6.4 0 1.7-1.8 2.8-4.6 2.8-2 0-3.8-.6-5-1.8"/></symbol>
   <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2.8 20h18.4L12 3Z"/><path d="M12 9v5"/><path d="M12 17h.01"/></symbol>
 </svg>
-<aside class="sidebar">
+<aside class="sidebar" id="dashboardSidebar" aria-label="Dashboard navigation">
   <div class="logo">
+    <button type="button" class="mobile-menu-close" id="mobileMenuClose" aria-label="Close navigation">&#215;</button>
     <div class="logo-icon"><img src="/static/occupai_logo.png" alt="OccupAI logo" /></div>
     <div class="logo-text">
       <div class="logo-name">OccupAI</div>
@@ -1868,9 +1956,13 @@
   </div>
 </aside>
 
-<main class="main">
+<button type="button" class="menu-backdrop" id="menuBackdrop" aria-label="Close navigation" tabindex="-1" hidden></button>
+<main class="main" id="dashboardMain">
   <header class="topbar">
-    <div>
+    <button type="button" class="mobile-menu-toggle" id="mobileMenuToggle" aria-label="Open navigation" aria-controls="dashboardSidebar" aria-expanded="false">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+    </button>
+    <div class="topbar-heading" id="topbarHeading">
       <div class="eyebrow" id="pageEyebrow">Real-time dashboard</div>
       <h1 class="page-title" id="pageTitle">Parking Overview</h1>
       <p class="page-sub" id="pageSub">105 Penafrancia Ave, Naga City - live occupancy and forecasts</p>
@@ -1884,6 +1976,7 @@
       <div class="meta" id="updatedAt">Updated --</div>
     </div>
   </header>
+  <div class="mobile-page-context" id="mobilePageContext"></div>
 
   <section class="content active" id="content-overview">
     <div class="gcash-alert-banner" id="gcashAlertBanner" style="display:none">
@@ -2097,7 +2190,7 @@
           <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-activity"></use></svg></div>
         </div>
         <div class="stat-value sz-lg" id="revenueLogCount">--</div>
-        <div class="stat-sub" id="revenueBasis">Actual recorded parking payments.</div>
+        <div class="stat-sub">Payments recorded</div>
       </article>
       <article class="stat-card">
         <div class="stat-top">
@@ -2108,6 +2201,8 @@
         <div class="stat-sub" id="gcashSub">of total payments</div>
       </article>
     </div>
+
+    <p class="revenue-basis-note" id="revenueBasis">Actual recorded parking payments.</p>
 
     <section class="panel-card feature" style="margin-bottom:16px">
       <div class="panel-header">
@@ -2484,7 +2579,7 @@
       <div class="panel-header">
         <span class="panel-title">Recommendation Cards</span>
       </div>
-      <div class="insight-grid" id="insRecommendationCards" style="grid-template-columns:repeat(auto-fit, minmax(260px, 1fr))">
+      <div class="insight-grid" id="insRecommendationCards" >
         <div class="empty-state"><strong>Analyzing...</strong>Recommendations will appear once insights are computed.</div>
       </div>
     </section>
@@ -2621,7 +2716,7 @@
         <span class="panel-note" id="predFullHourNote">--</span>
       </div>
       <div class="hour-bars" id="predFullHourBars" style="height:110px"></div>
-      <div class="pred-grid" id="predFullGrid" style="grid-template-columns:repeat(6, minmax(0, 1fr)); margin-top:14px">
+      <div class="pred-grid" id="predFullGrid" style="margin-top:14px">
         <div class="empty-state" style="grid-column:1/-1">
           <strong>Waiting for prediction data</strong>
           Forecasts will appear when the API responds.
@@ -2639,7 +2734,7 @@
       </div>
     </section>
 
-    <div class="insight-grid" style="grid-template-columns:repeat(2, minmax(0, 1fr)); margin-top:14px">
+    <div class="insight-grid" style="margin-top:14px">
       <article class="insight-card">
         <div class="insight-label">Busy days</div>
         <div class="insight-text" id="predFullBusyDays">
@@ -4337,7 +4432,7 @@ async function fetchRevenueDashboard() {
     setText('dailyRevenueMeta', `${d.today_transaction_count || d.today_entry_count || 0} payments / discount ${formatCompactPhp(d.today_discount_php || 0)}`);
     setText('weeklyRevenueMeta', `${d.week_transaction_count || 0} payments / discount ${formatCompactPhp(d.week_discount_php || 0)}`);
     setText('monthlyRevenueMeta', `${d.month_transaction_count || d.month_entry_count || 0} payments / discount ${formatCompactPhp(d.month_discount_php || 0)}`);
-    setText('revenueLogCount', `${d.log_count || 0} payments`);
+    setText('revenueLogCount', String(d.log_count || 0));
     setText('revenueBasis', cleanText(d.revenue_basis || 'Actual recorded parking payments.'));
     setText('revenueUpdatedAt', d.generated_at_ph ? `Updated ${String(d.generated_at_ph).slice(11, 16)}` : '--');
 
@@ -5403,6 +5498,63 @@ function downloadReportPDF() {
 }
 
 // Reports are loaded by the shared panel loader when first opened.
+</script>
+
+<script nonce="__OCCUPAI_CSP_NONCE__">
+// Kept independent of data loading so navigation also works while offline.
+(() => {
+  const sidebar = document.getElementById('dashboardSidebar');
+  const main = document.getElementById('dashboardMain');
+  const toggle = document.getElementById('mobileMenuToggle');
+  const close = document.getElementById('mobileMenuClose');
+  const backdrop = document.getElementById('menuBackdrop');
+  const mobile = window.matchMedia('(max-width: 840px)');
+  let open = false;
+  function setOpen(value, restoreFocus = true) {
+    open = value && mobile.matches;
+    document.body.classList.toggle('menu-open', open);
+    toggle.setAttribute('aria-expanded', String(open));
+    backdrop.hidden = !open;
+    main.inert = open;
+    sidebar.inert = mobile.matches && !open;
+    if (open) {
+      sidebar.setAttribute('role', 'dialog');
+      sidebar.setAttribute('aria-modal', 'true');
+      close.focus();
+    } else {
+      sidebar.removeAttribute('role');
+      sidebar.removeAttribute('aria-modal');
+      if (restoreFocus && mobile.matches) toggle.focus();
+    }
+  }
+  function syncViewport() {
+    const focusWasInHiddenControl = document.activeElement === toggle || document.activeElement === close;
+    const focusWasInSidebar = sidebar.contains(document.activeElement);
+    setOpen(false, false);
+    const sub = document.getElementById('pageSub');
+    document.getElementById(mobile.matches ? 'mobilePageContext' : 'topbarHeading').append(sub);
+    if (mobile.matches && focusWasInSidebar) toggle.focus();
+    if (!mobile.matches && focusWasInHiddenControl) sidebar.querySelector('.nav-item.active').focus();
+  }
+  toggle.addEventListener('click', () => setOpen(!open));
+  close.addEventListener('click', () => setOpen(false));
+  backdrop.addEventListener('click', () => setOpen(false));
+  sidebar.querySelector('.nav').addEventListener('click', event => {
+    if (event.target.closest('.nav-item') && open) setOpen(false);
+  });
+  document.addEventListener('keydown', event => {
+    if (!open) return;
+    if (event.key === 'Escape') { event.preventDefault(); setOpen(false); }
+    if (event.key === 'Tab') {
+      const items = [...sidebar.querySelectorAll('button:not([disabled]), a[href], [tabindex="0"]')].filter(el => el.getClientRects().length);
+      const first = items[0], last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    }
+  });
+  mobile.addEventListener('change', syncViewport);
+  syncViewport();
+})();
 </script>
 </body>
 </html>
