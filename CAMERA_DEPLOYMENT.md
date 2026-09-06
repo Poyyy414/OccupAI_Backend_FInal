@@ -34,8 +34,8 @@ the local and deployed destinations are not confused with one `BACKEND_URL`.
 ## Verify it
 
 1. Start the local FastAPI backend if localhost is also needed.
-2. Start the detector with `python .\\yolo_service\\detector_v7.py`.
-3. At startup, confirm the log prints both local and Render push targets.
+2. Start both workers with `.\\start_two_cameras.ps1`.
+3. At startup, confirm each worker prints both local and Render push targets.
 4. Confirm the detector logs successful `/yolo/update` requests, not HTTP 401,
    403, timeout, or connection errors.
 5. Open the Render dashboard and wait up to the camera-state timeout window.
@@ -48,32 +48,35 @@ works, check `PUSH_REMOTE_BACKEND=true` and the printed target list.
 ## Two-camera local setup
 
 The admin web Live Feed shows separate **Car Camera** and **Motorcycle Camera**
-cards. Run one detector process for each physical USB camera, using a different
-camera ID and stream port. The current car camera can remain `main`; using
-`car` is clearer once the second process is ready.
+cards. Camera identity is strict: the launcher starts exactly one process for
+each physical camera using these settings.
 
-Example settings for the second process:
+Motorcycle worker:
 
 ```text
-CAMERA_ID=motorcycle
+CAMERA_ID=motorcycles
 CAMERA_ROLE=motorcycle
 WEBCAM_INDEX=1
 STREAM_PORT=8002
 ```
 
-For a clean two-camera setup, use these values for the car process:
+Car worker:
 
 ```text
-CAMERA_ID=car
+CAMERA_ID=cars
 CAMERA_ROLE=car
 WEBCAM_INDEX=0
 STREAM_PORT=8001
 ```
 
-The backend combines fresh camera states for the overall total, while each
-camera card keeps its own occupied, free, capacity, and percentage values. Do
-not run the old `main` detector at the same time as the new `car` detector, or
-the same car lot may be counted twice.
+Do not start a third or legacy `main` worker. The launcher prevents duplicate
+launcher instances and fails if either required stream port is already in use.
+
+Each worker loads its fixed normalized boxes from
+`yolo_service/camera_layouts.json`: 10 car boxes and 20 motorcycle boxes. The
+backend publishes a combined occupied/free percentage only while both workers
+are fresh and reporting. Otherwise the combined occupancy is Unknown while
+the official configured capacity remains 30.
 
 ## Important stream limitation
 

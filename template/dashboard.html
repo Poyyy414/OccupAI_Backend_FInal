@@ -2493,19 +2493,8 @@
 
       <div class="setting-row" style="align-items:stretch;flex-direction:column">
         <div class="setting-copy">
-          <strong>Parking Capacity</strong>
-          <span id="capacityHint">10 car slot(s), 20 motorcycle slot(s) — 30 total.</span>
-        </div>
-        <div class="price-setting-controls">
-          <label class="price-input-wrap" aria-label="Car slot count">
-            <span>Car slots</span>
-            <input class="price-input" id="capacityInputCar" type="number" min="0" max="999" step="1" value="10" />
-          </label>
-          <label class="price-input-wrap" aria-label="Motorcycle slot count">
-            <span>Moto slots</span>
-            <input class="price-input" id="capacityInputMoto" type="number" min="0" max="999" step="1" value="20" />
-          </label>
-          <button class="setting-save-btn" id="capacitySaveBtn" onclick="saveCapacitySettings()">Save</button>
+          <strong>Official Parking Capacity</strong>
+          <span id="capacityHint">Fixed at 10 car spaces + 20 motorcycle spaces = 30 total. Edit camera_layouts.json only to calibrate coordinates.</span>
         </div>
       </div>
 
@@ -2528,15 +2517,15 @@
       <div class="setting-row" style="align-items:stretch;flex-direction:column">
         <div class="layout-head-row">
           <div class="setting-copy">
-            <strong>Parking Layout</strong>
-            <span id="layoutModeHint">Automatic mode lets the detector choose the layout.</span>
+            <strong>Demand Label</strong>
+            <span id="layoutModeHint">Normal, Busy, and High are informational only; saved camera boxes stay fixed.</span>
           </div>
           <div class="layout-toggle">
             <span class="layout-toggle-label" id="layoutOverrideLabel">Auto</span>
-            <button class="toggle-switch" id="layoutOverrideToggle" onclick="toggleLayoutOverride()" aria-label="Toggle manual parking layout" aria-pressed="false"></button>
+            <button class="toggle-switch" id="layoutOverrideToggle" onclick="toggleLayoutOverride()" aria-label="Toggle manual demand label" aria-pressed="false"></button>
           </div>
         </div>
-        <div class="layout-picker" id="layoutPicker" aria-label="Parking layout">
+        <div class="layout-picker" id="layoutPicker" aria-label="Demand label">
           <button class="layout-btn" data-mode="NORMAL" onclick="setLayoutMode('NORMAL')">Normal</button>
           <button class="layout-btn" data-mode="BUSY" onclick="setLayoutMode('BUSY')">Busy</button>
           <button class="layout-btn" data-mode="HIGH" onclick="setLayoutMode('HIGH')">High</button>
@@ -3164,14 +3153,14 @@ function setLayoutUi(mode, pending, enabled) {
   if (label) label.textContent = layoutOverrideEnabled ? 'On' : 'Auto';
   const status = document.getElementById('layoutStatus');
   if (status) {
-    status.textContent = pending ? 'Saving...' : (layoutOverrideEnabled ? `Layout ${normalized}` : 'Layout Auto');
+    status.textContent = pending ? 'Saving...' : (layoutOverrideEnabled ? `Demand ${normalized}` : 'Demand Auto');
     status.className = 'status-chip ' + (!layoutOverrideEnabled ? 'good' : normalized === 'HIGH' ? 'bad' : normalized === 'BUSY' ? 'warn' : 'good');
   }
   const hint = document.getElementById('layoutModeHint');
   if (hint && !pending) {
     hint.textContent = layoutOverrideEnabled
-      ? 'Manual layout override is on. Detector applies changes on the next cycle.'
-      : 'Automatic mode lets the detector choose the layout.';
+      ? `Manual ${normalized.toLowerCase()} demand label is on. Camera boxes remain fixed.`
+      : 'Automatic demand labeling is on. Camera boxes remain fixed.';
   }
 }
 
@@ -3206,7 +3195,7 @@ async function setLayoutMode(mode) {
     setLayoutUi(d.mode || normalized, false, Boolean(d.enabled));
     invalidateDashboardCache();
     const hint = document.getElementById('layoutModeHint');
-    if (hint) hint.textContent = 'Saved. Detector updates within about 30 seconds.';
+    if (hint) hint.textContent = 'Demand label saved. The 10/20 camera layouts were not changed.';
   } catch (e) {
     setLayoutUi(normalized, false, true);
     const hint = document.getElementById('layoutModeHint');
@@ -3230,8 +3219,8 @@ async function toggleLayoutOverride() {
     const hint = document.getElementById('layoutModeHint');
     if (hint) {
       hint.textContent = d.enabled
-        ? 'Manual override is on. Pick Normal, Busy, or High.'
-        : 'Automatic mode restored. Detector will choose the layout.';
+        ? 'Manual demand label is on. Pick Normal, Busy, or High; boxes stay fixed.'
+        : 'Automatic demand labeling restored; boxes stay fixed.';
     }
   } catch (e) {
     setLayoutUi(layoutSelectedMode, false, !nextEnabled);
@@ -3691,7 +3680,11 @@ function _loadPanelData(name, force = false) {
 }
 
 function liveStatusText(stats) {
-  const total = Number(stats?.total ?? stats?.total_slots ?? 0);
+  const total = Number(stats?.total ?? stats?.total_slots ?? 30);
+  if (stats?.combined_complete !== true) {
+    const reporting = Number(stats?.reporting_capacity ?? 0);
+    return `Combined occupancy is unavailable. ${reporting} of ${total} configured spaces are currently reporting.`;
+  }
   const occupied = Number(stats?.occupied ?? stats?.occupied_slots ?? 0);
   const free = Number(stats?.free ?? stats?.free_slots ?? Math.max(0, total - occupied));
   const pct = clampPct(stats?.occupancy_pct ?? (total > 0 ? occupied / total * 100 : 0));
@@ -3702,14 +3695,16 @@ function liveStatusText(stats) {
 
 const CAMERA_CARD_CONFIG = {
   car: {
-    ids: ['car', 'main'],
+    ids: ['cars', 'car', 'main'],
     label: 'Car Camera',
     noun: 'car',
+    capacity: 10,
   },
   motorcycle: {
-    ids: ['motorcycle', 'moto'],
+    ids: ['motorcycles', 'motorcycle', 'moto'],
     label: 'Motorcycle Camera',
     noun: 'motorcycle',
+    capacity: 20,
   },
 };
 
@@ -3778,7 +3773,8 @@ function updateCameraCard(cardKey, cameras) {
         : `Waiting for ${config.noun} camera data...`;
       statusMsg.classList.toggle('blocked', blocked);
     }
-    for (const suffix of ['Occ', 'Free', 'Total', 'Pct']) setText(cardKey + suffix, '--');
+    for (const suffix of ['Occ', 'Free', 'Pct']) setText(cardKey + suffix, '--');
+    setText(cardKey + 'Total', config.capacity);
     return;
   }
 
@@ -3804,7 +3800,28 @@ function updateCameraCard(cardKey, cameras) {
   }
 
   const data = match.data || {};
-  const total = Number(data.total ?? 0);
+  const total = Number(data.configured_capacity ?? data.total ?? config.capacity);
+  if (data.online !== true) {
+    const needsCalibration = data.calibration_required === true || data.status === 'calibration_required';
+    state.cameraId = '';
+    state.endpoint = '';
+    if (img) { img.removeAttribute('src'); img.style.display = 'none'; }
+    if (placeholder) { placeholder.style.display = 'flex'; placeholder.classList.add('blocked'); }
+    if (badge) badge.style.display = 'none';
+    if (inline) {
+      inline.textContent = needsCalibration ? 'Calibrate' : 'Offline';
+      inline.className = 'status-chip warn';
+    }
+    if (endpointLabel) endpointLabel.textContent = needsCalibration
+      ? 'Saved layout needs recalibration'
+      : `${config.label} is offline`;
+    if (statusMsg) statusMsg.textContent = needsCalibration ? 'RECALIBRATION REQUIRED' : 'OFFLINE / UNKNOWN';
+    setText(cardKey + 'Occ', '--');
+    setText(cardKey + 'Free', '--');
+    setText(cardKey + 'Total', total);
+    setText(cardKey + 'Pct', '--');
+    return;
+  }
   const occupied = Number(data.occupied ?? 0);
   const free = Number(data.free ?? Math.max(0, total - occupied));
   const pct = clampPct(data.occupancy_pct ?? (total ? occupied / total * 100 : 0));
@@ -3821,22 +3838,25 @@ function updateDualCameraFeeds(cameras, aggregate) {
   updateCameraCard('car', cameras);
   updateCameraCard('motorcycle', cameras);
 
-  const activeCount = Object.keys(cameras || {}).length;
-  const total = Number(aggregate?.total ?? 0);
+  const activeCount = Object.values(cameras || {}).filter(info => info?.online === true).length;
+  const complete = aggregate?.combined_complete === true;
+  const total = Number(aggregate?.configured_capacity ?? aggregate?.total ?? 30);
   const occupied = Number(aggregate?.occupied ?? 0);
   const free = Number(aggregate?.free ?? Math.max(0, total - occupied));
   const pct = clampPct(aggregate?.occupancy_pct ?? (total ? occupied / total * 100 : 0));
-  setText('combinedFree', total ? free : '--');
-  setText('combinedOcc', total ? occupied : '--');
-  setText('combinedTotal', total || '--');
-  setText('combinedPct', total ? Math.round(pct) + '%' : '--');
-  setText('combinedCameraNote', activeCount
-    ? `${activeCount} camera${activeCount === 1 ? '' : 's'} reporting. Totals combine fresh car and motorcycle data.`
-    : 'Waiting for car and motorcycle camera data.');
+  setText('combinedFree', complete ? free : '--');
+  setText('combinedOcc', complete ? occupied : '--');
+  setText('combinedTotal', total);
+  setText('combinedPct', complete ? Math.round(pct) + '%' : '--');
+  setText('combinedCameraNote', complete
+    ? 'Both cameras are fresh. Combined occupancy covers all 30 configured spaces.'
+    : activeCount
+      ? `${activeCount}/2 cameras reporting. Partial data is not shown as complete lot occupancy.`
+      : 'Both camera zones are Unknown. Official capacity remains 30.');
   const combinedStatus = document.getElementById('combinedCameraStatus');
   if (combinedStatus) {
-    combinedStatus.textContent = activeCount ? `${activeCount} camera${activeCount === 1 ? '' : 's'} live` : 'Waiting';
-    combinedStatus.className = activeCount ? 'status-chip good' : 'status-chip warn';
+    combinedStatus.textContent = complete ? 'Complete' : activeCount ? 'Partial' : 'Unavailable';
+    combinedStatus.className = complete ? 'status-chip good' : 'status-chip warn';
   }
 }
 
@@ -3853,43 +3873,44 @@ async function fetchStats() {
     if (seq !== _statsSeq) return;
     updateDualCameraFeeds(d.cameras || {}, d);
 
-    const total = d.total ?? d.total_slots ?? 0;
-    const occupied = d.occupied ?? d.occupied_slots ?? 0;
-    const free = d.free ?? d.free_slots ?? (total - occupied);
-    const pct = d.occupancy_pct ?? (total > 0 ? Math.round(occupied / total * 100) : 0);
+    const total = Number(d.configured_capacity ?? d.total ?? d.total_slots ?? 30);
+    const complete = d.combined_complete === true;
+    const occupied = complete ? Number(d.occupied ?? d.occupied_slots ?? 0) : null;
+    const free = complete ? Number(d.free ?? d.free_slots ?? (total - occupied)) : null;
+    const pct = complete ? Number(d.occupancy_pct ?? (occupied / total * 100)) : null;
 
     document.getElementById('statTotal').textContent = total;
-    document.getElementById('statOcc').textContent = occupied;
-    document.getElementById('statFree').textContent = free;
-    document.getElementById('statRate').textContent = Math.round(pct) + '%';
-    setText('statFreeSub', total ? `${free} of ${total} spaces available` : 'Waiting for detector data');
-    const carCount = d.car_count ?? 0;
-    const motoCount = d.motorcycle_count ?? 0;
-    setText('statOccSub', !total ? 'No cars detected yet'
-      : (carCount + motoCount) > 0 ? `${carCount} car(s), ${motoCount} motorcycle(s)`
-      : `${occupied} in tracked spaces`);
-    setText('statTotalSub', total ? `${Object.keys(d.zones || {}).length || total} tracked zones` : 'Camera has not reported capacity');
-    setText('statRateSub', pct >= 90 ? 'Lot is near full' : pct >= 70 ? 'Demand is rising' : 'Share of total capacity');
+    document.getElementById('statOcc').textContent = complete ? occupied : '--';
+    document.getElementById('statFree').textContent = complete ? free : '--';
+    document.getElementById('statRate').textContent = complete ? Math.round(pct) + '%' : '--';
+    setText('statFreeSub', complete ? `${free} of ${total} spaces available` : 'Unavailable until both cameras are fresh');
+    const carCount = d.car_count;
+    const motoCount = d.motorcycle_count;
+    setText('statOccSub', complete
+      ? `${carCount ?? 0} car(s), ${motoCount ?? 0} motorcycle(s)`
+      : 'Combined occupancy is Unknown');
+    setText('statTotalSub', '10 car + 20 motorcycle spaces');
+    setText('statRateSub', complete ? (pct >= 90 ? 'Lot is near full' : pct >= 70 ? 'Demand is rising' : 'Share of total capacity') : 'Partial data is not a complete lot rate');
 
     const freeMeter = document.getElementById('freeMeter');
     const occMeter = document.getElementById('occMeter');
     const totalMeter = document.getElementById('totalMeter');
     const rateMeter = document.getElementById('rateMeter');
-    if (freeMeter) freeMeter.style.width = total && free > 0 ? `${Math.max(2, free / total * 100)}%` : '0%';
-    if (occMeter) occMeter.style.width = total && occupied > 0 ? `${Math.max(2, occupied / total * 100)}%` : '0%';
-    if (totalMeter) totalMeter.style.width = total ? '100%' : '0%';
-    if (rateMeter) rateMeter.style.width = `${Math.min(100, Math.max(0, pct))}%`;
+    if (freeMeter) freeMeter.style.width = complete && free > 0 ? `${Math.max(2, free / total * 100)}%` : '0%';
+    if (occMeter) occMeter.style.width = complete && occupied > 0 ? `${Math.max(2, occupied / total * 100)}%` : '0%';
+    if (totalMeter) totalMeter.style.width = '100%';
+    if (rateMeter) rateMeter.style.width = complete ? `${Math.min(100, Math.max(0, pct))}%` : '0%';
 
     const bar = document.getElementById('occBar');
     if (bar) {
-      bar.style.width = Math.min(pct, 100) + '%';
-      bar.className = 'bar-fill' + (pct >= 90 ? ' crit' : pct >= 70 ? ' warn' : '');
+      bar.style.width = complete ? Math.min(pct, 100) + '%' : '0%';
+      bar.className = 'bar-fill' + (complete && pct >= 90 ? ' crit' : complete && pct >= 70 ? ' warn' : '');
     }
 
     if (d.fps != null) {
       setText('fpsLabel', d.fps + ' fps');
     }
-    const detectorOnline = Boolean(d.timestamp) || Number(d.fps) > 0 || total > 0;
+    const detectorOnline = Number(d.reporting_capacity ?? 0) > 0;
 
     renderZones(d.zones || {}, total, occupied);
     if (isPanelActive('insights')) {
@@ -3900,9 +3921,9 @@ async function fetchStats() {
     const updateLabel = d.timestamp ? cleanText(d.timestamp).replace(/^\d{4}-\d{2}-\d{2}\s*/, '') : new Date().toLocaleTimeString();
     document.getElementById('updatedAt').textContent = 'Updated ' + updateLabel;
     setText('overviewLastUpdate', updateLabel);
-    setText('overviewPressure', total === 0 ? 'Waiting' : pct >= 90 ? 'Critical' : pct >= 70 ? 'Busy' : pct >= 35 ? 'Moderate' : 'Open');
+    setText('overviewPressure', !complete ? 'Unknown' : pct >= 90 ? 'Critical' : pct >= 70 ? 'Busy' : pct >= 35 ? 'Moderate' : 'Open');
     setConnected(true);
-    setText('overviewCameraState', detectorOnline ? 'Detector live' : 'Waiting');
+    setText('overviewCameraState', complete ? 'Both cameras live' : detectorOnline ? 'Partial' : 'Offline');
   } catch (e) {
     if (seq !== _statsSeq) return;
     setConnected(false);
@@ -4099,6 +4120,8 @@ function renderFullPredictions(payload) {
   setText('predFullSource', `Forecast: ${hourlySource} · Revenue: ${revenueSource}`);
   if (payload.currentOccPct != null) {
     setText('predFullCurrentOcc', `${Math.round(payload.currentOccPct)}%`);
+  } else {
+    setText('predFullCurrentOcc', '--');
   }
 
   const bars = document.getElementById('predFullHourBars');
@@ -4180,7 +4203,9 @@ async function fetchFullPredictions() {
     const d = await predictionResult.json();
     if (statsResult.ok) {
       const s = await statsResult.json();
-      currentOccPct = s.occupancy_pct ?? (s.total ? Math.round((s.occupied || 0) / s.total * 100) : 0);
+      currentOccPct = s.combined_complete === true
+        ? s.occupancy_pct ?? (s.total ? Math.round(Number(s.occupied) / s.total * 100) : null)
+        : null;
     }
 
     const payload = { predictions: d, currentOccPct };
@@ -4413,7 +4438,7 @@ async function fetchRevenueDashboard() {
     setText('statMaxCount', d.max_total_count ?? '--');
     const capBreakdown = (d.car_slots != null && d.motorcycle_slots != null)
       ? ` (${d.car_slots} car / ${d.motorcycle_slots} moto)` : '';
-    setText('statMaxCountSub', `Peak cars ${d.max_occupied_count ?? 0}; ${d.log_count ?? 0} logs${capBreakdown}`);
+    setText('statMaxCountSub', `Peak vehicles ${d.max_occupied_count ?? '--'}; ${d.log_count ?? 0} logs${capBreakdown}`);
     const maxMeter = document.getElementById('maxCountMeter');
     if (maxMeter) {
       const maxTotal = Number(d.max_total_count || 0);
@@ -4630,8 +4655,9 @@ function renderZones(zones, total, occupied) {
 
   const occZones = entries.filter(([, value]) => value === true).length;
   const freeZones = entries.filter(([, value]) => value === false).length;
-  if (freeCountEl) freeCountEl.textContent = freeZones;
-  if (occCountEl) occCountEl.textContent = occZones;
+  const knownZones = occZones + freeZones;
+  if (freeCountEl) freeCountEl.textContent = knownZones ? freeZones : '--';
+  if (occCountEl) occCountEl.textContent = knownZones ? occZones : '--';
 
   list.innerHTML = entries.map(([name, isOccupied], i) => {
     const known = typeof isOccupied === 'boolean';
@@ -4682,6 +4708,18 @@ function renderInsightBars(id, values) {
 
 function renderStatusVisual(stats) {
   const total = Number(stats.total ?? stats.total_slots ?? 0);
+  const complete = stats.combined_complete === true;
+  if (!complete) {
+    const gauge = document.getElementById('insOccGauge');
+    if (gauge) gauge.style.setProperty('--pct', '0%');
+    setText('insOccGaugeValue', '--');
+    setText('insOccMeterValue', '--');
+    setText('insFreeKpi', '--');
+    setText('insOccKpi', '--');
+    setText('insSummaryLoad', '--');
+    setText('insSummaryLoadSub', 'Both cameras are required for combined occupancy.');
+    return;
+  }
   const occupied = Number(stats.occupied ?? stats.occupied_slots ?? 0);
   const free = Number(stats.free ?? stats.free_slots ?? Math.max(0, total - occupied));
   const pct = clampPct(stats.occupancy_pct ?? (total > 0 ? occupied / total * 100 : 0));

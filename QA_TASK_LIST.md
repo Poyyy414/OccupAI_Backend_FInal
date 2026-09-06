@@ -35,6 +35,7 @@ Audit scope: FastAPI backend, YOLO/camera integration, admin/driver web dashboar
 - [x] Add web and mobile forgot-password entry points with hashed, single-use, expiring reset tokens.
 - [x] Make driver KPI, hourly prediction, and revenue cards responsive to accessibility text scaling; add compact-screen regression tests.
 - [x] Document admin web, driver web, admin app, driver app, and backend functions in [OCCUPAI_FUNCTION_INVENTORY.docs](OCCUPAI_FUNCTION_INVENTORY.docs).
+- [x] Replace demand-driven parking-box changes with saved normalized layouts: exactly 10 car spaces and 20 motorcycle spaces, with fixed official capacity 30 and Unknown semantics for stale/offline cameras across backend, web, and Flutter.
 
 ## Priority 0: required before deployment
 
@@ -113,10 +114,12 @@ Audit scope: FastAPI backend, YOLO/camera integration, admin/driver web dashboar
 
 ## Verification performed
 
-- Backend: `.venv311\Scripts\python.exe -m pytest -q` — **34 passed** (5 non-failing model-artifact compatibility warnings remain; pin/retrain artifacts before a strict reproducibility release).
-- Backend: `python -m py_compile backend/main.py backend/models.py backend/db.py` — **passed**.
+- Backend: `.venv311\Scripts\python.exe -m pytest -q` — **60 passed** (15 non-failing warnings remain from existing Keras layer construction and scikit-learn artifact version compatibility).
+- Backend: `.venv311\Scripts\python.exe -m py_compile backend/main.py backend/models.py backend/slot_adjuster.py yolo_service/detector_v7.py` — **passed**.
 - Backend: route/model smoke check — protected routes loaded and bounded YOLO validation loaded.
-- Flutter: `flutter test --dart-define=API_BASE_URL=` — **7 passed**, including forgot-password validation and compact large-text overflow regressions.
+- Camera launcher: PowerShell script parse check — **passed**; physical cameras were not started.
+- Flutter maintained suite: `flutter test test/widget_test.dart --dart-define=API_BASE_URL=` — **8 passed**, including offline Unknown/capacity behavior and compact large-text regressions.
+- Flutter dashboard-only responsive probes: **10 passed** across admin/driver views at 320px, 390px with 2× text, landscape, tablet, and desktop sizes.
 - Flutter: `flutter analyze` — **no issues**.
 - Android: `flutter build apk --debug` — **passed**; generated `build/app/outputs/flutter-apk/app-debug.apk` after the secure-storage/configuration changes. Gradle emitted only the existing Java 8 deprecation warnings and recovered from a Kotlin daemon connection retry.
 

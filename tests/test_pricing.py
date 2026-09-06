@@ -88,12 +88,12 @@ def test_motorcycle_and_car_use_independent_flat_rates(env_settings):
 def test_dynamic_duration_prices_use_normal_rates_at_standard_demand(env_settings):
     env_settings(NO_OVERRIDE)
     rates = m._effective_duration_pricing(
-        vehicles_hour=10,
+        vehicles_hour=6,
         lot_capacity=44,
         when=TUESDAY,
     )
 
-    # 10/44 is in the standard 1.00x demand band. Daily prices therefore stay
+    # 6/30 is in the standard 1.00x demand band. Daily prices therefore stay
     # at the approved normal rates: PHP 50 for cars and PHP 25 for motorcycles.
     assert rates["pricing_mode"] == "dynamic"
     assert rates["demand_pricing_enabled"] is True
@@ -104,12 +104,12 @@ def test_dynamic_duration_prices_use_normal_rates_at_standard_demand(env_setting
 def test_dynamic_duration_prices_increase_at_high_demand(env_settings):
     env_settings(NO_OVERRIDE)
     rates = m._effective_duration_pricing(
-        vehicles_hour=40,
+        vehicles_hour=28,
         lot_capacity=44,
         when=TUESDAY,
     )
 
-    # 40/44 is above 90%, so the configured 1.80x demand multiplier applies.
+    # 28/30 is above 90%, so the configured 1.80x demand multiplier applies.
     assert rates["pricing_context"]["occupancy_pct"] >= 90
     assert rates["daily_rate_php_car"] == 90.00
     assert rates["daily_rate_php_motorcycle"] == 45.00
@@ -127,3 +127,24 @@ def test_manual_mode_keeps_duration_prices_unchanged(env_settings):
     assert rates["demand_pricing_enabled"] is False
     assert rates["daily_rate_php_car"] == 50.00
     assert rates["daily_rate_php_motorcycle"] == 25.00
+
+
+def test_pricing_always_uses_official_capacity_30(env_settings):
+    env_settings(NO_OVERRIDE)
+    result = m._dynamic_price_formula(vehicles_hour=15, lot_capacity=999, when=TUESDAY)
+
+    assert result["pricing_context"]["lot_capacity"] == 30
+    assert result["pricing_context"]["occupancy_pct"] == 50.0
+
+
+def test_missing_camera_data_uses_base_prices_without_low_demand_discount(env_settings, monkeypatch):
+    env_settings(NO_OVERRIDE)
+    monkeypatch.setattr(m, "camera_states", {})
+
+    rates = m._effective_duration_pricing(when=TUESDAY)
+
+    assert rates["dynamic_pricing_available"] is False
+    assert rates["demand_pricing_enabled"] is False
+    assert rates["daily_rate_php_car"] == 50.0
+    assert rates["daily_rate_php_motorcycle"] == 25.0
+    assert rates["pricing_context"]["occupancy_pct"] is None

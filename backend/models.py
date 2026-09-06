@@ -32,6 +32,9 @@ class YoloUpdate(BaseModel):
     timestamp:     str      = Field(default="", max_length=64)
     camera_id:     str      = Field(default="main", min_length=1, max_length=40)
     camera_role:   str      = Field(default="mixed", min_length=1, max_length=20)
+    reporting:     bool     = True
+    camera_status: str      = Field(default="online", min_length=1, max_length=40)
+    calibration_required: bool = False
     snapshot_b64:  str      = Field(default="", max_length=5_000_000)
     yolo_boxes:    list     = Field(default_factory=list, max_length=500)
     slots:         list     = Field(default_factory=list, max_length=500)

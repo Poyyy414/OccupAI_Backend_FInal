@@ -1,13 +1,9 @@
-"""
-yolo_service/detector.py  — OccupAI v7.2
-=========================================
-Fixes in v7.2:
-  - Watches slot_state.check_and_clear_bg_reset() every frame
-    → re-warms MOG2 in background when layout changes (demand switch)
-    → fixes all-red / false OCC after BUSY/HIGH layout kicks in
-  - EXCLUDED_SLOTS re-read live from .env every frame via slot_state
-  - HUD shows demand label immediately after first adjuster cycle
-  - All R1/R2/R3 layout from .env (no hardcoded positions)
+"""OccupAI fixed-layout camera worker.
+
+Each worker has one strict camera role and loads that role's normalized parking
+boxes from ``camera_layouts.json``. Demand labels never add, remove, or move
+parking boxes. A moved camera stops occupancy reporting until its saved layout
+has been recalibrated and the worker restarted.
 """
 
 import cv2
@@ -27,8 +23,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from backend.slot_adjuster import (SlotState, SlotAdjusterThread,
-                                   DemandLevel, build_layout)
+from backend.slot_adjuster import (
+    OFFICIAL_CAMERA_CAPACITIES,
+    DemandLevel,
+    SlotState,
+    build_layout,
+)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -86,11 +86,22 @@ PUSH_REMOTE_BACKEND = _eb(
     "PUSH_REMOTE_BACKEND",
     DEPLOY_MODE != "local" or bool(REMOTE_BACKEND_URL.strip()),
 )
-CAMERA_ID = re.sub(r"[^A-Za-z0-9_-]", "-", os.getenv("CAMERA_ID", "main").strip())[:40] or "main"
-CAMERA_ROLE = os.getenv("CAMERA_ROLE", "mixed").strip().lower()
-if CAMERA_ROLE not in {"mixed", "car", "motorcycle"}:
-    print(f"[camera] Invalid CAMERA_ROLE={CAMERA_ROLE!r}; using mixed.")
-    CAMERA_ROLE = "mixed"
+CAMERA_ROLE = os.getenv("CAMERA_ROLE", "").strip().lower()
+if CAMERA_ROLE not in OFFICIAL_CAMERA_CAPACITIES:
+    raise RuntimeError("CAMERA_ROLE must be explicitly set to car or motorcycle")
+_ROLE_RUNTIME = {
+    "car": {"camera_id": "cars", "webcam_index": 0, "stream_port": 8001},
+    "motorcycle": {
+        "camera_id": "motorcycles",
+        "webcam_index": 1,
+        "stream_port": 8002,
+    },
+}[CAMERA_ROLE]
+CAMERA_ID = re.sub(
+    r"[^A-Za-z0-9_-]",
+    "-",
+    os.getenv("CAMERA_ID", _ROLE_RUNTIME["camera_id"]).strip(),
+)[:40] or _ROLE_RUNTIME["camera_id"]
 _CAM_TOKEN_LOCAL_DEFAULT = "occupai_cam_2027"
 _configured_cam_token = os.getenv("CAM_TOKEN", "").strip()
 if _configured_cam_token:
@@ -106,8 +117,21 @@ if DEPLOY_MODE != "local" and (
     raise RuntimeError(
         "CAM_TOKEN must be a unique secret of at least 32 characters outside local development."
     )
-WEBCAM_IDX  = _ei("WEBCAM_INDEX", 0)
-STREAM_PORT = _ei("STREAM_PORT",  8001)
+WEBCAM_IDX = _ei("WEBCAM_INDEX", _ROLE_RUNTIME["webcam_index"])
+STREAM_PORT = _ei("STREAM_PORT", _ROLE_RUNTIME["stream_port"])
+if CAMERA_ID != _ROLE_RUNTIME["camera_id"]:
+    raise RuntimeError(
+        f"{CAMERA_ROLE} worker CAMERA_ID must be {_ROLE_RUNTIME['camera_id']!r}"
+    )
+if WEBCAM_IDX != _ROLE_RUNTIME["webcam_index"]:
+    raise RuntimeError(
+        f"{CAMERA_ROLE} worker WEBCAM_INDEX must be {_ROLE_RUNTIME['webcam_index']}"
+    )
+if STREAM_PORT != _ROLE_RUNTIME["stream_port"]:
+    raise RuntimeError(
+        f"{CAMERA_ROLE} worker STREAM_PORT must be {_ROLE_RUNTIME['stream_port']}"
+    )
+CAMERA_LAYOUT_FILE = os.getenv("CAMERA_LAYOUT_FILE", "").strip() or None
 STREAM_FPS  = max(1, _ei("STREAM_FPS", 20))
 MODELS_DIR  = os.getenv("MODELS_DIR",
               os.path.join(os.path.dirname(__file__), '..', 'backend', 'models'))
@@ -711,7 +735,8 @@ def encode_frame(frame):
 
 def push_to_backend(occupied,free,total,pct,fps,zone_status,snapshot_frame,
                     car_count=0,moto_count=0, camera_id=CAMERA_ID,
-                    camera_role=CAMERA_ROLE):
+                    camera_role=CAMERA_ROLE, reporting=True,
+                    camera_status="online", calibration_required=False):
     global _pushing
     with _push_lock:
         if _pushing: return
@@ -725,6 +750,8 @@ def push_to_backend(occupied,free,total,pct,fps,zone_status,snapshot_frame,
             "fps":fps,"yolo_count":occupied,
             "car_count":car_count,"motorcycle_count":moto_count,
             "camera_id":camera_id,"camera_role":camera_role,
+            "reporting":reporting,"camera_status":camera_status,
+            "calibration_required":calibration_required,
             "timestamp":time.strftime("%Y-%m-%d %H:%M:%S"),
             "snapshot_b64":fb64,"yolo_boxes":[],"slots":[],"zones":zone_status,
             "demand_level":adj.get("demand","NORMAL"),
@@ -785,36 +812,34 @@ def detection_loop():
         actual_h=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         print(f"[cam]  {actual_w}×{actual_h}  index={WEBCAM_IDX}")
 
-        # ── MOG2 (shared reference so rewarm can replace it) ──────────────────────
+        # ── MOG2 (shared reference so camera recovery can replace it) ─────────────
         bg_sub_ref = [cv2.createBackgroundSubtractorMOG2(
             history=BG_HISTORY, varThreshold=BG_VAR_THRESH, detectShadows=False)]
 
         print("\n" + "═"*58)
-        print("  OccupAI v7.2 — Row Layout + AI Adjuster")
+        print("  OccupAI — Fixed Normalized Camera Layout")
         print("  Warming up background model (3s)...")
         print("═"*58)
         time.sleep(3.0)
         grab_background(cap, bg_sub_ref[0], n=25)
 
         # ── Build base layout ──────────────────────────────────────────────────────
-        base_slots = build_layout(actual_w, actual_h)
+        base_slots = build_layout(
+            actual_w,
+            actual_h,
+            camera_role=CAMERA_ROLE,
+            config_path=CAMERA_LAYOUT_FILE,
+        )
         slot_state.set_base_slots(base_slots)
-        print(f"[layout] ✓ {len(slot_state.active_slots)} active slots "
-              f"(excluded: {_es('EXCLUDED_SLOTS')})")
-
+        expected_slots = OFFICIAL_CAMERA_CAPACITIES[CAMERA_ROLE]
+        if len(base_slots) != expected_slots:
+            raise RuntimeError(
+                f"{CAMERA_ROLE} layout must have exactly {expected_slots} slots"
+            )
+        print(f"[layout] Fixed {CAMERA_ROLE} layout: {len(base_slots)} slots")
         ret0,bg_frame=cap.read()
         if bg_frame is not None:
             _save_debug_zones(bg_frame, slot_state.active_slots)
-
-        # ── AI Adjuster thread ─────────────────────────────────────────────────────
-        adjuster=SlotAdjusterThread(
-            slot_state=slot_state, models_dir=MODELS_DIR,
-            db_fn=_fetch_db_history, frame_w=actual_w, frame_h=actual_h,
-            backend_url=REMOTE_BACKEND_URL.strip() or BACKEND_URL,
-            cam_token=CAM_TOKEN,
-        )
-        adjuster.start()
-        print(f"[adjuster] Started — cycles every {SlotAdjusterThread.ADJUST_INTERVAL}s")
 
         # ── Reference frame for scene change ──────────────────────────────────────
         ret_r,ref_f=cap.read()
@@ -839,6 +864,7 @@ def detection_loop():
     frame_idx=0; yolo_b=[]; toy_b=[]; yolo_t=[]; toy_t=[]
     fps_t=time.time(); fps_n=0; fps_val=0.0
     prev_gray=None; rescanning=False; rewarming=False
+    calibration_required=False
     last_check_t=time.time(); last_n_slots=len(slot_state.active_slots)
     last_push_t=0.0
     last_sent_total=None
@@ -868,20 +894,6 @@ def detection_loop():
                 cam_ok = False
 
             # ── MOG2 rewarm when layout changes (fixes false OCC after switch) ────
-            if slot_state.check_and_clear_bg_reset() and not rewarming:
-                rewarming=True
-                print("[detector] Layout changed — re-warming MOG2...")
-                def _do_rewarm():
-                    nonlocal rewarming
-                    new_bs=cv2.createBackgroundSubtractorMOG2(
-                        history=BG_HISTORY,varThreshold=BG_VAR_THRESH,
-                        detectShadows=False)
-                    grab_background(cap, new_bs, n=BG_REWARM_N)
-                    bg_sub_ref[0]=new_bs
-                    rewarming=False
-                    print("[detector] ✓ MOG2 re-warmed after layout change")
-                threading.Thread(target=_do_rewarm,daemon=True,name="bg-rewarm").start()
-
             # ── Scene change (camera physically moved) ────────────────────────────
             if (not rescanning and not rewarming and cam_ok
                     and ref_gray is not None
@@ -891,22 +903,30 @@ def detection_loop():
                 ed=edge_region_diff(cg,ref_gray)
                 print(f"[redetect] edge diff={ed:.1f}  thresh={REDETECT_THRESH}")
                 if ed>REDETECT_THRESH:
-                    print("[redetect] Camera moved — re-warming MOG2...")
+                    print("[redetect] Camera moved — saved layout needs recalibration.")
                     rescanning=True
                     def _redo():
-                        nonlocal rescanning,ref_gray
+                        nonlocal rescanning,ref_gray,calibration_required
                         try:
+                            calibration_required=True
                             new_bs=cv2.createBackgroundSubtractorMOG2(
                                 history=BG_HISTORY,varThreshold=BG_VAR_THRESH,
                                 detectShadows=False)
                             grab_background(cap,new_bs,n=20)
                             bg_sub_ref[0]=new_bs
-                            new_slots=build_layout(actual_w,actual_h)
-                            if len(new_slots)>=MIN_SLOTS:
-                                slot_state.set_base_slots(new_slots)
+                            new_slots=build_layout(
+                                actual_w,
+                                actual_h,
+                                camera_role=CAMERA_ROLE,
+                                config_path=CAMERA_LAYOUT_FILE,
+                            )
+                            slot_state.set_base_slots(new_slots)
                             ret2,rf2=cap.read()
                             ref_gray=cv2.cvtColor(rf2,cv2.COLOR_BGR2GRAY) if ret2 else ref_gray
-                            print(f"[redetect] ✓ Rebuilt: {len(slot_state.active_slots)} slots")
+                            print(
+                                f"[redetect] Reloaded the same {len(new_slots)} slots; "
+                                "calibrate the saved JSON coordinates and restart."
+                            )
                         except Exception as e: print(f"[redetect] err: {e}")
                         finally: rescanning=False
                     threading.Thread(target=_redo,daemon=True,name="redetect").start()
@@ -947,7 +967,11 @@ def detection_loop():
                 )
 
             # ── Occupancy ─────────────────────────────────────────────────────────
-            if cam_ok and not rescanning and not rewarming and active:
+            reporting = (
+                cam_ok and not rescanning and not rewarming
+                and not calibration_required and bool(active)
+            )
+            if reporting:
                 all_b = toy_b if TOY_ONLY_DETECTION else (yolo_b + toy_b)
                 all_t = toy_t if TOY_ONLY_DETECTION else (yolo_t + toy_t)
                 if CAMERA_ROLE != "mixed":
@@ -992,6 +1016,8 @@ def detection_loop():
             ann=frame.copy()
             if not cam_ok:
                 draw_blocked(ann); zone_status={}; occupied=free=0
+            elif calibration_required:
+                draw_scanning(ann, "RECALIBRATION REQUIRED")
             elif rescanning or rewarming:
                 draw_scanning(ann, "CALIBRATING..." if rewarming else "RE-SCANNING...")
             else:
@@ -1017,7 +1043,12 @@ def detection_loop():
                 last_sent_zones=dict(zone_status)
                 threading.Thread(target=push_to_backend,
                     args=(occupied,free,n_slots,pct,round(fps_val,1),zone_status,
-                          ann.copy(),car_count,moto_count,CAMERA_ID,CAMERA_ROLE),
+                          ann.copy(),car_count,moto_count,CAMERA_ID,CAMERA_ROLE,
+                          reporting,
+                          "calibration_required" if calibration_required else (
+                              "online" if reporting else "offline"
+                          ),
+                          calibration_required),
                     daemon=True).start()
 
             consecutive_errors=0
@@ -1039,20 +1070,12 @@ def detection_loop():
 # ══════════════════════════════════════════════════════════════════════════════
 if __name__=='__main__':
     print("\n╔══════════════════════════════════════════════════════════╗")
-    print("║  OccupAI Detector v7.2                                   ║")
-    print("║  Layout  : R1/R2/R3 from .env                           ║")
-    print("║  Keepout : NO_PARK_RECTS clears entrance geometry       ║")
-    print("║  AI      : demand-driven slot packing (30s cycles)      ║")
-    print("║  MOG2    : auto re-warms on layout change (no false OCC)║")
+    print("║  OccupAI Fixed-Layout Detector                          ║")
+    print("║  Layout  : normalized JSON, fixed for this camera role   ║")
+    print("║  Keepout : saved plant/entrance/road exclusion areas     ║")
+    print("║  Demand  : information/pricing only; never moves boxes   ║")
     print(f"║  Camera  : {CAMERA_ID} ({CAMERA_ROLE}), index {WEBCAM_IDX}          ║")
     print(f"║  Stream  : http://localhost:{STREAM_PORT}/stream              ║")
-    print("╠══════════════════════════════════════════════════════════╣")
-    print("║  TEST LEVELS (edit .env, restart detector):             ║")
-    print("║  FORCE_DEMAND_LEVEL=LOW    → base layout               ║")
-    print("║  FORCE_DEMAND_LEVEL=NORMAL → base layout               ║")
-    print("║  FORCE_DEMAND_LEVEL=BUSY   → +columns, entrance clear  ║")
-    print("║  FORCE_DEMAND_LEVEL=HIGH   → +columns/subrows          ║")
-    print("║  FORCE_DEMAND_LEVEL=       → AI decides every 30s       ║")
     print("╚══════════════════════════════════════════════════════════╝\n")
 
     threading.Thread(target=start_mjpeg_server,daemon=True,

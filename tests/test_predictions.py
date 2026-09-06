@@ -11,7 +11,9 @@ def test_hourly_occupancy_percent_uses_active_capacity():
 
 
 def test_api_predictions_prefers_live_data_over_training_data(monkeypatch):
+    monkeypatch.setattr(m, "PREDICTION_DATA_POLICY", "auto")
     monkeypatch.setattr(m, "_active_slot_capacity", lambda default=None: 30)
+    monkeypatch.setattr(m, "_prediction_capacity", lambda: 30)
     monkeypatch.setattr(m, "_logged_hourly_vehicle_avg", lambda: {8: 15.0})
     monkeypatch.setattr(
         m,
@@ -28,24 +30,40 @@ def test_api_predictions_prefers_live_data_over_training_data(monkeypatch):
     assert result["today_revenue_forecast"] == 120.0
 
 
-def test_api_predictions_uses_training_pattern_when_live_history_is_rejected(monkeypatch):
+def test_api_predictions_historical_policy_skips_live_history(monkeypatch):
+    monkeypatch.setattr(m, "PREDICTION_DATA_POLICY", "historical_training")
     monkeypatch.setattr(m, "_active_slot_capacity", lambda default=None: 30)
-    monkeypatch.setattr(m, "_logged_hourly_vehicle_avg", lambda: {})
+    monkeypatch.setattr(m, "_prediction_capacity", lambda: 30)
     monkeypatch.setattr(
-        m,
-        "_logged_weekday_revenue_forecast",
-        lambda capacity: ({day: 0.0 for day in ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]}, None),
+        m, "_logged_hourly_vehicle_avg", lambda: (_ for _ in ()).throw(
+            AssertionError("historical policy must not query live hourly logs")
+        )
     )
 
     result = m.api_predictions()
 
-    assert result["hourly_source"] == "training_data_fallback"
-    assert result["revenue_source"] == "training_data_fallback"
+    assert result["hourly_source"] == "historical_training"
+    assert result["revenue_source"] == "historical_training"
+    assert result["prediction_data_policy"] == "historical_training"
+    assert result["prediction_capacity"] == 30
     assert result["hourly_est"]["8"] == 74.7
     assert result["hourly_est"]["7"] == 49.2
 
 
+def test_prediction_uses_planning_capacity_not_temporary_detector_boxes(monkeypatch):
+    monkeypatch.setattr(m, "PREDICTION_DATA_POLICY", "historical_training")
+    monkeypatch.setattr(m, "_active_slot_capacity", lambda default=None: 10)
+    monkeypatch.setattr(m, "_prediction_capacity", lambda: 30)
+
+    result = m.api_predictions()
+
+    assert result["active_slot_capacity"] == 10
+    assert result["prediction_capacity"] == 30
+    assert result["hourly_est"]["8"] == 74.7
+
+
 def test_weekday_revenue_falls_back_only_when_live_data_is_empty(monkeypatch):
+    monkeypatch.setattr(m, "PREDICTION_DATA_POLICY", "auto")
     training = {"Sun": 10.0, "Mon": 20.0}
     monkeypatch.setattr(
         m,
@@ -62,7 +80,7 @@ def test_weekday_revenue_falls_back_only_when_live_data_is_empty(monkeypatch):
 
     assert values == training
     assert today == 10.0
-    assert source == "training_data_fallback"
+    assert source == "historical_training"
 
 
 def test_sparse_live_history_is_not_used_for_forecasts():
@@ -93,6 +111,24 @@ def test_hourly_by_day_fallback_uses_training_csv(monkeypatch):
     assert result[4][8]["vehicles"] == 12.0
     assert result[4][8]["occ_pct"] == 40.0
     assert result[6][8]["vehicles"] == 4.0
+
+
+def test_hourly_by_day_historical_policy_skips_database(monkeypatch):
+    monkeypatch.setattr(m, "PREDICTION_DATA_POLICY", "historical_training")
+    monkeypatch.setattr(m, "_prediction_capacity", lambda: 30)
+    monkeypatch.setattr(
+        m,
+        "query",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("historical policy must not query prediction logs")
+        ),
+    )
+
+    result = m.api_hourly_by_day()
+
+    assert result["source"] == "historical_training"
+    assert result["prediction_data_policy"] == "historical_training"
+    assert result["lot_capacity"] == 30
 
 
 def test_revenue_dashboard_cache_reuses_expensive_aggregate(monkeypatch):

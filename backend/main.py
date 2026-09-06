@@ -67,7 +67,20 @@ elif DEPLOY_MODE == "local":
 else:
     raise RuntimeError("CAM_TOKEN must be configured outside local development.")
 STREAM_PORT  = int(os.getenv("STREAM_PORT", "8001"))
-LOT_CAPACITY = int(os.getenv("LOT_CAPACITY", "44"))
+OFFICIAL_CAR_CAPACITY = 10
+OFFICIAL_MOTORCYCLE_CAPACITY = 20
+OFFICIAL_LOT_CAPACITY = OFFICIAL_CAR_CAPACITY + OFFICIAL_MOTORCYCLE_CAPACITY
+# Capacity is an operational invariant. Camera connectivity and demand never
+# change the official number of sellable spaces.
+LOT_CAPACITY = OFFICIAL_LOT_CAPACITY
+CAMERA_ROLE_CONFIG = {
+    "cars": {"role": "car", "capacity": OFFICIAL_CAR_CAPACITY, "prefix": "C"},
+    "motorcycles": {
+        "role": "motorcycle",
+        "capacity": OFFICIAL_MOTORCYCLE_CAPACITY,
+        "prefix": "M",
+    },
+}
 ADMIN_EMAIL  = os.getenv("ADMIN_EMAIL", "jpcambiado@gbox.ncf.edu.ph").strip().lower()
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "").strip()
 
@@ -488,6 +501,16 @@ LIVE_FORECAST_MIN_SAMPLES = max(1, int(os.getenv("LIVE_FORECAST_MIN_SAMPLES", "2
 LIVE_FORECAST_MIN_HOURLY_BUCKETS = max(
     1, int(os.getenv("LIVE_FORECAST_MIN_HOURLY_BUCKETS", "6"))
 )
+# Forecasts must use one explicit data policy in every environment. The
+# historical training source is the safe default because short detector runs
+# in a new Render database are not representative of a full weekly pattern.
+PREDICTION_DATA_POLICY = os.getenv(
+    "PREDICTION_DATA_POLICY", "historical_training"
+).strip().lower()
+if PREDICTION_DATA_POLICY not in {"historical_training", "auto"}:
+    raise RuntimeError(
+        "PREDICTION_DATA_POLICY must be historical_training or auto."
+    )
 
 BASE_DIR     = Path(__file__).resolve().parent.parent
 TEMPLATE_DIR = BASE_DIR / "template"
@@ -1033,10 +1056,11 @@ def _live_status_from_state(snapshot=None):
         with state_lock:
             snapshot = dict(state)
 
-    total = int(snapshot.get("total") or 0)
-    occupied = int(snapshot.get("occupied") or 0)
-    free = int(snapshot.get("free") if snapshot.get("free") is not None else max(0, total - occupied))
-    pct = round(float(snapshot.get("occupancy_pct") or (occupied / total * 100 if total else 0.0)), 1)
+    total = OFFICIAL_LOT_CAPACITY
+    available = bool(snapshot.get("combined_complete"))
+    occupied = int(snapshot.get("occupied") or 0) if available else None
+    free = int(snapshot.get("free") or 0) if available else None
+    pct = round(float(snapshot.get("occupancy_pct") or 0.0), 1) if available else None
 
     def _pct_word(p):
         if p >= 90: return "almost completely full"
@@ -1045,13 +1069,17 @@ def _live_status_from_state(snapshot=None):
         if p >= 25: return "lightly used"
         return "mostly empty"
 
-    if snapshot.get("lot_full"):
+    if not available:
+        reporting = int(snapshot.get("reporting_capacity") or 0)
+        text = (
+            "Combined occupancy is unavailable until both cameras are fresh. "
+            f"{reporting} of {total} configured spaces are currently reporting."
+        )
+    elif snapshot.get("lot_full"):
         text = (
             "The parking lot is completely full right now. "
             "No available spaces remain. Consider redirecting incoming vehicles."
         )
-    elif total == 0:
-        text = "Waiting for the camera detector to connect."
     else:
         text = (
             f"The parking lot is currently {_pct_word(pct)}. "
@@ -1067,6 +1095,9 @@ def _live_status_from_state(snapshot=None):
             "total": total,
             "occupancy_pct": pct,
             "zones": snapshot.get("zones") or {},
+            "configured_capacity": total,
+            "reporting_capacity": int(snapshot.get("reporting_capacity") or 0),
+            "combined_complete": available,
         },
     }
 
@@ -1101,10 +1132,11 @@ def _run_insights_now():
         if delta <  -5: return "Occupancy is slowly decreasing."
         return "Occupancy has been stable recently."
 
-    occ      = s.get("occupancy_pct", 0)
-    free     = s.get("free", 0)
-    total    = s.get("total", 0)
-    occupied = s.get("occupied", 0)
+    live_complete = bool(s.get("combined_complete"))
+    occ = float(s.get("occupancy_pct") or 0.0) if live_complete else None
+    free = int(s.get("free") or 0) if live_complete else None
+    total = OFFICIAL_LOT_CAPACITY
+    occupied = int(s.get("occupied") or 0) if live_complete else None
     active_capacity = _active_slot_capacity()
 
     out.update(_live_status_from_state(s))
@@ -1165,20 +1197,30 @@ def _run_insights_now():
         )
 
     try:
-        price_vehicle_count = occupied if total else (float(df["vehicles_hour"].iloc[-1]) if not df.empty and "vehicles_hour" in df.columns else 0.0)
-        r     = _dynamic_price_formula(price_vehicle_count, active_capacity)
+        r = _dynamic_price_formula(
+            occupied,
+            active_capacity,
+            occupancy_available=live_complete,
+        )
         price = r["recommended_price_php"]
         chg   = r["price_change_pct"]
         ctx   = r.get("pricing_context", {})
         flat_rate = float(r.get("flat_rate_php") or _current_flat_rate())
-        occ_formula = ctx.get("occupancy_pct", 0)
+        occ_formula = ctx.get("occupancy_pct")
         occ_mult = ctx.get("occupancy_multiplier", 1.0)
         day_mult = ctx.get("day_multiplier", 1.0)
         day_rule = ctx.get("day_rule", "Weekday")
-        if r.get("pricing_reason") == "manual_admin_override":
+        if r.get("pricing_reason") == "occupancy_unavailable":
+            out["pricing"] = (
+                f"Both cameras must be fresh for dynamic pricing. "
+                f"The normal PHP {price:.0f}/hr base rate is in use."
+            )
+        elif r.get("pricing_reason") == "manual_admin_override":
             formula_note = (
                 f"Live context is {occ_formula:.0f}% occupancy and "
                 f"{day_mult:.2f}x {day_rule.lower()} factor."
+                if occ_formula is not None
+                else "Complete live occupancy is currently unavailable."
             )
             out["pricing"] = f"Manual admin rate is PHP {price:.0f}/hr. Dynamic pricing is paused. {formula_note}"
         elif abs(chg) < 5:
@@ -1258,15 +1300,20 @@ def _run_insights_now():
         out["peak_hours"] = f"Peak hour analysis not available. ({e})"
 
     actions = []
-    if s.get("lot_full"):
+    if live_complete and s.get("lot_full"):
         actions.append("Activate overflow parking immediately.")
-    elif occ >= 80:
+    elif live_complete and occ >= 80:
         actions.append("The lot is almost full — consider opening overflow parking soon.")
     try:
-        price_vehicle_count = occupied if total else (float(df["vehicles_hour"].iloc[-1]) if not df.empty and "vehicles_hour" in df.columns else 0.0)
-        r = _dynamic_price_formula(price_vehicle_count, active_capacity)
+        r = _dynamic_price_formula(
+            occupied,
+            active_capacity,
+            occupancy_available=live_complete,
+        )
         if r.get("pricing_reason") == "manual_admin_override":
             actions.append("Manual parking rate is active. Driver-facing price is controlled by admin settings.")
+        elif r.get("pricing_reason") == "occupancy_unavailable":
+            actions.append("Restore both camera feeds to resume dynamic pricing.")
         elif r["price_change_pct"] > 10:
             actions.append("Consider raising the parking rate. Formula-based occupancy demand is high.")
         elif r["price_change_pct"] < -10:
@@ -1652,8 +1699,11 @@ async def _err(request: Request, exc: Exception):
 #  Shared state
 # ══════════════════════════════════════════════════════════════════
 state = {
-    "occupied": 0, "free": 0, "total": 0, "occupancy_pct": 0.0,
-    "lot_full": False, "fps": 0.0, "timestamp": "",
+    "occupied": None, "free": None, "total": OFFICIAL_LOT_CAPACITY,
+    "configured_capacity": OFFICIAL_LOT_CAPACITY, "reporting_capacity": 0,
+    "occupancy_pct": None, "occupancy_available": False,
+    "combined_complete": False, "combined_status": "unavailable",
+    "lot_full": None, "fps": 0.0, "timestamp": "",
     "yolo_count": 0, "yolo_boxes": [], "slots": [], "zones": {},
     "car_count": 0, "motorcycle_count": 0,
     "cameras": {},
@@ -1677,44 +1727,84 @@ def _normalize_camera_id(value) -> str:
 
 
 def _aggregate_camera_states_locked(now=None):
-    """Combine fresh camera workers into the legacy single-lot state shape."""
+    """Return fixed capacity plus live occupancy only when both POVs are fresh."""
     now = time.monotonic() if now is None else now
-    active = {
-        camera_id: item
-        for camera_id, item in camera_states.items()
-        if now - item["received_at"] <= CAMERA_STATE_TTL_SECONDS
-    }
-
-    total = sum(int(item["total"]) for item in active.values())
-    occupied = min(total, sum(int(item["occupied"]) for item in active.values()))
-    free = max(0, total - occupied)
-    latest = max(active.values(), key=lambda item: item["received_at"], default=None)
     zones = {}
     public_cameras = {}
-    for camera_id, item in active.items():
-        for name, value in item["zones"].items():
-            zone_name = str(name) if camera_id == "main" else f"{camera_id}:{name}"
-            zones[zone_name] = bool(value)
+    active = {}
+    for camera_id, config in CAMERA_ROLE_CONFIG.items():
+        item = camera_states.get(camera_id)
+        is_recent = bool(
+            item
+            and now - float(item.get("received_at") or 0.0)
+            <= CAMERA_STATE_TTL_SECONDS
+        )
+        is_fresh = bool(
+            is_recent
+            and item.get("reporting", True)
+            and item.get("camera_status", "online") == "online"
+        )
+        if is_fresh:
+            active[camera_id] = item
+
+        saved_zone_names = list((item or {}).get("zones") or {})
+        if not saved_zone_names:
+            saved_zone_names = [
+                f"{config['prefix']}{index:02d}"
+                for index in range(1, config["capacity"] + 1)
+            ]
+        for name in saved_zone_names:
+            value = item["zones"].get(name) if is_fresh else None
+            zones[f"{camera_id}:{name}"] = bool(value) if is_fresh else None
+
+        status = "online" if is_fresh else "offline"
+        if is_recent and item and item.get("calibration_required"):
+            status = "calibration_required"
         public_cameras[camera_id] = {
             "camera_id": camera_id,
-            "camera_role": item["camera_role"],
-            "occupied": item["occupied"],
-            "free": item["free"],
-            "total": item["total"],
-            "occupancy_pct": item["occupancy_pct"],
-            "car_count": item["car_count"],
-            "motorcycle_count": item["motorcycle_count"],
-            "fps": item["fps"],
-            "timestamp": item["timestamp"],
-            "online": True,
+            "camera_role": config["role"],
+            "configured_capacity": config["capacity"],
+            "reporting_capacity": config["capacity"] if is_fresh else 0,
+            "occupied": int(item["occupied"]) if is_fresh else None,
+            "free": int(item["free"]) if is_fresh else None,
+            "total": config["capacity"],
+            "occupancy_pct": float(item["occupancy_pct"]) if is_fresh else None,
+            "car_count": int(item["car_count"]) if is_fresh else None,
+            "motorcycle_count": int(item["motorcycle_count"]) if is_fresh else None,
+            "fps": float(item["fps"]) if is_fresh else None,
+            "timestamp": item["timestamp"] if item else "",
+            "online": is_fresh,
+            "status": status,
+            "calibration_required": status == "calibration_required",
         }
+
+    complete = len(active) == len(CAMERA_ROLE_CONFIG)
+    partial = bool(active) and not complete
+    reporting_capacity = sum(
+        CAMERA_ROLE_CONFIG[camera_id]["capacity"] for camera_id in active
+    )
+    partial_occupied = sum(int(item["occupied"]) for item in active.values())
+    occupied = partial_occupied if complete else None
+    free = OFFICIAL_LOT_CAPACITY - occupied if complete else None
+    latest = max(active.values(), key=lambda item: item["received_at"], default=None)
 
     return {
         "occupied": occupied,
         "free": free,
-        "total": total,
-        "occupancy_pct": round(occupied / total * 100, 1) if total else 0.0,
-        "lot_full": bool(total and free == 0),
+        "total": OFFICIAL_LOT_CAPACITY,
+        "configured_capacity": OFFICIAL_LOT_CAPACITY,
+        "reporting_capacity": reporting_capacity,
+        "car_slots": OFFICIAL_CAR_CAPACITY,
+        "motorcycle_slots": OFFICIAL_MOTORCYCLE_CAPACITY,
+        "occupancy_pct": (
+            round(occupied / OFFICIAL_LOT_CAPACITY * 100, 1)
+            if complete else None
+        ),
+        "occupancy_available": complete,
+        "combined_complete": complete,
+        "combined_status": "complete" if complete else "partial" if partial else "unavailable",
+        "partial_occupied": partial_occupied if partial else None,
+        "lot_full": bool(free == 0) if complete else None,
         "fps": round(
             sum(float(item["fps"]) for item in active.values()) / len(active), 1
         ) if active else 0.0,
@@ -1723,8 +1813,13 @@ def _aggregate_camera_states_locked(now=None):
         "yolo_boxes": [],
         "slots": [],
         "zones": zones,
-        "car_count": sum(int(item["car_count"]) for item in active.values()),
-        "motorcycle_count": sum(int(item["motorcycle_count"]) for item in active.values()),
+        "car_count": (
+            int(active["cars"]["car_count"]) if "cars" in active else None
+        ),
+        "motorcycle_count": (
+            int(active["motorcycles"]["motorcycle_count"])
+            if "motorcycles" in active else None
+        ),
         "cameras": public_cameras,
     }
 
@@ -1746,47 +1841,14 @@ def _live_forecast_history_is_sufficient(rows) -> bool:
     return sample_count >= LIVE_FORECAST_MIN_SAMPLES
 
 
-def _layout_capacity_from_env(mode=None):
-    level = (mode or _read_setting("FORCE_DEMAND_LEVEL", "") or "").strip().upper()
-    if level not in {"NORMAL", "BUSY", "HIGH"}:
-        return 0
-    total = 0
-    for row in (1, 2, 3):
-        raw = os.getenv(f"{level}_R{row}_N", os.getenv(f"R{row}_N", "0"))
-        try:
-            total += max(0, int(float(raw or 0)))
-        except (TypeError, ValueError):
-            pass
-    return total
-
-
 def _active_slot_capacity(default=None):
-    with state_lock:
-        live_total = int(state.get("total") or 0)
-    if live_total > 0:
-        return live_total
+    """Backward-compatible name for the fixed official lot capacity."""
+    return OFFICIAL_LOT_CAPACITY
 
-    adjustment = globals().get("_last_slot_adjustment") or {}
-    try:
-        adjusted_total = int(adjustment.get("n_slots") or adjustment.get("total") or 0)
-        if adjusted_total > 0:
-            return adjusted_total
-    except (TypeError, ValueError):
-        pass
 
-    slots = adjustment.get("slots") or []
-    if slots:
-        return len(slots)
-
-    env_total = _layout_capacity_from_env()
-    if env_total > 0:
-        return env_total
-
-    configured_total = _capacity_settings()["total_slots"]
-    if configured_total > 0:
-        return configured_total
-
-    return int(default or LOT_CAPACITY)
+def _prediction_capacity():
+    """Stable planning capacity shared by local and deployed forecasts."""
+    return OFFICIAL_LOT_CAPACITY
 
 
 def _parking_log_signature(data: YoloUpdate):
@@ -1924,6 +1986,9 @@ def status():
         "ml_models":     list(ml._nb1.keys()),
         "lot_capacity":  LOT_CAPACITY,
         "active_slot_capacity": _active_slot_capacity(),
+        "prediction_data_policy": PREDICTION_DATA_POLICY,
+        "prediction_training_source": TRAINING_DATA_PATH.name,
+        "prediction_capacity": _prediction_capacity(),
     }
 
 
@@ -1979,8 +2044,17 @@ def yolo_update(data: YoloUpdate, x_cam_token: str = Header(...)):
     ts = datetime.now(PH_TZ).strftime("%Y-%m-%d %H:%M:%S")
     camera_id = _normalize_camera_id(data.camera_id)
     camera_role = str(data.camera_role or "mixed").strip().lower()
-    if camera_role not in {"mixed", "car", "motorcycle"}:
-        camera_role = "mixed"
+    expected = CAMERA_ROLE_CONFIG.get(camera_id)
+    if expected is None or camera_role != expected["role"]:
+        raise HTTPException(
+            422,
+            "Camera identity must be cars/car or motorcycles/motorcycle",
+        )
+    if int(data.total) != expected["capacity"]:
+        raise HTTPException(
+            422,
+            f"{camera_role} camera must report exactly {expected['capacity']} configured spaces",
+        )
     with state_lock:
         camera_states[camera_id] = {
             "camera_role": camera_role,
@@ -1994,6 +2068,9 @@ def yolo_update(data: YoloUpdate, x_cam_token: str = Header(...)):
             "fps": float(data.fps),
             "timestamp": ts,
             "zones": dict(data.zones or {}),
+            "reporting": bool(data.reporting),
+            "camera_status": str(data.camera_status or "online").strip().lower(),
+            "calibration_required": bool(data.calibration_required),
             "received_at": time.monotonic(),
         }
         _refresh_aggregated_state_locked()
@@ -2016,11 +2093,16 @@ def yolo_update(data: YoloUpdate, x_cam_token: str = Header(...)):
         camera_id="aggregate",
         camera_role="mixed",
     )
-    history.append({
-        "time": ts, "occupied": aggregated_data.occupied,
-        "total": aggregated_data.total, "pct": round(aggregated_data.occupancy_pct, 1),
-    })
-    db_logged, stable_for, db_snapshot = _should_insert_parking_log(aggregated_data)
+    combined_complete = bool(aggregated.get("combined_complete"))
+    if combined_complete:
+        history.append({
+            "time": ts, "occupied": aggregated_data.occupied,
+            "total": aggregated_data.total,
+            "pct": round(aggregated_data.occupancy_pct, 1),
+        })
+        db_logged, stable_for, db_snapshot = _should_insert_parking_log(aggregated_data)
+    else:
+        db_logged, stable_for, db_snapshot = False, 0.0, None
     if db_logged:
         try:
             execute(
@@ -2071,7 +2153,14 @@ def api_history(_auth=Depends(require_user)):
 def api_occupancy(_auth=Depends(require_user)):
     with state_lock:
         _refresh_aggregated_state_locked()
-        return {k: state[k] for k in ("occupied","free","total","occupancy_pct","zones")}
+        return {
+            key: state[key]
+            for key in (
+                "occupied", "free", "total", "configured_capacity",
+                "reporting_capacity", "occupancy_pct", "occupancy_available",
+                "combined_complete", "combined_status", "zones", "cameras",
+            )
+        }
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -2324,13 +2413,28 @@ def _with_pwd_senior_discount(result):
     return result
 
 
-def _dynamic_price_formula(vehicles_hour=0.0, lot_capacity=None, when=None, vehicle_type="car"):
+def _dynamic_price_formula(
+    vehicles_hour=0.0,
+    lot_capacity=None,
+    when=None,
+    vehicle_type="car",
+    occupancy_available=True,
+):
     vt = _normalize_vehicle_type(vehicle_type)
-    capacity = max(1, int(lot_capacity or _active_slot_capacity(LOT_CAPACITY)))
-    vehicles = max(0.0, float(vehicles_hour or 0.0))
-    occupancy_pct = round(min(100.0, (vehicles / capacity) * 100.0), 2)
-    occupancy_multiplier = _occupancy_price_multiplier(occupancy_pct)
-    day_multiplier, day_rule = _day_price_multiplier(when or datetime.now(PH_TZ))
+    capacity = OFFICIAL_LOT_CAPACITY
+    available = bool(occupancy_available and vehicles_hour is not None)
+    vehicles = max(0.0, float(vehicles_hour or 0.0)) if available else None
+    occupancy_pct = (
+        round(min(100.0, (vehicles / capacity) * 100.0), 2)
+        if available else None
+    )
+    occupancy_multiplier = (
+        _occupancy_price_multiplier(occupancy_pct) if available else 1.0
+    )
+    if available:
+        day_multiplier, day_rule = _day_price_multiplier(when or datetime.now(PH_TZ))
+    else:
+        day_multiplier, day_rule = 1.0, "Unavailable"
     flat_rate = _current_flat_rate(vt)
 
     manual_price = _manual_price_override(vt)
@@ -2344,7 +2448,7 @@ def _dynamic_price_formula(vehicles_hour=0.0, lot_capacity=None, when=None, vehi
             "price_change_pct": change_pct,
             "pricing_reason": "manual_admin_override",
             "pricing_context": {
-                "vehicles_hour": round(vehicles, 2),
+                "vehicles_hour": round(vehicles, 2) if vehicles is not None else None,
                 "lot_capacity": capacity,
                 "occupancy_pct": occupancy_pct,
                 "occupancy_multiplier": occupancy_multiplier,
@@ -2352,9 +2456,31 @@ def _dynamic_price_formula(vehicles_hour=0.0, lot_capacity=None, when=None, vehi
                 "day_multiplier": day_multiplier,
                 "day_rule": day_rule,
                 "manual_override": True,
+                "occupancy_available": available,
             },
             "formula": "price = admin_manual_price",
             "price_note": "Admin-set parking rate.",
+        })
+
+    if not available:
+        return _with_pwd_senior_discount({
+            "vehicle_type": vt,
+            "recommended_price_php": flat_rate,
+            "base_model_price_php": flat_rate,
+            "flat_rate_php": flat_rate,
+            "price_change_pct": 0.0,
+            "pricing_reason": "occupancy_unavailable",
+            "pricing_context": {
+                "vehicles_hour": None,
+                "lot_capacity": capacity,
+                "occupancy_pct": None,
+                "occupancy_multiplier": 1.0,
+                "day_multiplier": 1.0,
+                "day_rule": "Unavailable",
+                "occupancy_available": False,
+            },
+            "formula": "price = normal_base_price while live occupancy is unavailable",
+            "price_note": "Live occupancy unavailable; using the normal base rate.",
         })
 
     occupancy_price = round(flat_rate * occupancy_multiplier, 2)
@@ -2381,6 +2507,7 @@ def _dynamic_price_formula(vehicles_hour=0.0, lot_capacity=None, when=None, vehi
             "occupancy_price_php": occupancy_price,
             "day_multiplier": day_multiplier,
             "day_rule": day_rule,
+            "occupancy_available": True,
         },
         "formula": (
             "price = flat_rate * occupancy_multiplier * day_multiplier; "
@@ -2455,14 +2582,15 @@ def _training_weekday_revenue_forecast(capacity=None):
 
 
 def _weekday_revenue_forecast(capacity=None):
-    """Prefer current database observations and fall back to training data."""
-    live_values, live_today = _logged_weekday_revenue_forecast(capacity)
-    if any(float(value or 0.0) > 0.0 for value in live_values.values()):
-        return live_values, live_today, "deduplicated_live_logs"
+    """Use the configured forecast source consistently across environments."""
+    if PREDICTION_DATA_POLICY == "auto":
+        live_values, live_today = _logged_weekday_revenue_forecast(capacity)
+        if any(float(value or 0.0) > 0.0 for value in live_values.values()):
+            return live_values, live_today, "deduplicated_live_logs"
 
     training_values, training_today = _training_weekday_revenue_forecast(capacity)
     if any(float(value or 0.0) > 0.0 for value in training_values.values()):
-        return training_values, training_today, "training_data_fallback"
+        return training_values, training_today, "historical_training"
 
     return training_values, training_today, "none"
 
@@ -2609,8 +2737,13 @@ def _check_discount_id_abuse(discount_type: str, id_number: str) -> None:
 
 
 def _current_payment_regular_price(vehicle_type="car"):
-    vehicles, total = _pricing_occupancy_inputs()
-    return float(_dynamic_price_formula(vehicles, total, vehicle_type=vehicle_type)["recommended_price_php"])
+    vehicles, total, available = _pricing_occupancy_inputs()
+    return float(_dynamic_price_formula(
+        vehicles,
+        total,
+        vehicle_type=vehicle_type,
+        occupancy_available=available,
+    )["recommended_price_php"])
 
 
 def _row_float(row, key):
@@ -2651,7 +2784,7 @@ def _empty_payment_dashboard(error=None):
         "max_total_count": active_capacity,
         "car_slots": capacity_settings["car_slots"],
         "motorcycle_slots": capacity_settings["motorcycle_slots"],
-        "max_occupied_count": 0,
+        "max_occupied_count": None,
         "today_revenue_php": 0.0,
         "week_revenue_php": 0.0,
         "month_revenue_php": 0.0,
@@ -2716,8 +2849,11 @@ def _payment_revenue_dashboard():
     active_capacity = max(1, int(_active_slot_capacity(LOT_CAPACITY)))
     capacity_settings = _capacity_settings()
     with state_lock:
-        live_total = int(state.get("total") or 0)
-        live_occupied = int(state.get("occupied") or 0)
+        live_total = OFFICIAL_LOT_CAPACITY
+        live_occupied = (
+            int(state.get("occupied") or 0)
+            if state.get("combined_complete") else None
+        )
 
     summary_rows = query("""
         SELECT
@@ -2906,7 +3042,7 @@ def _payment_revenue_dashboard():
     return {
         "generated_at_ph": now.strftime("%Y-%m-%d %H:%M:%S"),
         "active_slot_capacity": active_capacity,
-        "max_total_count": max(active_capacity, live_total, capacity_settings["total_slots"]),
+        "max_total_count": OFFICIAL_LOT_CAPACITY,
         "car_slots": capacity_settings["car_slots"],
         "motorcycle_slots": capacity_settings["motorcycle_slots"],
         "max_occupied_count": live_occupied,
@@ -3030,6 +3166,8 @@ def _format_price_result(result):
     ctx = result.get("pricing_context", {})
     if result.get("pricing_reason") == "manual_admin_override":
         note = "Admin-set parking rate. Manual pricing is active."
+    elif result.get("pricing_reason") == "occupancy_unavailable":
+        note = "Live occupancy is unavailable; the normal base rate is in use."
     else:
         note = (
             f"{result.get('price_note') or 'Standard parking rate.'} "
@@ -3045,23 +3183,29 @@ def _format_price_result(result):
         "pwd_senior_discount_amount_php": result.get("pwd_senior_discount_amount_php"),
         "pwd_senior_note": result.get("pwd_senior_note"),
         "price_note": note,
-        "price_source": "occupancy_formula",
+        "price_source": result.get("pricing_reason", "occupancy_formula"),
+        "dynamic_pricing_available": result.get("pricing_reason") not in {
+            "occupancy_unavailable", "manual_admin_override"
+        },
         "price_formula": result.get("formula"),
         "price_context": result.get("pricing_context"),
     }
 
 
 def _driver_price_summary(vehicles_hour=None, lot_capacity=None):
-    if vehicles_hour is None:
-        try:
-            df = _db_history()
-            if not df.empty and "vehicles_hour" in df.columns:
-                vehicles_hour = float(df["vehicles_hour"].iloc[-1] or 0.0)
-        except Exception as e:
-            print(f"[driver summary] price history fallback: {e}")
-
-    car_result = _dynamic_price_formula(vehicles_hour or 0.0, lot_capacity, vehicle_type="car")
-    moto_result = _dynamic_price_formula(vehicles_hour or 0.0, lot_capacity, vehicle_type="motorcycle")
+    available = vehicles_hour is not None
+    car_result = _dynamic_price_formula(
+        vehicles_hour,
+        lot_capacity,
+        vehicle_type="car",
+        occupancy_available=available,
+    )
+    moto_result = _dynamic_price_formula(
+        vehicles_hour,
+        lot_capacity,
+        vehicle_type="motorcycle",
+        occupancy_available=available,
+    )
     car = _format_price_result(car_result)
     moto = _format_price_result(moto_result)
 
@@ -3079,10 +3223,9 @@ def api_driver_summary(_auth=Depends(require_user)):
         _refresh_aggregated_state_locked()
         snapshot = dict(state)
 
-    live_total = int(snapshot.get("total") or 0)
-    total = live_total or int(_active_slot_capacity(LOT_CAPACITY))
+    total = OFFICIAL_LOT_CAPACITY
     timestamp = snapshot.get("timestamp") or ""
-    camera_online = live_total > 0 and bool(timestamp)
+    camera_online = bool(snapshot.get("combined_complete"))
 
     if camera_online:
         occupied = max(0, int(snapshot.get("occupied") or 0))
@@ -3107,6 +3250,10 @@ def api_driver_summary(_auth=Depends(require_user)):
         "available_text": "--" if free is None else str(free),
         "occupied": occupied,
         "total": total,
+        "configured_capacity": total,
+        "reporting_capacity": int(snapshot.get("reporting_capacity") or 0),
+        "combined_complete": camera_online,
+        "combined_status": snapshot.get("combined_status", "unavailable"),
         "occupancy_pct": occupancy_pct,
         "lot_full": bool(snapshot.get("lot_full")) if camera_online else False,
         "camera_online": camera_online,
@@ -3159,11 +3306,13 @@ def ml_predict_occupancy(_auth=Depends(require_user)):
 
 @app.get("/api/ml/predict/price")
 def ml_predict_price(_auth=Depends(require_user)):
-    df = _db_history()
-    if df.empty: raise HTTPException(422, "No history")
     try:
-        row = df.iloc[-1].to_dict()
-        return _dynamic_price_formula(row.get("vehicles_hour", 0.0), _active_slot_capacity(), row.get("datetime"))
+        vehicles, capacity, available = _pricing_occupancy_inputs()
+        return _dynamic_price_formula(
+            vehicles,
+            capacity,
+            occupancy_available=available,
+        )
     except Exception as e:
         print(f"[ML price] {e}")
         raise HTTPException(500, "Price prediction failed") from e
@@ -3211,8 +3360,12 @@ def ml_dashboard(_auth=Depends(require_user)):
             try:   out[key] = fn()
             except Exception as e: out[key] = {"error": str(e)}
         try:
-            row = df.iloc[-1].to_dict()
-            out["price"] = _dynamic_price_formula(row.get("vehicles_hour", 0.0), active_capacity, row.get("datetime"))
+            vehicles, capacity, available = _pricing_occupancy_inputs()
+            out["price"] = _dynamic_price_formula(
+                vehicles,
+                capacity,
+                occupancy_available=available,
+            )
         except Exception as e:
             out["price"] = {"error": str(e)}
     else:
@@ -3228,20 +3381,31 @@ def ml_dashboard(_auth=Depends(require_user)):
 @app.get("/api/predictions")
 def api_predictions(_auth=Depends(require_user)):
     try:
-        active_capacity = max(1, int(_active_slot_capacity(LOT_CAPACITY)))
-        # Use live database history only after it has enough hourly coverage.
-        # A short or mostly-empty local detector run must not mask the real
-        # historical pattern in the bundled training data.
-        live_hourly = _logged_hourly_vehicle_avg()
-        if live_hourly:
-            hourly = _hourly_occupancy_percent(live_hourly, active_capacity)
-            hourly_source = "last_7_days"
+        prediction_capacity = _prediction_capacity()
+        if PREDICTION_DATA_POLICY == "auto":
+            # Auto mode is an explicit opt-in for installations whose database
+            # has enough representative hourly samples.
+            live_hourly = _logged_hourly_vehicle_avg()
+            if live_hourly:
+                hourly = _hourly_occupancy_percent(
+                    live_hourly, prediction_capacity
+                )
+                hourly_source = "last_7_days"
+            else:
+                hourly = _training_hourly_occ_pct(prediction_capacity)
+                hourly_source = (
+                    "historical_training" if any(hourly.values()) else "none"
+                )
         else:
-            hourly = _training_hourly_occ_pct(active_capacity)
-            hourly_source = "training_data_fallback" if any(hourly.values()) else "none"
+            hourly = _training_hourly_occ_pct(prediction_capacity)
+            hourly_source = (
+                "historical_training" if any(hourly.values()) else "none"
+            )
         peak = max(hourly, key=lambda h: hourly[h])
 
-        weekday_revenue, today_forecast, revenue_source = _weekday_revenue_forecast(active_capacity)
+        weekday_revenue, today_forecast, revenue_source = _weekday_revenue_forecast(
+            prediction_capacity
+        )
 
         days_with_revenue = {d: v for d, v in weekday_revenue.items() if v and v > 0}
         if days_with_revenue:
@@ -3262,7 +3426,9 @@ def api_predictions(_auth=Depends(require_user)):
             "quiet_days":             quiet_days,
             "weekday_revenue":        weekday_revenue,
             "today_revenue_forecast": today_forecast,
-            "active_slot_capacity":   active_capacity,
+            "active_slot_capacity":   _active_slot_capacity(LOT_CAPACITY),
+            "prediction_capacity":    prediction_capacity,
+            "prediction_data_policy": PREDICTION_DATA_POLICY,
             "hourly_source":           hourly_source,
             "revenue_source":          revenue_source,
             "generated_at_ph":        datetime.now(PH_TZ).strftime("%Y-%m-%d %H:%M:%S"),
@@ -3277,6 +3443,8 @@ def api_predictions(_auth=Depends(require_user)):
             "quiet_days":             [],
             "weekday_revenue":        {},
             "today_revenue_forecast": None,
+            "prediction_capacity":    _prediction_capacity(),
+            "prediction_data_policy": PREDICTION_DATA_POLICY,
             "hourly_source":          "none",
             "revenue_source":         "none",
             "generated_at_ph":        datetime.now(PH_TZ).strftime("%Y-%m-%d %H:%M:%S"),
@@ -3976,19 +4144,21 @@ def api_hourly_by_day(_auth=Depends(require_user)):
     Used by the Analytics page hourly-by-day chart.
     """
     try:
-        active_capacity = max(1, int(_active_slot_capacity(LOT_CAPACITY)))
-        rows = query("""
-            SELECT
-                EXTRACT(DOW  FROM logged_at AT TIME ZONE 'Asia/Manila') AS dow,
-                EXTRACT(HOUR FROM logged_at AT TIME ZONE 'Asia/Manila') AS hour,
-                AVG(occupied)      AS avg_vehicles,
-                AVG(occupancy_pct) AS avg_occ_pct,
-                COUNT(*)           AS sample_count
-            FROM parking_logs
-            WHERE logged_at >= NOW() - INTERVAL '30 days'
-            GROUP BY dow, hour
-            ORDER BY dow, hour
-        """)
+        prediction_capacity = _prediction_capacity()
+        rows = []
+        if PREDICTION_DATA_POLICY == "auto":
+            rows = query("""
+                SELECT
+                    EXTRACT(DOW  FROM logged_at AT TIME ZONE 'Asia/Manila') AS dow,
+                    EXTRACT(HOUR FROM logged_at AT TIME ZONE 'Asia/Manila') AS hour,
+                    AVG(occupied)      AS avg_vehicles,
+                    AVG(occupancy_pct) AS avg_occ_pct,
+                    COUNT(*)           AS sample_count
+                FROM parking_logs
+                WHERE logged_at >= NOW() - INTERVAL '30 days'
+                GROUP BY dow, hour
+                ORDER BY dow, hour
+            """)
 
         # Build dow->hour->value map. dow: 0=Sun, 1=Mon, ..., 6=Sat.
         day_map = {i: {h: {"vehicles": 0.0, "occ_pct": 0.0, "samples": 0}
@@ -4005,9 +4175,12 @@ def api_hourly_by_day(_auth=Depends(require_user)):
 
         # Sparse logs are not a reliable forecast. Use the real training CSV
         # until the database has enough hourly coverage and samples.
-        has_data = _live_forecast_history_is_sufficient(rows)
+        has_data = (
+            PREDICTION_DATA_POLICY == "auto"
+            and _live_forecast_history_is_sufficient(rows)
+        )
         if not has_data:
-            day_map = _training_hourly_by_day(active_capacity)
+            day_map = _training_hourly_by_day(prediction_capacity)
 
         # Also compute overall daily totals and peak hours
         day_labels = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"]
@@ -4029,8 +4202,9 @@ def api_hourly_by_day(_auth=Depends(require_user)):
             "hourly_by_dow":  day_map,
             "daily_summary":  daily_summary,
             "day_labels":     day_labels,
-            "lot_capacity":   active_capacity,
-            "source":         "db" if has_data else "historical_fallback",
+            "lot_capacity":   prediction_capacity,
+            "prediction_data_policy": PREDICTION_DATA_POLICY,
+            "source":         "db_live_history" if has_data else "historical_training",
             "generated_at_ph": datetime.now(PH_TZ).strftime("%Y-%m-%d %H:%M:%S"),
         }
 
@@ -4091,7 +4265,7 @@ def api_insights_refresh(_admin=Depends(require_admin)):
 def parking_logs_recent(limit: int = 168, x_cam_token: str = Header(None)):
     """
     Returns the most recent `limit` parking_logs rows (newest first).
-    Used by the SlotAdjusterThread in detector.py to build lag features.
+    Retained for authenticated reporting and historical analysis clients.
     Default 168 = 7 days of hourly rows.
     """
     _check_cam_token(x_cam_token)
@@ -4305,34 +4479,24 @@ def _regular_price_for_duration(vehicle_type="car", duration_type="daily"):
 def _pricing_occupancy_inputs(vehicles_hour=None, lot_capacity=None):
     """Return the occupancy inputs used for a customer-facing price.
 
-    A live detector reading is preferred.  When the camera is offline, the
-    latest stored detector reading is used instead of silently disabling the
-    pricing formula.  A zero reading is the safe fallback for a new lot with
-    no detector history yet.
+    Only a complete, fresh two-camera reading may drive dynamic pricing.
+    Missing/stale input returns unavailable instead of manufacturing zero
+    demand or reusing stale history.
     """
-    capacity = max(1, int(lot_capacity or _active_slot_capacity(LOT_CAPACITY)))
+    capacity = OFFICIAL_LOT_CAPACITY
     if vehicles_hour is not None:
-        return max(0.0, float(vehicles_hour or 0.0)), capacity
+        return max(0.0, float(vehicles_hour or 0.0)), capacity, True
 
     try:
         with state_lock:
             _refresh_aggregated_state_locked()
             snapshot = dict(state)
-        live_total = int(snapshot.get("total") or 0)
-        if live_total > 0 and snapshot.get("timestamp"):
-            return max(0.0, float(snapshot.get("occupied") or 0.0)), live_total
+        if snapshot.get("combined_complete"):
+            return max(0.0, float(snapshot.get("occupied") or 0.0)), capacity, True
     except Exception as exc:
-        print(f"[pricing] live occupancy fallback: {exc}")
+        print(f"[pricing] live occupancy unavailable: {exc}")
 
-    try:
-        history = _db_history()
-        if not history.empty and "vehicles_hour" in history.columns:
-            latest = history["vehicles_hour"].iloc[-1]
-            return max(0.0, float(latest or 0.0)), capacity
-    except Exception as exc:
-        print(f"[pricing] history occupancy fallback: {exc}")
-
-    return 0.0, capacity
+    return None, capacity, False
 
 
 def _effective_duration_pricing(vehicles_hour=None, lot_capacity=None, when=None):
@@ -4353,8 +4517,14 @@ def _effective_duration_pricing(vehicles_hour=None, lot_capacity=None, when=None
             "base_duration_pricing": dict(base_rates),
         }
 
-    vehicles, capacity = _pricing_occupancy_inputs(vehicles_hour, lot_capacity)
-    reference = _dynamic_price_formula(vehicles, capacity, when=when, vehicle_type="car")
+    vehicles, capacity, available = _pricing_occupancy_inputs(vehicles_hour, lot_capacity)
+    reference = _dynamic_price_formula(
+        vehicles,
+        capacity,
+        when=when,
+        vehicle_type="car",
+        occupancy_available=available,
+    )
     context = reference.get("pricing_context", {})
     occupancy_multiplier = float(context.get("occupancy_multiplier") or 1.0)
     day_multiplier = float(context.get("day_multiplier") or 1.0)
@@ -4376,10 +4546,11 @@ def _effective_duration_pricing(vehicles_hour=None, lot_capacity=None, when=None
 
     effective.update({
         "pricing_mode": "dynamic",
-        "demand_pricing_enabled": True,
+        "demand_pricing_enabled": available,
+        "dynamic_pricing_available": available,
         "base_duration_pricing": dict(base_rates),
         "pricing_context": {
-            "vehicles_hour": round(vehicles, 2),
+            "vehicles_hour": round(vehicles, 2) if vehicles is not None else None,
             "lot_capacity": capacity,
             "occupancy_pct": context.get("occupancy_pct", 0.0),
             "occupancy_multiplier": occupancy_multiplier,
@@ -4387,7 +4558,11 @@ def _effective_duration_pricing(vehicles_hour=None, lot_capacity=None, when=None
             "day_rule": context.get("day_rule", "Weekday"),
             "combined_multiplier": round(combined_multiplier, 4),
         },
-        "pricing_note": "Demand pricing is based on current occupancy and day type.",
+        "pricing_note": (
+            "Demand pricing is based on complete current occupancy and day type."
+            if available
+            else "Both cameras are required; normal base prices are in use."
+        ),
     })
     return effective
 
@@ -4398,10 +4573,9 @@ def _effective_price_for_duration(vehicle_type="car", duration_type="daily", veh
     rates = _effective_duration_pricing(vehicles_hour, lot_capacity, when)
     return float(rates[f"{dt}_rate_php_{vt}"])
 
-# Default lot layout: 10 car slots + 20 motorcycle slots = 30 total, per the
-# panel's approved system requirements ("Total Max Count" / "identify how
-# many are for motorcycle slots"). Admin-editable, durable in admin_settings
-# the same way pricing/discounts are.
+# Official lot layout: 10 car slots + 20 motorcycle slots = 30 total.
+# Coordinates are configurable in camera_layouts.json; capacity is not derived
+# from generated boxes, camera connectivity, or demand.
 _DEFAULT_CAR_SLOTS = 10
 _DEFAULT_MOTORCYCLE_SLOTS = 20
 
@@ -4415,16 +4589,12 @@ def _parse_slot_count(value, default):
     return count
 
 def _capacity_settings():
-    car = _parse_slot_count(
-        _read_setting("CAPACITY_CAR_SLOTS", str(_DEFAULT_CAR_SLOTS)), _DEFAULT_CAR_SLOTS
-    )
-    moto = _parse_slot_count(
-        _read_setting("CAPACITY_MOTORCYCLE_SLOTS", str(_DEFAULT_MOTORCYCLE_SLOTS)), _DEFAULT_MOTORCYCLE_SLOTS
-    )
     return {
-        "car_slots": car,
-        "motorcycle_slots": moto,
-        "total_slots": car + moto,
+        "car_slots": _DEFAULT_CAR_SLOTS,
+        "motorcycle_slots": _DEFAULT_MOTORCYCLE_SLOTS,
+        "total_slots": OFFICIAL_LOT_CAPACITY,
+        "editable": False,
+        "source": "official_fixed_layout",
     }
 
 def _manual_price_override(vehicle_type="car"):
@@ -4551,7 +4721,13 @@ async def receive_slot_adjustment(
 ):
     _check_cam_token(x_cam_token)
     global _last_slot_adjustment
-    _last_slot_adjustment = payload.dict()
+    _last_slot_adjustment = {
+        **payload.dict(),
+        "n_slots": OFFICIAL_LOT_CAPACITY,
+        "layout_mode": "fixed",
+        "layout_effect": False,
+        "reason": "Demand metadata received; fixed camera layouts were not changed.",
+    }
     return {"status": "ok"}
 
 
@@ -4562,8 +4738,10 @@ async def get_slot_adjustment(_auth=Depends(require_user)):
         "demand":       "NORMAL",
         "forecast_veh": 0,
         "current_occ":  0,
-        "n_slots":      0,
-        "reason":       "No adjustment yet",
+        "n_slots":      OFFICIAL_LOT_CAPACITY,
+        "layout_mode":  "fixed",
+        "layout_effect": False,
+        "reason":       "10 car and 20 motorcycle spaces use saved fixed layouts",
     }
 # ══════════════════════════════════════════════════════════════════
 @app.get("/api/settings/layout-mode")
@@ -4571,7 +4749,14 @@ def get_layout_mode(_admin=Depends(require_admin)):
     raw_mode = _read_setting("FORCE_DEMAND_LEVEL", "").strip().upper()
     enabled = raw_mode in _LAYOUT_MODES
     mode = raw_mode if enabled else "NORMAL"
-    return {"mode": mode, "enabled": enabled, "modes": ["NORMAL", "BUSY", "HIGH"]}
+    return {
+        "mode": mode,
+        "enabled": enabled,
+        "modes": ["NORMAL", "BUSY", "HIGH"],
+        "layout_mode": "fixed",
+        "layout_effect": False,
+        "message": "Demand labels are informational and never change camera boxes.",
+    }
 
 @app.post("/api/settings/layout-mode")
 def set_layout_mode(payload: LayoutModePayload, _admin=Depends(require_admin)):
@@ -4585,14 +4770,18 @@ def set_layout_mode(payload: LayoutModePayload, _admin=Depends(require_admin)):
             "ok": True,
             "mode": mode,
             "enabled": False,
-            "message": "Manual layout override is off. Detector will choose the layout automatically.",
+            "layout_mode": "fixed",
+            "layout_effect": False,
+            "message": "Demand override is off. Saved camera layouts remain fixed.",
         }
     _write_setting("FORCE_DEMAND_LEVEL", mode)
     return {
         "ok": True,
         "mode": mode,
         "enabled": True,
-        "message": "Layout mode saved. Detector applies it on the next adjustment cycle.",
+        "layout_mode": "fixed",
+        "layout_effect": False,
+        "message": "Demand label saved for information only; camera layouts remain fixed.",
     }
 
 #  Auth
@@ -4657,29 +4846,24 @@ def get_capacity_settings(_admin=Depends(require_admin)):
 
 @app.post("/api/settings/capacity")
 def set_capacity_settings(payload: CapacitySettingsPayload, _admin=Depends(require_admin)):
-    current = _capacity_settings()
-    car = current["car_slots"] if payload.car_slots is None else _parse_slot_count(payload.car_slots, current["car_slots"])
-    moto = (
-        current["motorcycle_slots"]
-        if payload.motorcycle_slots is None
-        else _parse_slot_count(payload.motorcycle_slots, current["motorcycle_slots"])
+    car = _DEFAULT_CAR_SLOTS if payload.car_slots is None else _parse_slot_count(
+        payload.car_slots, _DEFAULT_CAR_SLOTS
     )
-    if car + moto < 1:
-        raise HTTPException(400, "Total slots (car + motorcycle) must be at least 1")
-
-    _write_setting("CAPACITY_CAR_SLOTS", str(car))
-    _write_setting("CAPACITY_MOTORCYCLE_SLOTS", str(moto))
-
-    with _insight_lock:
-        _insight_cache.clear()
-    threading.Thread(target=_run_insights_now, daemon=True, name="insight-capacity-update").start()
-
-    result = _capacity_settings()
-    result.update({
+    moto = (
+        _DEFAULT_MOTORCYCLE_SLOTS
+        if payload.motorcycle_slots is None
+        else _parse_slot_count(payload.motorcycle_slots, _DEFAULT_MOTORCYCLE_SLOTS)
+    )
+    if car != _DEFAULT_CAR_SLOTS or moto != _DEFAULT_MOTORCYCLE_SLOTS:
+        raise HTTPException(
+            400,
+            "Official capacity is fixed at 10 car and 20 motorcycle spaces",
+        )
+    return {
+        **_capacity_settings(),
         "ok": True,
-        "message": f"Capacity saved — {car} car slot(s), {moto} motorcycle slot(s) ({car + moto} total).",
-    })
-    return result
+        "message": "Official capacity remains 10 car + 20 motorcycle = 30 spaces.",
+    }
 
 @app.get("/api/settings/duration-pricing")
 def get_duration_pricing_settings(_admin=Depends(require_admin)):
