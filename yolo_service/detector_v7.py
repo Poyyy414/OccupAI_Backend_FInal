@@ -2,8 +2,8 @@
 
 Each worker has one strict camera role and loads that role's normalized parking
 boxes from ``camera_layouts.json``. Demand labels never add, remove, or move
-parking boxes. A moved camera stops occupancy reporting until its saved layout
-has been recalibrated and the worker restarted.
+parking boxes. Scene changes automatically rewarm detection and reload the
+same fixed layout; USB capture failure exits cleanly for the launcher to restart.
 """
 
 import cv2
@@ -205,6 +205,11 @@ BG_REWARM_N = _ei("BG_REWARM_N", 20)
 CAMERA_FRAME_TIMEOUT_SECONDS = max(
     1.0, _ef("CAMERA_FRAME_TIMEOUT_SECONDS", 2.5)
 )
+CAMERA_READ_FAILURE_LIMIT = max(10, _ei("CAMERA_READ_FAILURE_LIMIT", 120))
+AUTO_CAMERA_RECALIBRATE = _eb("AUTO_CAMERA_RECALIBRATE", True)
+AUTO_RECALIBRATE_SETTLE_SECONDS = max(
+    0.0, _ef("AUTO_RECALIBRATE_SETTLE_SECONDS", 2.0)
+)
 # Keep a confirmed occupied slot briefly when one color-detection pass misses
 # it because of lighting/compression noise.  This prevents visible flicker
 # without making a removed vehicle look occupied for long.
@@ -224,6 +229,7 @@ _cam_ok      = True
 _cam_ok_lock = threading.Lock()
 _cam_last_frame_at = 0.0
 _cam_frame_lock = threading.Lock()
+_cam_reader_failed = threading.Event()
 
 slot_state = SlotState()
 
@@ -654,14 +660,28 @@ def draw_scanning(frame, msg="LOADING LAYOUT..."):
 
 def camera_reader(cap, tw, th):
     global _cam_last_frame_at
+    failures = 0
     while True:
         try:
             ret,f=cap.read()
         except Exception as e:
             print(f"[cam-reader] cap.read() raised, retrying: {e}")
-            time.sleep(0.1)
+            failures += 1
+            if failures >= CAMERA_READ_FAILURE_LIMIT:
+                print("[cam-reader] Camera capture failed repeatedly; requesting worker restart.")
+                _cam_reader_failed.set()
+                return
+            time.sleep(0.05)
             continue
-        if not ret or f is None: time.sleep(0.005); continue
+        if not ret or f is None:
+            failures += 1
+            if failures >= CAMERA_READ_FAILURE_LIMIT:
+                print("[cam-reader] Camera stopped returning frames; requesting worker restart.")
+                _cam_reader_failed.set()
+                return
+            time.sleep(0.05)
+            continue
+        failures = 0
         if f.shape[1]!=tw or f.shape[0]!=th: f=cv2.resize(f,(tw,th))
         with _cam_frame_lock:
             _cam_last_frame_at = time.monotonic()
@@ -874,7 +894,11 @@ def detection_loop():
     consecutive_errors=0
     while True:
         try: frame=_cam_q.get(timeout=0.1)
-        except queue.Empty: continue
+        except queue.Empty:
+            if _cam_reader_failed.is_set():
+                print("[FATAL] Camera reader stopped; exiting so the launcher can restart this worker.")
+                break
+            continue
 
         try:
             frame_idx+=1; fps_n+=1
@@ -903,7 +927,7 @@ def detection_loop():
                 ed=edge_region_diff(cg,ref_gray)
                 print(f"[redetect] edge diff={ed:.1f}  thresh={REDETECT_THRESH}")
                 if ed>REDETECT_THRESH:
-                    print("[redetect] Camera moved — saved layout needs recalibration.")
+                    print("[redetect] Scene changed — starting fixed-layout recalibration.")
                     rescanning=True
                     def _redo():
                         nonlocal rescanning,ref_gray,calibration_required
@@ -923,10 +947,18 @@ def detection_loop():
                             slot_state.set_base_slots(new_slots)
                             ret2,rf2=cap.read()
                             ref_gray=cv2.cvtColor(rf2,cv2.COLOR_BGR2GRAY) if ret2 else ref_gray
-                            print(
-                                f"[redetect] Reloaded the same {len(new_slots)} slots; "
-                                "calibrate the saved JSON coordinates and restart."
-                            )
+                            if AUTO_CAMERA_RECALIBRATE:
+                                time.sleep(AUTO_RECALIBRATE_SETTLE_SECONDS)
+                                calibration_required=False
+                                print(
+                                    f"[redetect] Auto-recalibration complete; resumed with "
+                                    f"the same {len(new_slots)} saved slots."
+                                )
+                            else:
+                                print(
+                                    f"[redetect] Reloaded the same {len(new_slots)} slots; "
+                                    "manual JSON calibration is required."
+                                )
                         except Exception as e: print(f"[redetect] err: {e}")
                         finally: rescanning=False
                     threading.Thread(target=_redo,daemon=True,name="redetect").start()
@@ -1064,7 +1096,10 @@ def detection_loop():
                 sys.exit(1)
             continue
 
+    det_stop.set()
     cap.release()
+    if _cam_reader_failed.is_set():
+        raise RuntimeError("Camera capture stopped")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -725,6 +725,10 @@
                 <option value="monthly">Monthly</option>
               </select>
               <div class="gcash-vehicle-label" id="gcashDurationAmount"></div>
+              <label for="gcashMobile">Mobile number (required)</label>
+              <input class="gcash-select" id="gcashMobile" type="tel" inputmode="numeric"
+                     autocomplete="tel-national" placeholder="09XXXXXXXXX" maxlength="11"
+                     pattern="09[0-9]{9}" oninput="this.value=this.value.replace(/\D/g,'').slice(0,11)" />
               <label>Discount</label>
               <select class="gcash-select" id="gcashDiscount" onchange="onGcashDiscountChange()">
                 <option value="none">None</option>
@@ -1014,6 +1018,12 @@
 
       const discountType = document.getElementById('gcashDiscount')?.value || 'none';
       const discountId = document.getElementById('gcashDiscountId')?.value.trim() || '';
+      const mobileNumber = document.getElementById('gcashMobile')?.value.trim() || '';
+      if (!/^09\d{9}$/.test(mobileNumber)) {
+        status.textContent = 'Enter a required mobile number in 09XXXXXXXXX format.';
+        document.getElementById('gcashMobile')?.focus();
+        return;
+      }
       if (discountType !== 'none' && !discountId) {
         status.textContent = `Enter your ${discountType.toUpperCase()} ID number to apply this discount.`;
         return;
@@ -1032,6 +1042,7 @@
             duration_type: durationType,
             discount_type: discountType,
             discount_id_number: discountId || null,
+            mobile_number: mobileNumber,
             description: 'OccupAI Parking (' + (selectedVehicleType === 'motorcycle' ? 'Motorcycle' : 'Car') + ') - ' + (document.getElementById('driverName')?.textContent || 'Driver'),
             user_id: getUser()?.user_id ?? null,
           })

@@ -30,6 +30,16 @@ From the repository root, run the single launcher:
 .\start_two_cameras.ps1
 ```
 
+The launcher supervises both processes. If a USB camera stops returning frames
+or a worker crashes, that worker exits and is restarted automatically with a
+short capped backoff. Keep the launcher window open.
+
+Scene and lighting changes automatically rewarm occupancy detection and reload
+the same saved 10/20 boxes. Set `AUTO_CAMERA_RECALIBRATE=false` only when you
+want scene changes to remain in a manual recalibration state. Automatic
+recalibration cannot discover new parking-space geometry: after physically
+moving a mounted camera, still verify and adjust the normalized JSON rectangles.
+
 It starts exactly one car worker and one motorcycle worker, refuses to run a
 second launcher, checks ports 8001/8002 before startup, and reports a worker's
 exit code. Each detector also validates its required camera ID, webcam index,
@@ -53,10 +63,13 @@ Use the generated `debug_zones_cars.jpg` and
 is a safe normalized starting point; physical camera placement still requires
 calibration against the real diorama.
 
-Lighting changes may re-warm occupancy detection, but never alter geometry. If
-scene-change detection indicates that a camera moved, that camera reports
-`calibration_required`; its spaces become Unknown until the JSON coordinates
-are recalibrated and the worker is restarted.
+Scene changes re-warm occupancy detection but never alter geometry. With the
+default automatic mode, the worker resumes using the same saved rectangles;
+it cannot tell whether a detected change was only lighting or a physically
+moved camera. Visually verify the debug image after moving a camera. With
+`AUTO_CAMERA_RECALIBRATE=false`, the camera remains `calibration_required` and
+its spaces stay Unknown until the JSON coordinates are corrected and the
+worker is restarted.
 
 ## Offline and partial behavior
 

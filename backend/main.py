@@ -143,6 +143,10 @@ SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER).strip()
 SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").strip().lower() not in {
     "0", "false", "no", "off"
 }
+BREVO_API_KEY = os.getenv("BREVO_API_KEY", "").strip()
+BREVO_SENDER_EMAIL = os.getenv("BREVO_SENDER_EMAIL", SMTP_FROM).strip()
+BREVO_SENDER_NAME = os.getenv("BREVO_SENDER_NAME", "OccupAI Support").strip()
+BREVO_API_URL = "https://api.brevo.com/v3/smtp/email"
 
 
 def _sign_auth_token(user_id: int, role: str, purpose: str = "auth", ttl_seconds: int = AUTH_TOKEN_TTL_SECONDS) -> str:
@@ -1543,6 +1547,7 @@ def _ensure_gcash_checkout_table():
         execute("ALTER TABLE gcash_checkouts ADD COLUMN IF NOT EXISTS discount_id_number TEXT")
         execute("ALTER TABLE gcash_checkouts ADD COLUMN IF NOT EXISTS error_message TEXT")
         execute("ALTER TABLE gcash_checkouts ADD COLUMN IF NOT EXISTS duration_type TEXT NOT NULL DEFAULT 'daily'")
+        execute("ALTER TABLE gcash_checkouts ADD COLUMN IF NOT EXISTS customer_mobile TEXT")
     except Exception as e:
         print(f"[DB] gcash checkout table setup warning: {e}")
 
@@ -3608,6 +3613,22 @@ class GcashCheckoutPayload(BaseModel):
     discount_id_number: Optional[str] = None
     description: Optional[str] = "OccupAI Parking Payment"
     user_id: Optional[int] = None
+    mobile_number: str
+
+
+def _normalize_ph_mobile(value: str) -> str:
+    """Return a Philippine mobile number in the local 09XXXXXXXXX format."""
+    digits = re.sub(r"\D", "", str(value or ""))
+    if len(digits) == 12 and digits.startswith("63"):
+        digits = "0" + digits[2:]
+    elif len(digits) == 10 and digits.startswith("9"):
+        digits = "0" + digits
+    if not re.fullmatch(r"09\d{9}", digits):
+        raise HTTPException(
+            400,
+            "Mobile number is required and must use the Philippine format 09XXXXXXXXX",
+        )
+    return digits
 
 
 def _paymongo_headers(idempotency_key: Optional[str] = None):
@@ -3634,6 +3655,14 @@ def gcash_create_checkout(
 
     vehicle_type = _normalize_vehicle_type(payload.vehicle_type, default="car")
     duration_type = _normalize_duration_type(payload.duration_type, default="daily")
+    mobile_number = _normalize_ph_mobile(payload.mobile_number)
+    customer_rows = query(
+        "SELECT full_name, email FROM users WHERE user_id=%s AND is_active=TRUE LIMIT 1",
+        (int(_auth["user_id"]),),
+    )
+    if not customer_rows:
+        raise HTTPException(401, "Active customer account not found")
+    customer = customer_rows[0]
     # Never trust the amount sent by a browser or mobile client. Recalculate
     # the active demand price on the server and store that locked quote with
     # the checkout, so the amount displayed and the amount charged agree.
@@ -3658,10 +3687,10 @@ def gcash_create_checkout(
     ref = secrets.token_urlsafe(24)
     execute(
         """
-        INSERT INTO gcash_checkouts (ref, user_id, vehicle_type, duration_type, regular_price_php, discount_type, final_amount_php, discount_id_number)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+        INSERT INTO gcash_checkouts (ref, user_id, vehicle_type, duration_type, regular_price_php, discount_type, final_amount_php, discount_id_number, customer_mobile)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """,
-        (ref, int(_auth["user_id"]), vehicle_type, duration_type, regular_price, discount_type, final_amount, discount_id_number),
+        (ref, int(_auth["user_id"]), vehicle_type, duration_type, regular_price, discount_type, final_amount, discount_id_number, mobile_number),
     )
 
     body = json.dumps({
@@ -3675,6 +3704,11 @@ def gcash_create_checkout(
                     "description": (payload.description or "OccupAI Parking Payment").strip()[:200],
                 }],
                 "payment_method_types": ["gcash"],
+                "billing": {
+                    "name": str(customer.get("full_name") or "OccupAI Driver")[:120],
+                    "email": str(customer.get("email") or "")[:254],
+                    "phone": mobile_number,
+                },
                 "reference_number": ref,
                 "success_url": f"{base_url}/api/gcash/success?ref={ref}",
                 "cancel_url": f"{base_url}/driver",
@@ -4931,20 +4965,62 @@ def _password_reset_url(request: Request, raw_token: str) -> str:
 
 def _send_password_reset_email(recipient: str, reset_url: str) -> bool:
     """Send a reset link without exposing the token through an API response or log."""
+    text_content = (
+        "We received a request to reset your OccupAI password.\n\n"
+        f"Open this link within {PASSWORD_RESET_TTL_MINUTES} minutes to choose a new password:\n"
+        f"{reset_url}\n\n"
+        "If you did not request this, you can safely ignore this email."
+    )
+
+    if BREVO_API_KEY and BREVO_SENDER_EMAIL:
+        safe_url = html.escape(reset_url, quote=True)
+        try:
+            response = httpx.post(
+                BREVO_API_URL,
+                headers={
+                    "accept": "application/json",
+                    "api-key": BREVO_API_KEY,
+                    "content-type": "application/json",
+                },
+                json={
+                    "sender": {
+                        "name": BREVO_SENDER_NAME or "OccupAI Support",
+                        "email": BREVO_SENDER_EMAIL,
+                    },
+                    "to": [{"email": recipient}],
+                    "subject": "Reset your OccupAI password",
+                    "htmlContent": (
+                        "<html><body style=\"font-family:Arial,sans-serif;color:#14202c\">"
+                        "<h2>Reset your OccupAI password</h2>"
+                        "<p>We received a request to reset your password.</p>"
+                        f"<p><a href=\"{safe_url}\" style=\"display:inline-block;"
+                        "padding:12px 18px;background:#0f9f73;color:white;text-decoration:none;"
+                        "border-radius:8px\">Choose a new password</a></p>"
+                        f"<p>This link expires in {PASSWORD_RESET_TTL_MINUTES} minutes.</p>"
+                        "<p>If you did not request this, you can ignore this email.</p>"
+                        "</body></html>"
+                    ),
+                    "tags": ["password-reset"],
+                },
+                timeout=10.0,
+            )
+            if response.status_code == 201:
+                return True
+            print(f"[auth] Brevo password reset delivery failed with HTTP {response.status_code}.")
+        except Exception as exc:
+            print(f"[auth] Brevo password reset delivery failed: {type(exc).__name__}")
+
     if not SMTP_HOST or not SMTP_FROM:
-        print("[auth] Password reset email unavailable: SMTP_HOST/SMTP_FROM is not configured.")
+        print(
+            "[auth] Password reset email unavailable: configure Brevo or SMTP delivery."
+        )
         return False
 
     message = EmailMessage()
     message["Subject"] = "Reset your OccupAI password"
     message["From"] = SMTP_FROM
     message["To"] = recipient
-    message.set_content(
-        "We received a request to reset your OccupAI password.\n\n"
-        f"Open this link within {PASSWORD_RESET_TTL_MINUTES} minutes to choose a new password:\n"
-        f"{reset_url}\n\n"
-        "If you did not request this, you can safely ignore this email."
-    )
+    message.set_content(text_content)
 
     try:
         if SMTP_USE_TLS:

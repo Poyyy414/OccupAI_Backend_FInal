@@ -3,7 +3,9 @@ import hashlib
 import hmac
 import json
 import time
+import urllib.request
 from datetime import datetime
+from types import SimpleNamespace
 
 import backend.main as m
 from fastapi.testclient import TestClient
@@ -142,3 +144,104 @@ def test_forgot_password_response_does_not_enumerate_accounts(monkeypatch):
         'ok': True,
         'message': 'If an account exists for that email, a password reset link has been sent.',
     }
+
+
+def test_brevo_password_reset_delivery_uses_transactional_api(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        status_code = 201
+
+    def fake_post(url, **kwargs):
+        captured['url'] = url
+        captured.update(kwargs)
+        return FakeResponse()
+
+    monkeypatch.setattr(m, 'BREVO_API_KEY', 'test-key-not-a-real-secret')
+    monkeypatch.setattr(m, 'BREVO_SENDER_EMAIL', 'support@example.com')
+    monkeypatch.setattr(m.httpx, 'post', fake_post)
+
+    assert m._send_password_reset_email(
+        'driver@gmail.com',
+        'https://example.com/reset-password?token=safe-test-token',
+    )
+    assert captured['url'] == 'https://api.brevo.com/v3/smtp/email'
+    assert captured['headers']['api-key'] == 'test-key-not-a-real-secret'
+    assert captured['json']['sender']['email'] == 'support@example.com'
+    assert captured['json']['to'] == [{'email': 'driver@gmail.com'}]
+    assert 'safe-test-token' in captured['json']['htmlContent']
+    assert 'textContent' not in captured['json']
+
+
+def test_philippine_mobile_number_is_required_and_normalized():
+    assert m._normalize_ph_mobile('0917 123 4567') == '09171234567'
+    assert m._normalize_ph_mobile('+63 917 123 4567') == '09171234567'
+    assert m._normalize_ph_mobile('9171234567') == '09171234567'
+
+    for invalid in ('', '12345', '08171234567'):
+        try:
+            m._normalize_ph_mobile(invalid)
+        except Exception as exc:
+            assert getattr(exc, 'status_code', None) == 400
+        else:
+            raise AssertionError(f'{invalid!r} should not be accepted')
+
+
+def test_gcash_checkout_sends_required_customer_mobile_to_paymongo(monkeypatch):
+    captured = {}
+
+    class FakePaymongoResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps({
+                'data': {
+                    'id': 'cs_test',
+                    'attributes': {'checkout_url': 'https://checkout.example/test'},
+                }
+            }).encode()
+
+    def fake_urlopen(request, timeout):
+        captured['body'] = json.loads(request.data.decode())
+        captured['timeout'] = timeout
+        return FakePaymongoResponse()
+
+    monkeypatch.setattr(m, 'PAYMONGO_SECRET_KEY', 'sk_test_not_real')
+    monkeypatch.setattr(m, '_rate_limit', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(m, 'execute', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        m,
+        'query',
+        lambda *_args, **_kwargs: [{
+            'full_name': 'Ada Lovelace',
+            'email': 'ada@example.com',
+        }],
+    )
+    monkeypatch.setattr(
+        m,
+        '_effective_duration_pricing',
+        lambda: {
+            'daily_rate_php_car': 50.0,
+            'pricing_mode': 'base',
+            'demand_pricing_enabled': False,
+        },
+    )
+    monkeypatch.setattr(urllib.request, 'urlopen', fake_urlopen)
+
+    result = m.gcash_create_checkout(
+        m.GcashCheckoutPayload(mobile_number='0917 123 4567'),
+        SimpleNamespace(base_url='https://example.com/'),
+        {'user_id': 7, 'role': 'driver'},
+    )
+
+    billing = captured['body']['data']['attributes']['billing']
+    assert billing == {
+        'name': 'Ada Lovelace',
+        'email': 'ada@example.com',
+        'phone': '09171234567',
+    }
+    assert result['checkout_url'] == 'https://checkout.example/test'

@@ -36,6 +36,10 @@ Audit scope: FastAPI backend, YOLO/camera integration, admin/driver web dashboar
 - [x] Make driver KPI, hourly prediction, and revenue cards responsive to accessibility text scaling; add compact-screen regression tests.
 - [x] Document admin web, driver web, admin app, driver app, and backend functions in [OCCUPAI_FUNCTION_INVENTORY.docs](OCCUPAI_FUNCTION_INVENTORY.docs).
 - [x] Replace demand-driven parking-box changes with saved normalized layouts: exactly 10 car spaces and 20 motorcycle spaces, with fixed official capacity 30 and Unknown semantics for stale/offline cameras across backend, web, and Flutter.
+- [x] Supervise both detector workers with bounded automatic restart/backoff, detect persistent camera-read failure, and automatically rewarm the saved fixed layout after scene/lighting changes.
+- [x] Add driver accessibility settings for white/black high-contrast views, larger text, and reduced-data polling; keep Profile and working Notifications available from the top bar.
+- [x] Keep PWD and Senior discount controls visible in Flutter GCash checkout, and require/normalize a Philippine mobile number in Flutter, web, backend storage, and the PayMongo billing payload.
+- [x] Add Brevo transactional password-reset delivery using environment-only credentials, with the existing SMTP configuration retained as a fallback. See [BREVO_SETUP.md](BREVO_SETUP.md).
 
 ## Priority 0: required before deployment
 
@@ -114,11 +118,11 @@ Audit scope: FastAPI backend, YOLO/camera integration, admin/driver web dashboar
 
 ## Verification performed
 
-- Backend: `.venv311\Scripts\python.exe -m pytest -q` — **60 passed** (15 non-failing warnings remain from existing Keras layer construction and scikit-learn artifact version compatibility).
+- Backend: `.venv311\Scripts\python.exe -m pytest -q` — **65 passed** (6 non-failing warnings remain from existing Keras layer construction and scikit-learn artifact version compatibility).
 - Backend: `.venv311\Scripts\python.exe -m py_compile backend/main.py backend/models.py backend/slot_adjuster.py yolo_service/detector_v7.py` — **passed**.
 - Backend: route/model smoke check — protected routes loaded and bounded YOLO validation loaded.
 - Camera launcher: PowerShell script parse check — **passed**; physical cameras were not started.
-- Flutter maintained suite: `flutter test test/widget_test.dart --dart-define=API_BASE_URL=` — **8 passed**, including offline Unknown/capacity behavior and compact large-text regressions.
+- Flutter maintained suite: `flutter test test/widget_test.dart --dart-define=API_BASE_URL=` — **9 passed**, including driver accessibility preferences, working notification/profile actions, visible discounts, offline Unknown/capacity behavior, and compact large-text regressions.
 - Flutter dashboard-only responsive probes: **10 passed** across admin/driver views at 320px, 390px with 2× text, landscape, tablet, and desktop sizes.
 - Flutter: `flutter analyze` — **no issues**.
 - Android: `flutter build apk --debug` — **passed**; generated `build/app/outputs/flutter-apk/app-debug.apk` after the secure-storage/configuration changes. Gradle emitted only the existing Java 8 deprecation warnings and recovered from a Kotlin daemon connection retry.
@@ -128,7 +132,7 @@ Audit scope: FastAPI backend, YOLO/camera integration, admin/driver web dashboar
 - Set unique production values for `CAM_TOKEN`, `AUTH_SECRET_KEY`, `ADMIN_PASSWORD`, and `PAYMONGO_WEBHOOK_SECRET`; keep `AUTH_COOKIE_SECURE=true`.
 - Register the PayMongo webhook at `/api/webhooks/paymongo` (the `/webhooks/paymongo` alias is also supported) and use the raw-body signature header from PayMongo.
 - Set exact HTTPS `ALLOWED_ORIGINS` and run the Flutter release build with the production `--dart-define=API_BASE_URL=...` value.
-- Set `PASSWORD_RESET_URL_BASE` to the public HTTPS backend URL and configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, and `SMTP_USE_TLS` so reset emails can be delivered.
+- Revoke the password-reset API credential that was pasted into chat. Set a newly generated `BREVO_API_KEY`, verified `BREVO_SENDER_EMAIL`, optional `BREVO_SENDER_NAME`, and the public HTTPS `PASSWORD_RESET_URL_BASE`; SMTP variables remain an optional fallback. See [BREVO_SETUP.md](BREVO_SETUP.md).
 - Apply the database startup migrations/tables, then test two backend instances against the same database for revocation, lockout, rate limits, webhook retries, and payment idempotency.
 
 Real database connectivity, live camera hardware, browser rendering, Android accessibility/device behavior, two-POV camera operation, and real PayMongo transactions were not exercised in this environment and remain staging/manual test items above.
