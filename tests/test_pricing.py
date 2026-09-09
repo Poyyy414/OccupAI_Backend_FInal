@@ -101,6 +101,33 @@ def test_dynamic_duration_prices_use_normal_rates_at_standard_demand(env_setting
     assert rates["daily_rate_php_motorcycle"] == 25.00
 
 
+def test_saved_daily_plans_are_the_dynamic_pricing_base(env_settings):
+    env_settings({
+        "PRICE_OVERRIDE_ENABLED": "false",
+        "DAILY_RATE_CAR": "100.00",
+        "DAILY_RATE_MOTORCYCLE": "50.00",
+    })
+
+    rates = m._effective_duration_pricing(
+        vehicles_hour=6,
+        lot_capacity=30,
+        when=TUESDAY,
+    )
+
+    assert rates["daily_rate_php_car"] == 100.00
+    assert rates["daily_rate_php_motorcycle"] == 50.00
+
+
+def test_driver_price_declares_daily_unit(env_settings):
+    env_settings(NO_OVERRIDE)
+
+    result = m._format_price_result(
+        m._dynamic_price_formula(vehicles_hour=6, lot_capacity=30, when=TUESDAY)
+    )
+
+    assert result["price_unit"] == "day"
+
+
 def test_dynamic_duration_prices_increase_at_high_demand(env_settings):
     env_settings(NO_OVERRIDE)
     rates = m._effective_duration_pricing(

@@ -1217,7 +1217,7 @@ def _run_insights_now():
         if r.get("pricing_reason") == "occupancy_unavailable":
             out["pricing"] = (
                 f"Both cameras must be fresh for dynamic pricing. "
-                f"The normal PHP {price:.0f}/hr base rate is in use."
+                f"The normal PHP {price:.0f}/day base rate is in use."
             )
         elif r.get("pricing_reason") == "manual_admin_override":
             formula_note = (
@@ -1226,20 +1226,20 @@ def _run_insights_now():
                 if occ_formula is not None
                 else "Complete live occupancy is currently unavailable."
             )
-            out["pricing"] = f"Manual admin rate is PHP {price:.0f}/hr. Dynamic pricing is paused. {formula_note}"
+            out["pricing"] = f"Manual admin rate is PHP {price:.0f}/day. Dynamic pricing is paused. {formula_note}"
         elif abs(chg) < 5:
             formula_note = (
                 f"Formula uses {occ_formula:.0f}% occupancy, {occ_mult:.2f}x occupancy multiplier, "
                 f"and {day_mult:.2f}x {day_rule.lower()} multiplier."
             )
-            out["pricing"] = f"Demand is normal. PHP {price:.0f}/hr is appropriate. {formula_note}"
+            out["pricing"] = f"Demand is normal. PHP {price:.0f}/day is appropriate. {formula_note}"
         elif chg > 0:
             formula_note = (
                 f"Formula uses {occ_formula:.0f}% occupancy, {occ_mult:.2f}x occupancy multiplier, "
                 f"and {day_mult:.2f}x {day_rule.lower()} multiplier."
             )
             out["pricing"] = (
-                f"Demand is higher than usual. Raising the rate to PHP {price:.0f}/hr "
+                f"Demand is higher than usual. Raising the daily rate to PHP {price:.0f}/day "
                 f"(+{chg:.0f}% above the PHP {flat_rate:.0f} flat rate) is recommended. {formula_note}"
             )
         else:
@@ -1248,11 +1248,11 @@ def _run_insights_now():
                 f"and {day_mult:.2f}x {day_rule.lower()} multiplier."
             )
             out["pricing"] = (
-                f"Demand is lower than usual. Offering PHP {price:.0f}/hr "
+                f"Demand is lower than usual. Offering PHP {price:.0f}/day "
                 f"({abs(chg):.0f}% below the PHP {flat_rate:.0f} standard) could attract more drivers. {formula_note}"
             )
         if r.get("pwd_senior_price_php") is not None:
-            out["pricing"] += f" PWD/Senior discounted rate: PHP {float(r['pwd_senior_price_php']):.0f}/hr."
+            out["pricing"] += f" PWD/Senior discounted rate: PHP {float(r['pwd_senior_price_php']):.0f}/day."
         out["pricing_details"] = r
     except Exception as e:
         out["pricing"] = f"Pricing recommendation temporarily unavailable. ({e})"
@@ -3194,6 +3194,7 @@ def _format_price_result(result):
         },
         "price_formula": result.get("formula"),
         "price_context": result.get("pricing_context"),
+        "price_unit": "day",
     }
 
 
@@ -4427,7 +4428,9 @@ def _normalize_duration_type(value, default="daily"):
 
 def _current_flat_rate(vehicle_type="car"):
     vt = _normalize_vehicle_type(vehicle_type)
-    key = "FLAT_RATE_CAR" if vt == "car" else "FLAT_RATE_MOTORCYCLE"
+    # Daily plans are the canonical base rates used by demand pricing.
+    # FLAT_RATE remains the fallback for installations without saved plans.
+    key = "DAILY_RATE_CAR" if vt == "car" else "DAILY_RATE_MOTORCYCLE"
     default = FLAT_RATE_CAR if vt == "car" else FLAT_RATE_MOTORCYCLE
     return _parse_price(_read_setting(key, os.getenv(key, str(default))), default)
 
@@ -4454,6 +4457,7 @@ def _pricing_settings():
         "pwd_senior_discount_rate": PWD_SENIOR_DISCOUNT_RATE,
         "pwd_senior_discount_pct": round(PWD_SENIOR_DISCOUNT_RATE * 100, 1),
         "currency": "PHP",
+        "price_unit": "day",
     }
 
 def _discount_settings():
@@ -4500,6 +4504,7 @@ def _duration_pricing_settings():
         "monthly_rate_php_car": monthly_car,
         "monthly_rate_php_motorcycle": monthly_moto,
         "currency": "PHP",
+        "rate_units": {"daily": "day", "weekly": "week", "monthly": "month"},
     }
 
 def _regular_price_for_duration(vehicle_type="car", duration_type="daily"):
@@ -4568,14 +4573,8 @@ def _effective_duration_pricing(vehicles_hour=None, lot_capacity=None, when=None
     for vehicle_type in ("car", "motorcycle"):
         for duration_type in ("daily", "weekly", "monthly"):
             key = f"{duration_type}_rate_php_{vehicle_type}"
-            # Daily normal rates are the public parking rates. Weekly/monthly
-            # plans keep their configured base and receive the same demand
-            # adjustment.
-            base = (
-                _current_flat_rate(vehicle_type)
-                if duration_type == "daily"
-                else float(base_rates[key])
-            )
+            # Every duration uses its configured plan as the single base.
+            base = float(base_rates[key])
             effective[key] = round(base * combined_multiplier, 2)
 
     effective.update({
@@ -4839,6 +4838,10 @@ def set_pricing_settings(payload: PricingSettingsPayload, _admin=Depends(require
     _write_setting("PRICE_OVERRIDE_ENABLED", "true" if enabled else "false")
     _write_setting("PRICE_OVERRIDE_PHP_CAR", f"{price_car:.2f}")
     _write_setting("PRICE_OVERRIDE_PHP_MOTORCYCLE", f"{price_moto:.2f}")
+    # Keep older mobile clients compatible: their former generic price fields
+    # now update the same canonical daily rates used by current clients.
+    _write_setting("DAILY_RATE_CAR", f"{price_car:.2f}")
+    _write_setting("DAILY_RATE_MOTORCYCLE", f"{price_moto:.2f}")
 
     with _insight_lock:
         _insight_cache.clear()
@@ -4848,7 +4851,7 @@ def set_pricing_settings(payload: PricingSettingsPayload, _admin=Depends(require
     result.update({
         "ok": True,
         "message": (
-            f"Manual rate saved — Car PHP {price_car:.2f}/hr, Motorcycle PHP {price_moto:.2f}/hr."
+            f"Manual daily rate saved — Car PHP {price_car:.2f}/day, Motorcycle PHP {price_moto:.2f}/day."
             if enabled else "Manual pricing is off. Dynamic pricing is active."
         ),
     })
@@ -4939,6 +4942,10 @@ def set_duration_pricing_settings(payload: DurationPricingPayload, _admin=Depend
     _write_setting("WEEKLY_RATE_MOTORCYCLE", f"{weekly_moto:.2f}")
     _write_setting("MONTHLY_RATE_CAR", f"{monthly_car:.2f}")
     _write_setting("MONTHLY_RATE_MOTORCYCLE", f"{monthly_moto:.2f}")
+
+    with _insight_lock:
+        _insight_cache.clear()
+    threading.Thread(target=_run_insights_now, daemon=True, name="insight-duration-pricing-update").start()
 
     result = _duration_pricing_settings()
     result.update({

@@ -699,7 +699,11 @@
 
     .revenue-day-name { color: var(--muted); font-size: 11px; font-weight: 700; }
     .revenue-day.is-today .revenue-day-name { color: var(--green); }
-    .revenue-day-value { margin-top: 5px; color: var(--orange); font-family: "Space Mono", monospace; font-size: 11px; font-weight: 700; }
+    .revenue-day-value { margin-top: 5px; color: var(--orange); font-family: "Space Mono", monospace; font-size: 11px; font-weight: 700; line-height: 1.35; overflow-wrap: anywhere; }
+
+    /* The overview card is only one third of the desktop row. Seven columns
+       make four-digit PHP amounts collide, so let the week use two rows. */
+    #weekdayRevenueGrid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 
     .revenue-dashboard {
       margin-top: 18px;
@@ -1730,6 +1734,7 @@
       .content { padding: 18px; }
       .insight-grid, .metric-row, .revenue-kpis { grid-template-columns: 1fr; }
       .weekday-grid, .monthly-revenue-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #weekdayRevenueGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .payment-form { grid-template-columns: 1fr; }
       .stream-toolbar { align-items: flex-start; flex-direction: column; }
       .stream-actions { justify-content: flex-start; }
@@ -2424,7 +2429,7 @@
     <section class="panel-card settings-panel" style="max-width:640px">
       <div class="panel-header">
         <span class="panel-title">Admin Settings</span>
-        <span class="status-chip" id="layoutStatus">Layout --</span>
+        <span class="status-chip good">30 spaces</span>
       </div>
 
       <div class="setting-row">
@@ -2437,35 +2442,13 @@
 
       <div class="setting-row" style="align-items:stretch;flex-direction:column">
         <div class="setting-copy">
-          <strong>Parking Price</strong>
-          <span id="pricingModeHint">Dynamic pricing is active.</span>
-        </div>
-        <div class="price-setting-controls">
-          <label class="price-input-wrap" aria-label="Manual car parking price">
-            <span>Car PHP</span>
-            <input class="price-input" id="priceInputCar" type="number" min="1" max="10000" step="1" value="50" />
-          </label>
-          <label class="price-input-wrap" aria-label="Manual motorcycle parking price">
-            <span>Moto PHP</span>
-            <input class="price-input" id="priceInputMoto" type="number" min="1" max="10000" step="1" value="25" />
-          </label>
-          <button class="setting-save-btn" id="priceSaveBtn" onclick="savePricingSettings()">Save</button>
-          <div class="layout-toggle">
-            <span class="layout-toggle-label" id="pricingOverrideLabel">Auto</span>
-            <button class="toggle-switch" id="pricingOverrideToggle" onclick="togglePricingOverride()" aria-label="Toggle manual pricing" aria-pressed="false"></button>
-          </div>
-        </div>
-      </div>
-
-      <div class="setting-row" style="align-items:stretch;flex-direction:column">
-        <div class="setting-copy">
-          <strong>Daily / Weekly / Monthly Rates</strong>
-          <span id="durationPricingHint">Car PHP 150/day, PHP 800/week, PHP 1,200/month. Moto PHP 80/day, PHP 450/week, PHP 600/month.</span>
+          <strong>Parking Rates</strong>
+          <span id="durationPricingHint">Daily rates are the base parking prices used by the app and GCash checkout.</span>
         </div>
         <div class="price-setting-controls">
           <label class="price-input-wrap" aria-label="Car daily rate">
             <span>Car/Day</span>
-            <input class="price-input" id="durationInputCarDaily" type="number" min="1" max="10000" step="1" value="150" />
+            <input class="price-input" id="durationInputCarDaily" type="number" min="1" max="10000" step="1" value="50" />
           </label>
           <label class="price-input-wrap" aria-label="Car weekly rate">
             <span>Car/Wk</span>
@@ -2477,7 +2460,7 @@
           </label>
           <label class="price-input-wrap" aria-label="Motorcycle daily rate">
             <span>Moto/Day</span>
-            <input class="price-input" id="durationInputMotoDaily" type="number" min="1" max="10000" step="1" value="80" />
+            <input class="price-input" id="durationInputMotoDaily" type="number" min="1" max="10000" step="1" value="25" />
           </label>
           <label class="price-input-wrap" aria-label="Motorcycle weekly rate">
             <span>Moto/Wk</span>
@@ -2514,23 +2497,6 @@
         <button class="toggle-switch" id="discountSeniorToggle" onclick="toggleDiscountSetting('senior')" aria-label="Toggle senior discount" aria-pressed="false"></button>
       </div>
 
-      <div class="setting-row" style="align-items:stretch;flex-direction:column">
-        <div class="layout-head-row">
-          <div class="setting-copy">
-            <strong>Demand Label</strong>
-            <span id="layoutModeHint">Normal, Busy, and High are informational only; saved camera boxes stay fixed.</span>
-          </div>
-          <div class="layout-toggle">
-            <span class="layout-toggle-label" id="layoutOverrideLabel">Auto</span>
-            <button class="toggle-switch" id="layoutOverrideToggle" onclick="toggleLayoutOverride()" aria-label="Toggle manual demand label" aria-pressed="false"></button>
-          </div>
-        </div>
-        <div class="layout-picker" id="layoutPicker" aria-label="Demand label">
-          <button class="layout-btn" data-mode="NORMAL" onclick="setLayoutMode('NORMAL')">Normal</button>
-          <button class="layout-btn" data-mode="BUSY" onclick="setLayoutMode('BUSY')">Busy</button>
-          <button class="layout-btn" data-mode="HIGH" onclick="setLayoutMode('HIGH')">High</button>
-        </div>
-      </div>
     </section>
   </section>
 
@@ -2776,10 +2742,7 @@
     </div>
 
     <div class="report-chart-wrap">
-      <div class="report-chart-title" style="display:flex;align-items:center;justify-content:space-between">
-        <span>&#128200; AI Predicted vs Actual Revenue <span style="font-size:11px;color:var(--muted);font-weight:400">(by day of week)</span></span>
-        <span id="predAccuracyBadge" style="font-size:11px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:3px 10px;color:var(--muted)">Loading...</span>
-      </div>
+      <div class="report-chart-title">&#128200; AI Predicted vs Actual Revenue <span style="font-size:11px;color:var(--muted);font-weight:400">(by day of week)</span></div>
       <canvas id="predVsActualChart" height="80"></canvas>
       <div style="font-size:11px;color:var(--muted);margin-top:10px">
         Green line = actual average revenue per day &nbsp;|&nbsp; Dashed line = AI predicted revenue per day
@@ -3068,17 +3031,14 @@ const PANEL_META = {
   settings: {
     eyebrow: 'Admin controls',
     title: 'Settings',
-    sub: 'Theme, parking price, discounts, and layout mode'
+    sub: 'Theme, parking plans, discounts, and official capacity'
   }
 };
 
 const THEME_KEY = 'occupai_theme';
-const LAYOUT_MODES = ['NORMAL', 'BUSY', 'HIGH'];
-let layoutSelectedMode = 'NORMAL';
-let layoutOverrideEnabled = false;
 let suggestedPrices = { car: 50, motorcycle: 25 };
 let durationPricing = {
-  daily_rate_php_car: 150, daily_rate_php_motorcycle: 80,
+  daily_rate_php_car: 50, daily_rate_php_motorcycle: 25,
   weekly_rate_php_car: 800, weekly_rate_php_motorcycle: 450,
   monthly_rate_php_car: 1200, monthly_rate_php_motorcycle: 600,
 };
@@ -3132,103 +3092,6 @@ function toggleTheme() {
   applyTheme(next);
 }
 
-function setLayoutUi(mode, pending, enabled) {
-  const normalized = LAYOUT_MODES.includes(String(mode).toUpperCase()) ? String(mode).toUpperCase() : 'NORMAL';
-  if (typeof enabled === 'boolean') layoutOverrideEnabled = enabled;
-  layoutSelectedMode = normalized;
-  document.querySelectorAll('.layout-btn').forEach(btn => {
-    const active = btn.dataset.mode === normalized;
-    btn.classList.toggle('active', active);
-    btn.disabled = Boolean(pending) || !layoutOverrideEnabled;
-  });
-  const picker = document.getElementById('layoutPicker');
-  if (picker) picker.classList.toggle('disabled', !layoutOverrideEnabled);
-  const toggle = document.getElementById('layoutOverrideToggle');
-  if (toggle) {
-    toggle.classList.toggle('active', layoutOverrideEnabled);
-    toggle.disabled = Boolean(pending);
-    toggle.setAttribute('aria-pressed', String(layoutOverrideEnabled));
-  }
-  const label = document.getElementById('layoutOverrideLabel');
-  if (label) label.textContent = layoutOverrideEnabled ? 'On' : 'Auto';
-  const status = document.getElementById('layoutStatus');
-  if (status) {
-    status.textContent = pending ? 'Saving...' : (layoutOverrideEnabled ? `Demand ${normalized}` : 'Demand Auto');
-    status.className = 'status-chip ' + (!layoutOverrideEnabled ? 'good' : normalized === 'HIGH' ? 'bad' : normalized === 'BUSY' ? 'warn' : 'good');
-  }
-  const hint = document.getElementById('layoutModeHint');
-  if (hint && !pending) {
-    hint.textContent = layoutOverrideEnabled
-      ? `Manual ${normalized.toLowerCase()} demand label is on. Camera boxes remain fixed.`
-      : 'Automatic demand labeling is on. Camera boxes remain fixed.';
-  }
-}
-
-async function fetchLayoutMode() {
-  try {
-    const r = await fetchWithRetry('/api/settings/layout-mode');
-    if (!r.ok) throw new Error(r.status);
-    const d = await r.json();
-    setLayoutUi(d.mode || 'NORMAL', false, Boolean(d.enabled));
-  } catch (e) {
-    const status = document.getElementById('layoutStatus');
-    if (status) {
-      status.textContent = 'Layout error';
-      status.className = 'status-chip bad';
-    }
-  }
-}
-
-async function setLayoutMode(mode) {
-  const normalized = String(mode).toUpperCase();
-  if (!LAYOUT_MODES.includes(normalized)) return;
-  if (!layoutOverrideEnabled) return;
-  setLayoutUi(normalized, true, true);
-  try {
-    const r = await fetch('/api/settings/layout-mode', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ mode: normalized, enabled: true })
-    });
-    if (!r.ok) throw new Error(r.status);
-    const d = await r.json();
-    setLayoutUi(d.mode || normalized, false, Boolean(d.enabled));
-    invalidateDashboardCache();
-    const hint = document.getElementById('layoutModeHint');
-    if (hint) hint.textContent = 'Demand label saved. The 10/20 camera layouts were not changed.';
-  } catch (e) {
-    setLayoutUi(normalized, false, true);
-    const hint = document.getElementById('layoutModeHint');
-    if (hint) hint.textContent = 'Could not save layout mode.';
-  }
-}
-
-async function toggleLayoutOverride() {
-  const nextEnabled = !layoutOverrideEnabled;
-  setLayoutUi(layoutSelectedMode, true, nextEnabled);
-  try {
-    const r = await fetch('/api/settings/layout-mode', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ mode: layoutSelectedMode, enabled: nextEnabled })
-    });
-    if (!r.ok) throw new Error(r.status);
-    const d = await r.json();
-    setLayoutUi(d.mode || layoutSelectedMode, false, Boolean(d.enabled));
-    invalidateDashboardCache();
-    const hint = document.getElementById('layoutModeHint');
-    if (hint) {
-      hint.textContent = d.enabled
-        ? 'Manual demand label is on. Pick Normal, Busy, or High; boxes stay fixed.'
-        : 'Automatic demand labeling restored; boxes stay fixed.';
-    }
-  } catch (e) {
-    setLayoutUi(layoutSelectedMode, false, !nextEnabled);
-    const hint = document.getElementById('layoutModeHint');
-    if (hint) hint.textContent = 'Could not update layout override.';
-  }
-}
-
 function setPricingUi(settings, pending) {
   pricingSettings = {
     enabled: Boolean(settings?.enabled),
@@ -3270,8 +3133,8 @@ function setPricingUi(settings, pending) {
   const hint = document.getElementById('pricingModeHint');
   if (hint && !pending) {
     hint.textContent = pricingSettings.enabled
-      ? `Manual rate active — Car ${formatPhp(pricingSettings.price_php_car)}/hr, Motorcycle ${formatPhp(pricingSettings.price_php_motorcycle)}/hr.`
-      : `Auto dynamic pricing is active. Base rate — Car ${formatPhp(pricingSettings.flat_rate_php_car)}/hr, Motorcycle ${formatPhp(pricingSettings.flat_rate_php_motorcycle)}/hr.`;
+      ? `Manual daily rate active — Car ${formatPhp(pricingSettings.price_php_car)}/day, Motorcycle ${formatPhp(pricingSettings.price_php_motorcycle)}/day.`
+      : `Auto demand pricing is active. Base daily rate — Car ${formatPhp(pricingSettings.flat_rate_php_car)}/day, Motorcycle ${formatPhp(pricingSettings.flat_rate_php_motorcycle)}/day.`;
   }
 
   const flatLabel = document.getElementById('insFlatRateLabel');
@@ -3666,8 +3529,7 @@ function _loadPanelData(name, force = false) {
   } else if (name === 'reports') {
     requests = [fetchReports];
   } else if (name === 'settings') {
-    requests = [fetchLayoutMode, fetchPricingSettings, fetchDiscountSettings,
-      fetchCapacitySettings, fetchDurationPricingSettings];
+    requests = [fetchDiscountSettings, fetchCapacitySettings, fetchDurationPricingSettings];
   }
   if (!requests.length) return;
 
@@ -4818,15 +4680,41 @@ function renderPeakVisual(hourlyByDay) {
   const today = now.getDay();
   const dayData = hourlyByDay.hourly_by_dow?.[today] || hourlyByDay.hourly_by_dow?.[String(today)] || {};
   const values = Array.from({ length: 24 }, (_, h) => Number(dayData[h]?.occ_pct ?? dayData[String(h)]?.occ_pct ?? 0));
-  const max = Math.max(1, ...values);
+  const peakValue = Math.max(0, ...values);
+  const scaleMax = Math.max(1, peakValue);
   bars.innerHTML = values.map((v, h) => {
-    const height = Math.max(5, v / max * 100);
-    return `<div class="hour-bar ${h === now.getHours() ? 'now' : ''}" style="height:${height}%"></div>`;
+    const height = Math.max(5, v / scaleMax * 100);
+    return `<div class="hour-bar ${h === now.getHours() ? 'now' : ''}" title="${hourLabel24(h)} - ${Math.round(v)}%" style="height:${height}%"></div>`;
   }).join('');
 
-  const peakHour = values.indexOf(max);
+  const peakHour = values.indexOf(peakValue);
   const label = document.getElementById('insPeakLabel');
-  if (label) label.textContent = max > 0 ? `Peak ${hourLabel24(peakHour)}` : '--';
+  if (label) label.textContent = peakValue > 0 ? `Peak ${hourLabel24(peakHour)}` : '--';
+
+  // Keep the written insight tied to the exact weekday series drawn above.
+  // Previously this text came from an overall 7-day average while the chart
+  // showed today's weekday pattern, so the two could report different peaks.
+  const insight = document.getElementById('ins-peak');
+  if (!insight) return;
+  if (peakValue <= 0) {
+    insight.textContent = 'Peak-hour analysis is unavailable until prediction data is available.';
+    return;
+  }
+
+  const quietValue = Math.min(...values);
+  const quietHour = values.indexOf(quietValue);
+  const dayName = ['Sundays', 'Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays'][today];
+  const sourceText = hourlyByDay.source === 'db_live_history'
+    ? `parking activity from the last 30 days for ${dayName}`
+    : `the historical training pattern for ${dayName}`;
+  const hourDistance = Math.min(
+    Math.abs(now.getHours() - peakHour),
+    24 - Math.abs(now.getHours() - peakHour)
+  );
+  const currentText = hourDistance <= 1
+    ? 'The lot is currently within the predicted peak period.'
+    : 'Traffic should be relatively normal at this hour.';
+  insight.textContent = `Based on ${sourceText}, the busiest time is around ${hourLabel24(peakHour)} and the quietest is around ${hourLabel24(quietHour)}. ${currentText}`;
 }
 
 const ML_CONFIDENCE_CACHE_KEY = 'ml_confidence';
@@ -4990,7 +4878,7 @@ async function fetchInsights() {
     setText('statPricingStatus', statusLabel);
     if (pricingCard) pricingCard.className = 'stat-card ' + statusClass;
     setText('statPricingStatusSub', pd.recommended_price_php != null
-      ? `PHP ${Number(pd.recommended_price_php).toFixed(0)}/hr recommended`
+      ? `PHP ${Number(pd.recommended_price_php).toFixed(0)}/day recommended`
       : 'Waiting for pricing data');
   } catch(e) { console.warn('Insights:', e); }
 }
@@ -5403,20 +5291,6 @@ async function fetchPredVsActual(dailyRows) {
     const actualAvg = days.map(d => { const vals = actualByDay[d]; return vals.length ? +(vals.reduce((a,b)=>a+b,0)/vals.length).toFixed(2) : null; });
     const predVals = days.map(d => { const v = weekdayPred[d] || weekdayPred[d.toLowerCase()] || null; return v ? +parseFloat(v).toFixed(2) : null; });
 
-    let matchCount = 0, totalCompare = 0;
-    days.forEach((d, i) => {
-      if (actualAvg[i] !== null && predVals[i] !== null) {
-        totalCompare++;
-        if (Math.abs(actualAvg[i] - predVals[i]) / Math.max(actualAvg[i], predVals[i]) <= 0.2) matchCount++;
-      }
-    });
-    const accuracy = totalCompare > 0 ? Math.round((matchCount/totalCompare)*100) : null;
-    const badge = document.getElementById('predAccuracyBadge');
-    if (badge) {
-      badge.textContent = accuracy !== null ? 'Accuracy: ~' + accuracy + '%' : 'Not enough data yet';
-      badge.style.color = accuracy !== null ? (accuracy >= 70 ? 'var(--green)' : accuracy >= 40 ? 'var(--orange)' : '#e55') : 'var(--muted)';
-    }
-
     const ctx = document.getElementById('predVsActualChart');
     if (!ctx) return;
     if (predVsActualChartInstance) predVsActualChartInstance.destroy();
@@ -5476,6 +5350,13 @@ function downloadReportCSV() {
 
 function downloadReportPDF() {
   if (!reportData) { alert('No data loaded yet.'); return; }
+  // Open immediately while the click still has browser user activation.
+  // Waiting until after chart serialization caused some browsers to block it.
+  const w = window.open('', 'occupai-report-print');
+  if (!w) {
+    alert('The PDF window was blocked. Please allow pop-ups for OccupAI and try again.');
+    return;
+  }
   const rows = getReportTabRows(reportData);
   const cols = getReportTabColumns();
   const totalRev = rows.reduce((s, r) => s + (r.revenue_php || 0), 0);
@@ -5487,12 +5368,10 @@ function downloadReportPDF() {
   const predCanvas = document.getElementById('predVsActualChart');
   const chartImg = chartCanvas ? chartCanvas.toDataURL('image/png') : '';
   const predImg = predCanvas ? predCanvas.toDataURL('image/png') : '';
-  const badge = document.getElementById('predAccuracyBadge');
-  const accuracyText = badge ? badge.textContent : '';
 
   const tableRows = rows.map(row => '<tr>' + cols.map(c => { const val = c.fmt ? c.fmt(row[c.key], row) : (row[c.key] ?? '--'); return '<td>' + escapeHtml(val) + '</td>'; }).join('') + '</tr>').join('');
   const chartSection = chartImg ? '<div class="section-title">Revenue Summary Chart</div><img src="' + chartImg + '" class="chart-img" /><div class="chart-note">Bar chart showing Revenue (green) vs Discounts (orange) for the selected period.</div>' : '';
-  const predSection = predImg ? '<div class="section-title">AI Predicted vs Actual Revenue &nbsp;<span style="font-size:10px;font-weight:400;color:#888">' + escapeHtml(accuracyText) + '</span></div><img src="' + predImg + '" class="chart-img" /><div class="chart-note">Green solid line = actual average revenue per day | Blue dashed line = AI predicted revenue per day</div>' : '';
+  const predSection = predImg ? '<div class="section-title">AI Predicted vs Actual Revenue</div><img src="' + predImg + '" class="chart-img" /><div class="chart-note">Green solid line = actual average revenue per day | Blue dashed line = AI predicted revenue per day</div>' : '';
 
   const html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>OccupAI ' + escapeHtml(tabLabel) + ' Revenue Report</title><style>'
     + '* { box-sizing: border-box; } body { font-family: Arial, sans-serif; font-size: 12px; color: #111; margin: 28px; }'
@@ -5528,11 +5407,36 @@ function downloadReportPDF() {
     + '<div class="summary-item"><span>Total Transactions</span><strong>' + totalTx + '</strong></div>'
     + '</div>'
     + '<div class="footer"><span>OccupAI Parking Management System &nbsp;|&nbsp; ' + escapeHtml(reportData.revenue_basis || 'Revenue Report') + '</span><span>Confidential &mdash; For Business Use Only</span></div>'
-    + '<script>window.onload=function(){window.print()}<\/script></body></html>';
+    + '</body></html>';
 
-  const w = window.open('', '_blank');
   w.document.write(html);
   w.document.close();
+
+  // Trigger printing from this trusted page instead of an inline script in
+  // the report window, which is rejected by the dashboard's CSP on Render.
+  let printStarted = false;
+  const startPrint = () => {
+    if (printStarted || w.closed) return;
+    printStarted = true;
+    w.focus();
+    w.print();
+  };
+  const images = Array.from(w.document.images);
+  const pendingImages = images.filter(img => !img.complete);
+  if (!pendingImages.length) {
+    setTimeout(startPrint, 250);
+  } else {
+    let remaining = pendingImages.length;
+    const imageReady = () => {
+      remaining--;
+      if (remaining <= 0) setTimeout(startPrint, 100);
+    };
+    pendingImages.forEach(img => {
+      img.addEventListener('load', imageReady, { once: true });
+      img.addEventListener('error', imageReady, { once: true });
+    });
+    setTimeout(startPrint, 2000);
+  }
 }
 
 // Reports are loaded by the shared panel loader when first opened.
