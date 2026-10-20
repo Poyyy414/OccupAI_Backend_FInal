@@ -7,7 +7,7 @@ CHANGES in v2.2:
   - /api/predictions now includes weekday_revenue and today_revenue_forecast
   - Revenue forecast added to predictions endpoint
 """
-import os, re, math, bcrypt, uvicorn, joblib, threading, warnings, time, json, base64, secrets, hmac, hashlib, html, smtplib
+import os, re, math, bcrypt, uvicorn, joblib, threading, warnings, time, json, base64, secrets, hmac, hashlib, html, smtplib, asyncio, binascii
 from email.message import EmailMessage
 import psycopg2
 import numpy as np
@@ -32,6 +32,7 @@ from pydantic import BaseModel
 from backend.db     import get_db, query, execute
 from backend.models import (
     UserRegister,
+    RegistrationCodeRequest,
     UserLogin,
     ForgotPasswordPayload,
     ResetPasswordPayload,
@@ -147,6 +148,13 @@ BREVO_API_KEY = os.getenv("BREVO_API_KEY", "").strip()
 BREVO_SENDER_EMAIL = os.getenv("BREVO_SENDER_EMAIL", SMTP_FROM).strip()
 BREVO_SENDER_NAME = os.getenv("BREVO_SENDER_NAME", "OccupAI Support").strip()
 BREVO_API_URL = "https://api.brevo.com/v3/smtp/email"
+REGISTRATION_CODE_TTL_MINUTES = max(
+    5, min(30, int(os.getenv("REGISTRATION_CODE_TTL_MINUTES", "10")))
+)
+REGISTRATION_CODE_RESEND_SECONDS = max(
+    30, min(300, int(os.getenv("REGISTRATION_CODE_RESEND_SECONDS", "60")))
+)
+REGISTRATION_CODE_MAX_ATTEMPTS = 5
 
 
 def _sign_auth_token(user_id: int, role: str, purpose: str = "auth", ttl_seconds: int = AUTH_TOKEN_TTL_SECONDS) -> str:
@@ -1469,6 +1477,21 @@ def _ensure_security_tables():
             "CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_expiry "
             "ON password_reset_tokens (expires_at)"
         )
+        execute("""
+            CREATE TABLE IF NOT EXISTS registration_email_codes (
+                email TEXT PRIMARY KEY,
+                code_hash TEXT NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                used_at TIMESTAMPTZ,
+                last_sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        execute(
+            "CREATE INDEX IF NOT EXISTS idx_registration_email_codes_expiry "
+            "ON registration_email_codes (expires_at)"
+        )
     except Exception as e:
         print(f"[DB] security table setup warning: {e}")
 
@@ -1548,8 +1571,47 @@ def _ensure_gcash_checkout_table():
         execute("ALTER TABLE gcash_checkouts ADD COLUMN IF NOT EXISTS error_message TEXT")
         execute("ALTER TABLE gcash_checkouts ADD COLUMN IF NOT EXISTS duration_type TEXT NOT NULL DEFAULT 'daily'")
         execute("ALTER TABLE gcash_checkouts ADD COLUMN IF NOT EXISTS customer_mobile TEXT")
+        execute("ALTER TABLE gcash_checkouts ADD COLUMN IF NOT EXISTS reservation_id BIGINT")
     except Exception as e:
         print(f"[DB] gcash checkout table setup warning: {e}")
+
+
+def _ensure_reservation_table():
+    """One current claim per physical slot, enforced by Postgres."""
+    execute("""
+        CREATE TABLE IF NOT EXISTS parking_reservations (
+            reservation_id BIGSERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL REFERENCES users(user_id),
+            slot_id TEXT NOT NULL,
+            vehicle_type TEXT NOT NULL CHECK (vehicle_type IN ('car', 'motorcycle')),
+            duration_type TEXT NOT NULL CHECK (duration_type IN ('daily', 'weekly', 'monthly')),
+            status TEXT NOT NULL DEFAULT 'pending_payment'
+                CHECK (status IN ('pending_payment', 'reserved', 'occupied', 'completed', 'expired', 'cancelled')),
+            payment_status TEXT NOT NULL DEFAULT 'unpaid'
+                CHECK (payment_status IN ('unpaid', 'paid')),
+            checkout_ref TEXT NOT NULL UNIQUE,
+            payment_id BIGINT REFERENCES parking_payments(payment_id),
+            amount_php NUMERIC(10,2) NOT NULL CHECK (amount_php > 0),
+            hold_expires_at TIMESTAMPTZ NOT NULL,
+            starts_at TIMESTAMPTZ,
+            expires_at TIMESTAMPTZ,
+            occupied_at TIMESTAMPTZ,
+            vacant_since TIMESTAMPTZ,
+            completed_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reservations_current_slot "
+            "ON parking_reservations(slot_id) "
+            "WHERE status IN ('pending_payment', 'reserved', 'occupied')")
+    execute("CREATE INDEX IF NOT EXISTS idx_reservations_user_latest "
+            "ON parking_reservations(user_id, created_at DESC)")
+    execute("CREATE INDEX IF NOT EXISTS idx_reservations_expiry "
+            "ON parking_reservations(expires_at) "
+            "WHERE status IN ('reserved', 'occupied')")
+    execute("CREATE INDEX IF NOT EXISTS idx_reservations_hold_expiry "
+            "ON parking_reservations(hold_expires_at) "
+            "WHERE status='pending_payment'")
 
 
 def _ensure_admin_settings_table():
@@ -1594,6 +1656,12 @@ async def lifespan(app: FastAPI):
     _ensure_parking_log_indexes()
     _ensure_payment_table()
     _ensure_gcash_checkout_table()
+    try:
+        _ensure_reservation_table()
+    except Exception as exc:
+        # Other database-backed features use the same local-test fallback.
+        # Reservation endpoints still fail closed if the table is unavailable.
+        print(f"[DB] reservation table setup warning: {exc}")
     _ensure_admin_settings_table()
     try:
         _reconcile_stale_gcash_checkouts()
@@ -1613,6 +1681,12 @@ async def lifespan(app: FastAPI):
         name="gcash-reconciliation-scheduler",
     )
     gcash_thread.start()
+    reservation_thread = threading.Thread(
+        target=_reservation_expiry_scheduler,
+        daemon=True,
+        name="reservation-expiry-scheduler",
+    )
+    reservation_thread.start()
     print("[OccupAI] Insight scheduler started (15s warmup, then hourly).")
     yield
     print("[OccupAI] Shutdown.")
@@ -1714,6 +1788,7 @@ state = {
     "cameras": {},
 }
 camera_states = {}
+camera_frames = {}
 history    = deque(maxlen=200)
 state_lock = threading.Lock()
 db_log_lock = threading.Lock()
@@ -1729,6 +1804,54 @@ db_log_state = {
 def _normalize_camera_id(value) -> str:
     clean = re.sub(r"[^A-Za-z0-9_-]", "-", str(value or "main").strip())
     return clean[:40] or "main"
+
+
+def _decode_camera_snapshot(snapshot_b64: str):
+    """Decode a detector snapshot and accept JPEG images only."""
+    if not snapshot_b64:
+        return None
+    try:
+        frame = base64.b64decode(snapshot_b64, validate=True)
+    except (binascii.Error, ValueError, TypeError):
+        raise HTTPException(422, "Camera snapshot is not valid base64")
+    if len(frame) < 4 or not frame.startswith(b"\xff\xd8\xff") or not frame.endswith(b"\xff\xd9"):
+        raise HTTPException(422, "Camera snapshot must be a JPEG image")
+    return frame
+
+
+def _relay_camera_stream(camera_id: str):
+    """Stream snapshots pushed by a detector, including to an online backend."""
+    async def _frames():
+        last_version = -1
+        started_at = time.monotonic()
+        while True:
+            with state_lock:
+                item = camera_frames.get(camera_id)
+                if item:
+                    item = dict(item)
+            now = time.monotonic()
+            if not item or now - item["received_at"] > CAMERA_STATE_TTL_SECONDS:
+                if last_version >= 0 or now - started_at > CAMERA_STATE_TTL_SECONDS:
+                    break
+                await asyncio.sleep(0.15)
+                continue
+            if item["version"] != last_version:
+                jpeg = item["jpeg"]
+                last_version = item["version"]
+                yield (
+                    b"--occupaiframe\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                    + str(len(jpeg)).encode("ascii")
+                    + b"\r\n\r\n"
+                    + jpeg
+                    + b"\r\n"
+                )
+            await asyncio.sleep(0.10)
+
+    return StreamingResponse(
+        _frames(),
+        media_type="multipart/x-mixed-replace; boundary=occupaiframe",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
 
 
 def _aggregate_camera_states_locked(now=None):
@@ -2007,7 +2130,10 @@ async def stream_proxy(
 ):
     stream_target = _camera_stream_target(camera_id)
     if not stream_target:
-        raise HTTPException(404, "This camera stream is not configured")
+        camera_id = _normalize_camera_id(camera_id)
+        if camera_id not in CAMERA_ROLE_CONFIG:
+            raise HTTPException(404, "This camera stream is not configured")
+        return _relay_camera_stream(camera_id)
 
     async def _pipe():
         try:
@@ -2060,6 +2186,7 @@ def yolo_update(data: YoloUpdate, x_cam_token: str = Header(...)):
             422,
             f"{camera_role} camera must report exactly {expected['capacity']} configured spaces",
         )
+    snapshot_jpeg = _decode_camera_snapshot(data.snapshot_b64)
     with state_lock:
         camera_states[camera_id] = {
             "camera_role": camera_role,
@@ -2078,8 +2205,21 @@ def yolo_update(data: YoloUpdate, x_cam_token: str = Header(...)):
             "calibration_required": bool(data.calibration_required),
             "received_at": time.monotonic(),
         }
+        if snapshot_jpeg is not None:
+            previous_version = int(camera_frames.get(camera_id, {}).get("version", 0))
+            camera_frames[camera_id] = {
+                "jpeg": snapshot_jpeg,
+                "received_at": time.monotonic(),
+                "version": previous_version + 1,
+            }
         _refresh_aggregated_state_locked()
         aggregated = dict(state)
+
+    if data.reporting and data.camera_status == "online" and not data.calibration_required:
+        try:
+            _update_reservation_arrival(camera_id, data.zones or {})
+        except Exception as exc:
+            print(f"[reservation] Camera arrival update failed: {exc}")
 
     # Keep the per-camera request limit enforced by YoloUpdate. The aggregate
     # can legitimately be larger than one camera's 1,000-slot safety bound.
@@ -2148,7 +2288,16 @@ def push_frame(data: PushFrame, x_cam_token: str = Header(...)):
 def api_stats(_auth=Depends(require_user)):
     with state_lock:
         _refresh_aggregated_state_locked()
-        return dict(state)
+        snapshot = dict(state)
+    snapshot["slot_statuses"] = _reservation_slot_statuses()
+    snapshot["available_slots"] = (
+        sum(slot["status"] == "available" for slot in snapshot["slot_statuses"])
+        if snapshot.get("combined_complete") else None
+    )
+    snapshot["reserved_slots"] = sum(
+        slot["status"] == "reserved" for slot in snapshot["slot_statuses"]
+    )
+    return snapshot
 
 @app.get("/api/history")
 def api_history(_auth=Depends(require_user)):
@@ -3139,7 +3288,9 @@ def _record_parking_payment(payload, verified_by_user_id=None, external_referenc
             raise RuntimeError("Payment insert returned no row")
         conn.commit()
         _invalidate_payment_revenue_dashboard_cache()
-        paid_at_ph = _coerce_datetime(row["paid_at"]).strftime("%Y-%m-%d %H:%M:%S")
+        paid_at_dt = _coerce_datetime(row["paid_at"])
+        expires_at_dt = _payment_expiry_at(paid_at_dt, row["duration_type"])
+        paid_at_ph = paid_at_dt.strftime("%Y-%m-%d %H:%M:%S")
         return {
             "ok": True,
             "payment_id": row["payment_id"],
@@ -3157,6 +3308,8 @@ def _record_parking_payment(payload, verified_by_user_id=None, external_referenc
             "external_reference": row.get("external_reference"),
             "idempotent_replay": idempotent_replay,
             "paid_at_ph": paid_at_ph,
+            "expires_at_ph": expires_at_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "expires_at": expires_at_dt.isoformat(),
         }
     except Exception as e:
         conn.rollback()
@@ -3223,6 +3376,237 @@ def _driver_price_summary(vehicles_hour=None, lot_capacity=None):
     }
 
 
+_DURATION_LABELS = {
+    "daily": "1 day",
+    "weekly": "1 week",
+    "monthly": "1 month",
+    "hourly": "1 hour",
+}
+
+
+def _payment_expiry_at(paid_at, duration_type):
+    """Return the exact end of a paid plan in Philippine time."""
+    starts_at = _coerce_datetime(paid_at)
+    duration = str(duration_type or "daily").strip().lower()
+    if duration == "weekly":
+        return starts_at + timedelta(days=7)
+    if duration == "monthly":
+        import calendar
+        next_month = starts_at.month + 1
+        year = starts_at.year + (1 if next_month == 13 else 0)
+        month = 1 if next_month == 13 else next_month
+        day = min(starts_at.day, calendar.monthrange(year, month)[1])
+        return starts_at.replace(year=year, month=month, day=day)
+    if duration == "hourly":
+        return starts_at + timedelta(hours=1)
+    return starts_at + timedelta(days=1)
+
+
+def _reservation_slot_role(slot_id: str):
+    for camera_id, config in CAMERA_ROLE_CONFIG.items():
+        names = (f"{camera_id}:{config['prefix']}{index:02d}"
+                 for index in range(1, config["capacity"] + 1))
+        if slot_id in names:
+            return camera_id, config["role"]
+    raise HTTPException(400, "Choose a configured car or motorcycle parking slot")
+
+
+def _expire_reservations():
+    """Expiry is durable and runs before every reservation read/write."""
+    execute(
+        "UPDATE parking_reservations SET status='expired' WHERE "
+        "(status='pending_payment' AND hold_expires_at <= NOW()) OR "
+        "(status IN ('reserved', 'occupied') AND expires_at <= NOW())"
+    )
+
+
+def _reservation_expiry_scheduler():
+    time.sleep(15)
+    while True:
+        try:
+            _expire_reservations()
+        except Exception as exc:
+            print(f"[reservation] Expiry check failed: {exc}")
+        time.sleep(15)
+
+
+def _reservation_public(row):
+    return {
+        "reservation_id": row["reservation_id"],
+        "slot_id": row["slot_id"],
+        "vehicle_type": row["vehicle_type"],
+        "duration_type": row["duration_type"],
+        "status": row["status"],
+        "payment_status": row["payment_status"],
+        "account_email": row.get("account_email"),
+        "amount_php": _row_float(row, "amount_php"),
+        "created_at": row["created_at"].isoformat(),
+        "starts_at": row["starts_at"].isoformat() if row.get("starts_at") else None,
+        "expires_at": row["expires_at"].isoformat() if row.get("expires_at") else None,
+    }
+
+
+def _reservation_slot_statuses(user_id=None):
+    _expire_reservations()
+    with state_lock:
+        _refresh_aggregated_state_locked()
+        zones = dict(state["zones"])
+    active_rows = query(
+        "SELECT slot_id, status, user_id FROM parking_reservations "
+        "WHERE status IN ('pending_payment', 'reserved', 'occupied')"
+    )
+    claims = {row["slot_id"]: row for row in active_rows}
+    result = []
+    for camera_id, config in CAMERA_ROLE_CONFIG.items():
+        for index in range(1, config["capacity"] + 1):
+            slot_id = f"{camera_id}:{config['prefix']}{index:02d}"
+            detected = zones.get(slot_id)
+            claim = claims.get(slot_id)
+            # Physical occupancy always wins; stale cameras are never "available".
+            status = ("occupied" if detected is True else
+                      "unknown" if detected is None else
+                      "reserved" if claim else "available")
+            result.append({
+                "slot_id": slot_id,
+                "vehicle_type": config["role"],
+                "status": status,
+                "claim_status": claim["status"] if claim else None,
+                "mine": bool(claim and user_id and int(claim["user_id"]) == int(user_id)),
+            })
+    return result
+
+
+@app.get("/api/reservations/slots")
+def reservation_slots(_auth=Depends(require_user)):
+    user_id = int(_auth["user_id"])
+    slots = _reservation_slot_statuses(user_id)
+    rows = query(
+        "SELECT r.reservation_id, r.slot_id, r.vehicle_type, r.duration_type, r.status, "
+        "r.payment_status, r.amount_php, r.created_at, r.starts_at, r.expires_at, "
+        "u.email AS account_email "
+        "FROM parking_reservations r JOIN users u ON u.user_id=r.user_id "
+        "WHERE r.user_id=%s ORDER BY r.created_at DESC LIMIT 1",
+        (user_id,),
+    )
+    return {"slots": slots, "my_reservation": _reservation_public(rows[0]) if rows else None}
+
+
+def _hold_reservation(user_id, slot_id, duration_type, amount_php, checkout_ref):
+    camera_id, vehicle_type = _reservation_slot_role(slot_id)
+    _expire_reservations()
+    with state_lock:
+        _refresh_aggregated_state_locked()
+        zone_status = state["zones"].get(slot_id)
+    if zone_status is not False:
+        raise HTTPException(409, "This slot is occupied or its camera is offline")
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "INSERT INTO parking_reservations "
+            "(user_id, slot_id, vehicle_type, duration_type, amount_php, checkout_ref, hold_expires_at) "
+            "VALUES (%s,%s,%s,%s,%s,%s,NOW() + INTERVAL '15 minutes') "
+            "RETURNING reservation_id",
+            (user_id, slot_id, vehicle_type, duration_type, amount_php, checkout_ref),
+        )
+        reservation_id = int(cur.fetchone()["reservation_id"])
+        conn.commit()
+        return reservation_id
+    except psycopg2.errors.UniqueViolation as exc:
+        conn.rollback()
+        raise HTTPException(409, "Another driver is already paying for or using this slot") from exc
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def _release_unpaid_reservation(reservation_id):
+    if reservation_id:
+        execute("UPDATE parking_reservations SET status='cancelled' "
+                "WHERE reservation_id=%s AND status='pending_payment' AND payment_status='unpaid'",
+                (reservation_id,))
+
+
+def _update_reservation_arrival(camera_id, zones):
+    """Camera detects occupancy, not driver identity; vacant departure is debounced."""
+    if not zones:
+        return
+    active = query(
+        "SELECT slot_id FROM parking_reservations "
+        "WHERE status IN ('reserved', 'occupied') AND slot_id LIKE %s",
+        (camera_id + ":%",),
+    )
+    relevant = {row["slot_id"] for row in active}
+    for slot_name, occupied in zones.items():
+        slot_id = f"{camera_id}:{slot_name}"
+        if slot_id not in relevant:
+            continue
+        if occupied is True:
+            execute("UPDATE parking_reservations SET status='occupied', occupied_at=COALESCE(occupied_at,NOW()), "
+                    "vacant_since=NULL WHERE slot_id=%s AND status='reserved' AND expires_at>NOW()",
+                    (slot_id,))
+            execute("UPDATE parking_reservations SET vacant_since=NULL "
+                    "WHERE slot_id=%s AND status='occupied' AND vacant_since IS NOT NULL",
+                    (slot_id,))
+        elif occupied is False:
+            execute("UPDATE parking_reservations SET vacant_since=COALESCE(vacant_since,NOW()) "
+                    "WHERE slot_id=%s AND status='occupied' AND expires_at>NOW()",
+                    (slot_id,))
+            execute("UPDATE parking_reservations SET status='completed', completed_at=NOW() "
+                    "WHERE slot_id=%s AND status='occupied' "
+                    "AND vacant_since <= NOW() - INTERVAL '10 seconds'",
+                    (slot_id,))
+
+
+def _driver_payment_plan(user_id):
+    if not user_id:
+        return None
+    rows = query(
+        """
+        SELECT payment_id, vehicle_type, duration_type, final_amount_php,
+               payment_method, paid_at,
+               CASE LOWER(COALESCE(duration_type, 'daily'))
+                   WHEN 'weekly' THEN paid_at + INTERVAL '7 days'
+                   WHEN 'monthly' THEN paid_at + INTERVAL '1 month'
+                   WHEN 'hourly' THEN paid_at + INTERVAL '1 hour'
+                   ELSE paid_at + INTERVAL '1 day'
+               END AS expires_at
+        FROM parking_payments
+        WHERE user_id=%s
+        ORDER BY expires_at DESC, paid_at DESC
+        LIMIT 1
+        """,
+        (int(user_id),),
+    )
+    if not rows:
+        return None
+
+    row = rows[0]
+    starts_at = _coerce_datetime(row.get("paid_at"))
+    expires_at = (
+        _coerce_datetime(row.get("expires_at"))
+        if row.get("expires_at") is not None
+        else _payment_expiry_at(starts_at, row.get("duration_type"))
+    )
+    remaining_seconds = max(0, int((expires_at - datetime.now(PH_TZ)).total_seconds()))
+    duration_type = str(row.get("duration_type") or "daily").lower()
+    return {
+        "payment_id": row.get("payment_id"),
+        "status": "active" if remaining_seconds > 0 else "expired",
+        "duration_type": duration_type,
+        "duration_label": _DURATION_LABELS.get(duration_type, duration_type.title()),
+        "vehicle_type": row.get("vehicle_type") or "car",
+        "payment_method": row.get("payment_method") or "cash",
+        "amount_php": _row_float(row, "final_amount_php"),
+        "starts_at": starts_at.isoformat(),
+        "expires_at": expires_at.isoformat(),
+        "remaining_seconds": remaining_seconds,
+    }
+
+
 @app.get("/api/driver/summary")
 def api_driver_summary(_auth=Depends(require_user)):
     with state_lock:
@@ -3235,11 +3619,14 @@ def api_driver_summary(_auth=Depends(require_user)):
 
     if camera_online:
         occupied = max(0, int(snapshot.get("occupied") or 0))
-        free = max(0, int(snapshot.get("free") if snapshot.get("free") is not None else total - occupied))
+        slot_statuses = _reservation_slot_statuses()
+        free = sum(slot["status"] == "available" for slot in slot_statuses)
+        reserved = sum(slot["status"] == "reserved" for slot in slot_statuses)
         occupancy_pct = round(float(snapshot.get("occupancy_pct") or (occupied / max(total, 1) * 100)), 1)
     else:
         occupied = None
         free = None
+        reserved = None
         occupancy_pct = None
 
     price = _driver_price_summary(occupied if camera_online else None, total)
@@ -3249,19 +3636,21 @@ def api_driver_summary(_auth=Depends(require_user)):
     )
     status_text = "Live parking availability" if camera_online else "Waiting for camera update"
     if free == 0 and camera_online:
-        status_text = "Parking area is currently full"
+        status_text = "No slots are currently available to reserve"
 
+    auth_user_id = _auth.get("user_id") if isinstance(_auth, dict) else None
     return {
         "available": free,
         "available_text": "--" if free is None else str(free),
         "occupied": occupied,
+        "reserved": reserved,
         "total": total,
         "configured_capacity": total,
         "reporting_capacity": int(snapshot.get("reporting_capacity") or 0),
         "combined_complete": camera_online,
         "combined_status": snapshot.get("combined_status", "unavailable"),
         "occupancy_pct": occupancy_pct,
-        "lot_full": bool(snapshot.get("lot_full")) if camera_online else False,
+        "lot_full": bool(free == 0) if camera_online else False,
         "camera_online": camera_online,
         "last_update": timestamp,
         "status_text": status_text,
@@ -3273,6 +3662,8 @@ def api_driver_summary(_auth=Depends(require_user)):
         "pricing_mode": duration_pricing.get("pricing_mode", "dynamic"),
         "demand_pricing_enabled": duration_pricing.get("demand_pricing_enabled", False),
         "pricing_context": duration_pricing.get("pricing_context"),
+        "payment_plan": _driver_payment_plan(auth_user_id),
+        "cameras": snapshot.get("cameras", {}),
         **price,
     }
 
@@ -3520,11 +3911,24 @@ class PaymentRecordPayload(BaseModel):
     notes: Optional[str] = None
     paid_at: Optional[str] = None
     user_id: Optional[int] = None
+    customer_email: Optional[str] = None
 
 
 @app.post("/api/payments")
 def api_record_payment(payload: PaymentRecordPayload, request: Request, _admin=Depends(require_admin)):
     _rate_limit(request, "payments", max_calls=30, window_seconds=60)
+    customer_email = _clean_email(payload.customer_email or "")
+    if not customer_email:
+        raise HTTPException(400, "Registered driver email is required")
+    if len(customer_email) > 254 or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", customer_email):
+        raise HTTPException(400, "Enter a valid registered driver email")
+    users = query(
+        "SELECT user_id FROM users WHERE LOWER(email)=LOWER(%s) AND is_active=TRUE LIMIT 1",
+        (customer_email,),
+    )
+    if not users:
+        raise HTTPException(400, "No active driver account uses that email")
+    payload.user_id = int(users[0]["user_id"])
     # The admin recording this payment is the one who checked the physical
     # PWD/Senior ID card in person — stamp who, for an audit trail.
     return _record_parking_payment(payload, verified_by_user_id=_admin.get("user_id"))
@@ -3565,7 +3969,13 @@ def api_driver_history(user_id: int, period: str = "all", limit: int = 50, _auth
                 final_amount_php,
                 payment_method,
                 notes,
-                paid_at AT TIME ZONE 'Asia/Manila' AS paid_at_ph
+                paid_at AT TIME ZONE 'Asia/Manila' AS paid_at_ph,
+                CASE LOWER(COALESCE(duration_type, 'daily'))
+                    WHEN 'weekly' THEN paid_at + INTERVAL '7 days'
+                    WHEN 'monthly' THEN paid_at + INTERVAL '1 month'
+                    WHEN 'hourly' THEN paid_at + INTERVAL '1 hour'
+                    ELSE paid_at + INTERVAL '1 day'
+                END AT TIME ZONE 'Asia/Manila' AS expires_at_ph
             FROM parking_payments
             WHERE user_id = %s {period_filter}
             ORDER BY paid_at DESC
@@ -3575,6 +3985,7 @@ def api_driver_history(user_id: int, period: str = "all", limit: int = 50, _auth
         records = []
         for r in rows:
             paid_at = r["paid_at_ph"]
+            expires_at = r.get("expires_at_ph") or _payment_expiry_at(paid_at, r.get("duration_type"))
             records.append({
                 "payment_id": r["payment_id"],
                 "vehicle_type": r["vehicle_type"] or "car",
@@ -3589,6 +4000,9 @@ def api_driver_history(user_id: int, period: str = "all", limit: int = 50, _auth
                 "notes": r["notes"] or "",
                 "paid_date": paid_at.strftime("%b %d, %Y") if paid_at else "--",
                 "paid_time": paid_at.strftime("%I:%M %p") if paid_at else "--",
+                "expires_date": expires_at.strftime("%b %d, %Y") if expires_at else "--",
+                "expires_time": expires_at.strftime("%I:%M %p") if expires_at else "--",
+                "is_active": bool(expires_at and _coerce_datetime(expires_at) > datetime.now(PH_TZ)),
             })
 
         total_spent = sum(r["final_amount_php"] for r in records)
@@ -3615,6 +4029,7 @@ class GcashCheckoutPayload(BaseModel):
     description: Optional[str] = "OccupAI Parking Payment"
     user_id: Optional[int] = None
     mobile_number: str
+    slot_id: Optional[str] = None
 
 
 def _normalize_ph_mobile(value: str) -> str:
@@ -3686,19 +4101,33 @@ def gcash_create_checkout(
     import urllib.error
 
     ref = secrets.token_urlsafe(24)
-    execute(
-        """
-        INSERT INTO gcash_checkouts (ref, user_id, vehicle_type, duration_type, regular_price_php, discount_type, final_amount_php, discount_id_number, customer_mobile)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
-        """,
-        (ref, int(_auth["user_id"]), vehicle_type, duration_type, regular_price, discount_type, final_amount, discount_id_number, mobile_number),
-    )
+    slot_id = (payload.slot_id or "").strip()
+    reservation_id = None
+    if slot_id:
+        _, slot_vehicle_type = _reservation_slot_role(slot_id)
+        if slot_vehicle_type != vehicle_type:
+            raise HTTPException(400, "Selected slot does not match the vehicle type")
+        reservation_id = _hold_reservation(
+            int(_auth["user_id"]), slot_id, duration_type, final_amount, ref
+        )
+    try:
+        execute(
+            """
+            INSERT INTO gcash_checkouts (ref, user_id, vehicle_type, duration_type, regular_price_php, discount_type, final_amount_php, discount_id_number, customer_mobile, reservation_id)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """,
+            (ref, int(_auth["user_id"]), vehicle_type, duration_type, regular_price, discount_type, final_amount, discount_id_number, mobile_number, reservation_id),
+        )
+    except Exception:
+        _release_unpaid_reservation(reservation_id)
+        raise
 
     body = json.dumps({
         "data": {
             "attributes": {
                 "line_items": [{
-                    "name": f"Parking Fee ({vehicle_type.title()}, {duration_type.title()})",
+                    "name": (f"Reserved Slot {slot_id} ({duration_type.title()})" if slot_id
+                             else f"Parking Fee ({vehicle_type.title()}, {duration_type.title()})"),
                     "amount": amount_centavos,
                     "currency": "PHP",
                     "quantity": 1,
@@ -3730,7 +4159,11 @@ def gcash_create_checkout(
     except urllib.error.HTTPError as e:
         error_body = e.read().decode() if e.fp else str(e)
         print(f"[PayMongo] {e.code}: {error_body}")
+        _release_unpaid_reservation(reservation_id)
         raise HTTPException(502, f"PayMongo error: {e.code}")
+    except Exception as exc:
+        _release_unpaid_reservation(reservation_id)
+        raise HTTPException(502, "Could not connect to PayMongo") from exc
 
     checkout_url = result["data"]["attributes"]["checkout_url"]
     checkout_id = result["data"]["id"]
@@ -3748,6 +4181,8 @@ def gcash_create_checkout(
         "pricing_mode": duration_pricing.get("pricing_mode", "dynamic"),
         "demand_pricing_enabled": duration_pricing.get("demand_pricing_enabled", False),
         "pricing_context": duration_pricing.get("pricing_context"),
+        "reservation_id": reservation_id,
+        "slot_id": slot_id or None,
     }
 
 
@@ -3866,6 +4301,76 @@ def _checkout_is_paid(attributes: dict) -> bool:
     return False
 
 
+def _finalize_paid_reservation(checkout):
+    """Commit the confirmed payment and reservation in one short transaction."""
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT * FROM parking_reservations WHERE reservation_id=%s FOR UPDATE",
+            (checkout["reservation_id"],),
+        )
+        reservation = cur.fetchone()
+        if not reservation or reservation["checkout_ref"] != checkout["ref"]:
+            raise RuntimeError("Reservation checkout link is invalid")
+        if reservation["payment_status"] == "paid" and reservation.get("payment_id"):
+            cur.execute(
+                "UPDATE gcash_checkouts SET status='paid', error_message=NULL WHERE ref=%s",
+                (checkout["ref"],),
+            )
+            conn.commit()
+            return {"ok": True, "payment_id": reservation["payment_id"],
+                    "reservation_id": reservation["reservation_id"],
+                    "slot_id": reservation["slot_id"],
+                    "expires_at": reservation["expires_at"].isoformat()}
+        if reservation["status"] != "pending_payment" or reservation["hold_expires_at"] <= datetime.now(PH_TZ):
+            raise RuntimeError("Paid reservation hold expired; manual refund or reassignment required")
+        regular = float(checkout["regular_price_php"])
+        final = float(checkout["final_amount_php"])
+        discount = round(max(0.0, regular - final), 2)
+        rate = round(discount / regular, 4) if regular else 0.0
+        external_ref = f"paymongo:{checkout.get('checkout_id') or checkout['ref']}"
+        cur.execute(
+            "INSERT INTO parking_payments "
+            "(vehicle_type, duration_type, regular_price_php, discount_type, discount_rate, "
+            "discount_amount_php, final_amount_php, payment_method, notes, paid_at, user_id, "
+            "discount_id_number, external_reference) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,'gcash',%s,NOW(),%s,%s,%s) "
+            "ON CONFLICT (external_reference) WHERE external_reference IS NOT NULL DO NOTHING "
+            "RETURNING payment_id, paid_at",
+            (reservation["vehicle_type"], reservation["duration_type"], regular,
+             checkout["discount_type"], rate, discount, final,
+             f"Reserved slot {reservation['slot_id']} via GCash (PayMongo)",
+             reservation["user_id"], checkout.get("discount_id_number"), external_ref),
+        )
+        payment = cur.fetchone()
+        if not payment:
+            cur.execute("SELECT payment_id, paid_at FROM parking_payments WHERE external_reference=%s", (external_ref,))
+            payment = cur.fetchone()
+        starts_at = _coerce_datetime(payment["paid_at"])
+        expires_at = _payment_expiry_at(starts_at, reservation["duration_type"])
+        cur.execute(
+            "UPDATE parking_reservations SET status='reserved', payment_status='paid', "
+            "payment_id=%s, starts_at=%s, expires_at=%s WHERE reservation_id=%s",
+            (payment["payment_id"], starts_at, expires_at, reservation["reservation_id"]),
+        )
+        cur.execute(
+            "UPDATE gcash_checkouts SET status='paid', error_message=NULL WHERE ref=%s",
+            (checkout["ref"],),
+        )
+        conn.commit()
+        _invalidate_payment_revenue_dashboard_cache()
+        return {"ok": True, "payment_id": payment["payment_id"],
+                "reservation_id": reservation["reservation_id"],
+                "slot_id": reservation["slot_id"], "expires_at": expires_at.isoformat()}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
 def _finalize_gcash_checkout(ref: str, allow_processing: bool = False):
     """Record one PayMongo-confirmed checkout with a durable idempotency key."""
     checkout, claim_status = _claim_gcash_checkout(ref, allow_processing=allow_processing)
@@ -3877,6 +4382,9 @@ def _finalize_gcash_checkout(ref: str, allow_processing: bool = False):
         return checkout, claim_status, None
 
     try:
+        if checkout.get("reservation_id"):
+            payment = _finalize_paid_reservation(checkout)
+            return checkout, "paid", payment
         payment_payload = PaymentRecordPayload(
             vehicle_type=checkout["vehicle_type"] or "car",
             duration_type=checkout["duration_type"] or "daily",
@@ -4965,6 +5473,96 @@ def _validate_password_strength(password: str) -> None:
         raise HTTPException(400, "Password must contain at least one letter and one number")
 
 
+def _validate_registration_email(email: str) -> str:
+    cleaned = _clean_email(email)
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", cleaned):
+        raise HTTPException(400, "Enter a valid email address")
+    if _is_reserved_admin_email(cleaned):
+        raise HTTPException(400, "This email is reserved for the admin account")
+    return cleaned
+
+
+def _registration_code_hash(email: str, code: str) -> str:
+    return hmac.new(
+        AUTH_SECRET_KEY.encode("utf-8"),
+        f"registration:{_clean_email(email)}:{code}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _send_registration_code_email(recipient: str, code: str) -> bool:
+    """Deliver a short-lived registration code without logging or returning it."""
+    text_content = (
+        f"Your OccupAI email verification code is {code}.\n\n"
+        f"It expires in {REGISTRATION_CODE_TTL_MINUTES} minutes. "
+        "If you did not request this code, you can ignore this email."
+    )
+
+    if BREVO_API_KEY and BREVO_SENDER_EMAIL:
+        try:
+            response = httpx.post(
+                BREVO_API_URL,
+                headers={
+                    "accept": "application/json",
+                    "api-key": BREVO_API_KEY,
+                    "content-type": "application/json",
+                },
+                json={
+                    "sender": {
+                        "name": BREVO_SENDER_NAME or "OccupAI Support",
+                        "email": BREVO_SENDER_EMAIL,
+                    },
+                    "to": [{"email": recipient}],
+                    "subject": "Your OccupAI verification code",
+                    "textContent": text_content,
+                    "htmlContent": (
+                        "<html><body style=\"font-family:Arial,sans-serif;color:#14202c\">"
+                        "<h2>Verify your email address</h2>"
+                        "<p>Use this code to finish creating your OccupAI account:</p>"
+                        f"<p style=\"font-size:32px;font-weight:700;letter-spacing:8px\">{code}</p>"
+                        f"<p>This code expires in {REGISTRATION_CODE_TTL_MINUTES} minutes.</p>"
+                        "<p>If you did not request this code, you can ignore this email.</p>"
+                        "</body></html>"
+                    ),
+                    "tags": ["registration-verification"],
+                },
+                timeout=10.0,
+            )
+            if response.status_code == 201:
+                return True
+            print(f"[auth] Brevo registration-code delivery failed with HTTP {response.status_code}.")
+        except Exception as exc:
+            print(f"[auth] Brevo registration-code delivery failed: {type(exc).__name__}")
+
+    if not SMTP_HOST or not SMTP_FROM:
+        print("[auth] Registration email unavailable: configure Brevo or SMTP delivery.")
+        return False
+
+    message = EmailMessage()
+    message["Subject"] = "Your OccupAI verification code"
+    message["From"] = SMTP_FROM
+    message["To"] = recipient
+    message.set_content(text_content)
+    try:
+        if SMTP_USE_TLS:
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
+                server.ehlo()
+                server.starttls()
+                server.ehlo()
+                if SMTP_USER:
+                    server.login(SMTP_USER, SMTP_PASSWORD)
+                server.send_message(message)
+        else:
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=10) as server:
+                if SMTP_USER:
+                    server.login(SMTP_USER, SMTP_PASSWORD)
+                server.send_message(message)
+        return True
+    except Exception as exc:
+        print(f"[auth] Registration-code email delivery failed: {type(exc).__name__}")
+        return False
+
+
 def _password_reset_url(request: Request, raw_token: str) -> str:
     base_url = PASSWORD_RESET_URL_BASE or str(request.base_url).rstrip("/")
     return f"{base_url}/reset-password?token={quote(raw_token, safe='')}"
@@ -5165,11 +5763,74 @@ def reset_password(data: ResetPasswordPayload, request: Request):
         conn.close()
 
 
+@app.post("/auth/register/request-code")
+def request_registration_code(data: RegistrationCodeRequest, request: Request):
+    _rate_limit(request, "registration_code", max_calls=5, window_seconds=300)
+    email = _validate_registration_email(data.email)
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    code_hash = _registration_code_hash(email, code)
+
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT 1 FROM users WHERE LOWER(email)=LOWER(%s)", (email,))
+        if cur.fetchone():
+            raise HTTPException(400, "Email already registered")
+        cur.execute(
+            "SELECT GREATEST(0, CEIL(EXTRACT(EPOCH FROM "
+            "(last_sent_at + (%s * INTERVAL '1 second') - NOW()))))::int AS wait_seconds "
+            "FROM registration_email_codes WHERE email=%s FOR UPDATE",
+            (REGISTRATION_CODE_RESEND_SECONDS, email),
+        )
+        existing = cur.fetchone()
+        wait_seconds = int(existing["wait_seconds"] or 0) if existing else 0
+        if wait_seconds > 0:
+            raise HTTPException(429, f"Please wait {wait_seconds} seconds before requesting another code")
+        cur.execute(
+            "INSERT INTO registration_email_codes "
+            "(email, code_hash, expires_at, attempt_count, used_at, last_sent_at, created_at) "
+            "VALUES (%s,%s,NOW() + (%s * INTERVAL '1 minute'),0,NULL,NOW(),NOW()) "
+            "ON CONFLICT (email) DO UPDATE SET code_hash=EXCLUDED.code_hash, "
+            "expires_at=EXCLUDED.expires_at, attempt_count=0, used_at=NULL, "
+            "last_sent_at=NOW(), created_at=NOW()",
+            (email, code_hash, REGISTRATION_CODE_TTL_MINUTES),
+        )
+        conn.commit()
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as exc:
+        conn.rollback()
+        print(f"[register] Verification code creation failed: {exc}")
+        raise HTTPException(503, "Email verification is temporarily unavailable") from exc
+    finally:
+        cur.close()
+        conn.close()
+
+    if not _send_registration_code_email(email, code):
+        try:
+            execute(
+                "DELETE FROM registration_email_codes WHERE email=%s AND code_hash=%s",
+                (email, code_hash),
+            )
+        except Exception as exc:
+            print(f"[register] Failed to invalidate undelivered verification code: {exc}")
+        _audit_auth_event(request, "registration_code_delivery_failed", email=email)
+        raise HTTPException(503, "Could not send verification email. Please try again later")
+
+    _audit_auth_event(request, "registration_code_sent", email=email)
+    return {
+        "ok": True,
+        "message": "A 6-digit verification code was sent to your email.",
+        "expires_in_seconds": REGISTRATION_CODE_TTL_MINUTES * 60,
+        "resend_after_seconds": REGISTRATION_CODE_RESEND_SECONDS,
+    }
+
+
 @app.post("/auth/register")
 def register(data: UserRegister, request: Request, response: Response):
-    email = _clean_email(data.email)
-    if _is_reserved_admin_email(email):
-        raise HTTPException(400, "This email is reserved for the admin account")
+    _rate_limit(request, "registration_submit", max_calls=10, window_seconds=300)
+    email = _validate_registration_email(data.email)
 
     _validate_password_strength(data.password)
 
@@ -5179,6 +5840,22 @@ def register(data: UserRegister, request: Request, response: Response):
     conn = get_db()
     cur = conn.cursor()
     try:
+        cur.execute(
+            "SELECT code_hash FROM registration_email_codes "
+            "WHERE email=%s AND used_at IS NULL AND expires_at > NOW() "
+            "AND attempt_count < %s FOR UPDATE",
+            (email, REGISTRATION_CODE_MAX_ATTEMPTS),
+        )
+        verification = cur.fetchone()
+        submitted_hash = _registration_code_hash(email, data.verification_code)
+        if not verification or not hmac.compare_digest(verification["code_hash"], submitted_hash):
+            if verification:
+                cur.execute(
+                    "UPDATE registration_email_codes SET attempt_count=attempt_count+1 WHERE email=%s",
+                    (email,),
+                )
+                conn.commit()
+            raise HTTPException(400, "Verification code is invalid or expired")
         try:
             cur.execute(
                 "INSERT INTO users (first_name,last_name,email,password_hash,role) "
@@ -5191,7 +5868,12 @@ def register(data: UserRegister, request: Request, response: Response):
         new_id = cur.fetchone()["user_id"]
         if role == "driver":
             cur.execute("INSERT INTO drivers(user_id) VALUES(%s)", (new_id,))
+        cur.execute(
+            "UPDATE registration_email_codes SET used_at=NOW() WHERE email=%s",
+            (email,),
+        )
         conn.commit()
+        _audit_auth_event(request, "registration_completed", email=email, user_id=new_id)
         return _auth_response(_sign_auth_token(new_id, role), {
             "ok": True,
             "user_id": new_id,

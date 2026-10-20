@@ -4,7 +4,7 @@ import hmac
 import json
 import time
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import backend.main as m
@@ -78,6 +78,66 @@ def test_daily_duration_defaults_match_flat_vehicle_rates(monkeypatch):
 
     assert rates["daily_rate_php_car"] == m.FLAT_RATE_CAR
     assert rates["daily_rate_php_motorcycle"] == m.FLAT_RATE_MOTORCYCLE
+
+
+def test_payment_expiry_uses_plan_duration_and_calendar_month():
+    started = datetime(2026, 1, 31, 12, 30, tzinfo=m.PH_TZ)
+
+    assert m._payment_expiry_at(started, "daily") == started + timedelta(days=1)
+    assert m._payment_expiry_at(started, "weekly") == started + timedelta(days=7)
+    assert m._payment_expiry_at(started, "monthly") == datetime(
+        2026, 2, 28, 12, 30, tzinfo=m.PH_TZ
+    )
+
+
+def test_driver_payment_plan_reports_duration_expiry_and_remaining_time(monkeypatch):
+    started = datetime.now(m.PH_TZ) - timedelta(hours=1)
+    expires = started + timedelta(days=7)
+    monkeypatch.setattr(m, "query", lambda *_args, **_kwargs: [{
+        "payment_id": 41,
+        "vehicle_type": "car",
+        "duration_type": "weekly",
+        "final_amount_php": 300,
+        "payment_method": "gcash",
+        "paid_at": started,
+        "expires_at": expires,
+    }])
+
+    plan = m._driver_payment_plan(9)
+
+    assert plan["status"] == "active"
+    assert plan["duration_label"] == "1 week"
+    assert plan["vehicle_type"] == "car"
+    assert plan["expires_at"] == expires.isoformat()
+    assert 6 * 86400 < plan["remaining_seconds"] <= 7 * 86400
+
+
+def test_admin_payment_email_links_registered_driver(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(m, "_rate_limit", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(m, "query", lambda *_args, **_kwargs: [{"user_id": 27}])
+
+    def fake_record(payload, **kwargs):
+        captured["user_id"] = payload.user_id
+        captured.update(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(m, "_record_parking_payment", fake_record)
+    payload = m.PaymentRecordPayload(
+        duration_type="weekly",
+        regular_price_php=300,
+        customer_email="Driver@Example.com",
+    )
+
+    result = m.api_record_payment(
+        payload,
+        SimpleNamespace(),
+        _admin={"user_id": 2, "role": "admin"},
+    )
+
+    assert result == {"ok": True}
+    assert captured["user_id"] == 27
+    assert captured["verified_by_user_id"] == 2
 
 
 def test_operational_routes_have_auth_dependencies():
@@ -171,6 +231,41 @@ def test_brevo_password_reset_delivery_uses_transactional_api(monkeypatch):
     assert captured['json']['to'] == [{'email': 'driver@gmail.com'}]
     assert 'safe-test-token' in captured['json']['htmlContent']
     assert 'textContent' not in captured['json']
+
+
+def test_registration_code_hash_is_email_bound_and_case_normalized(monkeypatch):
+    monkeypatch.setattr(m, 'AUTH_SECRET_KEY', 'test-auth-secret')
+
+    first = m._registration_code_hash('Driver@Example.com', '012345')
+
+    assert first == m._registration_code_hash('driver@example.com', '012345')
+    assert first != m._registration_code_hash('other@example.com', '012345')
+    assert first != m._registration_code_hash('driver@example.com', '012346')
+    assert '012345' not in first
+
+
+def test_brevo_registration_code_delivery_uses_transactional_api(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        status_code = 201
+
+    def fake_post(url, **kwargs):
+        captured['url'] = url
+        captured.update(kwargs)
+        return FakeResponse()
+
+    monkeypatch.setattr(m, 'BREVO_API_KEY', 'test-key-not-a-real-secret')
+    monkeypatch.setattr(m, 'BREVO_SENDER_EMAIL', 'support@example.com')
+    monkeypatch.setattr(m.httpx, 'post', fake_post)
+
+    assert m._send_registration_code_email('new.driver@example.com', '012345')
+    assert captured['url'] == 'https://api.brevo.com/v3/smtp/email'
+    assert captured['headers']['api-key'] == 'test-key-not-a-real-secret'
+    assert captured['json']['to'] == [{'email': 'new.driver@example.com'}]
+    assert captured['json']['subject'] == 'Your OccupAI verification code'
+    assert '012345' in captured['json']['htmlContent']
+    assert captured['json']['tags'] == ['registration-verification']
 
 
 def test_philippine_mobile_number_is_required_and_normalized():

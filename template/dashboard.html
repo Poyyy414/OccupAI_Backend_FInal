@@ -1412,6 +1412,10 @@
     }
     .zone-row:last-child { border-bottom: 0; }
     .zone-dot { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; box-shadow: 0 0 0 4px rgba(255, 255, 255, .035); }
+    .zone-dot.free { background: var(--green); }
+    .zone-dot.occ { background: var(--red); }
+    .zone-dot.reserved { background: #e9bd18; }
+    .zone-dot.unknown { background: var(--muted); }
     .zone-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .zone-badge {
       padding: 4px 8px;
@@ -1422,6 +1426,7 @@
       letter-spacing: .08em;
     }
     .zone-badge.occ { color: var(--red); background: var(--red-soft); }
+    .zone-badge.reserved { color: #e9bd18; background: rgba(233, 189, 24, .14); }
     .zone-badge.free { color: var(--green); background: var(--green-soft); }
     .zone-badge.unknown { color: var(--muted); background: rgba(255, 255, 255, .055); }
 
@@ -1663,6 +1668,7 @@
     }
     .lot-cell.free { background: var(--green-soft); border-color: rgba(50, 230, 173, .35); }
     .lot-cell.occ { background: var(--red-soft); border-color: rgba(255, 92, 122, .38); }
+    .lot-cell.reserved { background: #e9bd18; border-color: #c99600; }
     .lot-legend { display: flex; align-items: center; gap: 8px; }
 
     .gcash-alert-banner {
@@ -2146,6 +2152,7 @@
           <div class="panel-actions">
             <span class="lot-legend status-chip"><span class="lot-cell free" style="width:9px;height:9px;border-radius:3px"></span>Free</span>
             <span class="lot-legend status-chip"><span class="lot-cell occ" style="width:9px;height:9px;border-radius:3px"></span>Occupied</span>
+            <span class="lot-legend status-chip"><span class="lot-cell reserved" style="width:9px;height:9px;border-radius:3px"></span>Reserved</span>
           </div>
         </div>
         <div class="lot-status-grid" id="lotStatusGrid">
@@ -2239,6 +2246,10 @@
         <span class="panel-title">Record Parking Payment</span>
       </div>
       <div class="payment-form" aria-label="Record parking payment">
+        <label style="grid-column:1/-1">
+          Registered driver email
+          <input class="payment-input" id="paymentCustomerEmail" type="email" placeholder="driver@example.com (links plan to driver dashboard)" autocomplete="off" required />
+        </label>
         <label>
           Vehicle
           <select class="payment-input" id="paymentVehicleType" onchange="onPaymentVehicleTypeChange()">
@@ -3738,14 +3749,14 @@ async function fetchStats() {
     const total = Number(d.configured_capacity ?? d.total ?? d.total_slots ?? 30);
     const complete = d.combined_complete === true;
     const occupied = complete ? Number(d.occupied ?? d.occupied_slots ?? 0) : null;
-    const free = complete ? Number(d.free ?? d.free_slots ?? (total - occupied)) : null;
+    const free = complete ? Number(d.available_slots ?? d.free ?? d.free_slots ?? (total - occupied)) : null;
     const pct = complete ? Number(d.occupancy_pct ?? (occupied / total * 100)) : null;
 
     document.getElementById('statTotal').textContent = total;
     document.getElementById('statOcc').textContent = complete ? occupied : '--';
     document.getElementById('statFree').textContent = complete ? free : '--';
     document.getElementById('statRate').textContent = complete ? Math.round(pct) + '%' : '--';
-    setText('statFreeSub', complete ? `${free} of ${total} spaces available` : 'Unavailable until both cameras are fresh');
+    setText('statFreeSub', complete ? `${free} available, ${d.reserved_slots || 0} reserved` : 'Unavailable until both cameras are fresh');
     const carCount = d.car_count;
     const motoCount = d.motorcycle_count;
     setText('statOccSub', complete
@@ -3774,7 +3785,7 @@ async function fetchStats() {
     }
     const detectorOnline = Number(d.reporting_capacity ?? 0) > 0;
 
-    renderZones(d.zones || {}, total, occupied);
+    renderZones(d.zones || {}, total, occupied, d.slot_statuses || []);
     if (isPanelActive('insights')) {
       renderStatusVisual(d);
       setText('ins-live', liveStatusText(d));
@@ -4422,9 +4433,14 @@ function onPaymentDiscountChange() {
 }
 
 async function recordPayment() {
-  const btn = document.getElementById('paymentRecordBtn');
-  const status = document.getElementById('paymentStatus');
-  const amount = Number(document.getElementById('paymentAmount')?.value);
+    const btn = document.getElementById('paymentRecordBtn');
+    const status = document.getElementById('paymentStatus');
+    const amount = Number(document.getElementById('paymentAmount')?.value);
+    const customerEmail = document.getElementById('paymentCustomerEmail')?.value.trim() || '';
+    if (!customerEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail)) {
+      if (status) status.textContent = 'Enter the registered driver email so this plan appears on their dashboard.';
+      return;
+    }
   if (!Number.isFinite(amount) || amount < 1 || amount > 10000) {
     if (status) status.textContent = 'Enter a valid regular price from PHP 1 to PHP 10,000.';
     return;
@@ -4444,7 +4460,8 @@ async function recordPayment() {
     discount_type: discountType,
     discount_id_number: discountId || null,
     payment_method: document.getElementById('paymentMethod')?.value || 'cash',
-    notes: document.getElementById('paymentNote')?.value || ''
+    notes: document.getElementById('paymentNote')?.value || '',
+    customer_email: customerEmail || null
   };
 
   if (btn) {
@@ -4465,7 +4482,7 @@ async function recordPayment() {
       throw new Error(detail);
     }
     const d = await r.json();
-    if (status) status.textContent = `Recorded ${formatPhp(d.final_amount_php, { forceCents: true })} payment.`;
+    if (status) status.textContent = `Recorded ${formatPhp(d.final_amount_php, { forceCents: true })} payment. Valid until ${d.expires_at_ph}.`;
     const note = document.getElementById('paymentNote');
     if (note) note.value = '';
     const discountId = document.getElementById('paymentDiscountId');
@@ -4485,9 +4502,9 @@ async function recordPayment() {
   }
 }
 
-const ZONE_COLORS = ['#27d497', '#5aa9ff', '#f4a261', '#f8d66d', '#a78bfa', '#ff5c7a', '#22d3ee', '#7dd3fc'];
-function renderZones(zones, total, occupied) {
+function renderZones(zones, total, occupied, slotStatuses = []) {
   const list = document.getElementById('zoneList');
+  const statusById = Object.fromEntries(slotStatuses.map(slot => [slot.slot_id, slot.status]));
   const entries = Object.entries(zones);
   const freeCountEl = document.getElementById('zoneFreeCount');
   const occCountEl = document.getElementById('zoneOccCount');
@@ -4499,7 +4516,7 @@ function renderZones(zones, total, occupied) {
     if (total > 0) {
       list.innerHTML = `
         <div class="zone-row">
-          <div class="zone-dot" style="background:var(--green)"></div>
+          <div class="zone-dot ${occupied > 0 ? 'occ' : 'free'}"></div>
           <span class="zone-name">Main Lot</span>
           <span class="zone-badge ${occupied > 0 ? 'occ' : 'free'}">${total - occupied} free / ${occupied} occ</span>
         </div>`;
@@ -4516,18 +4533,18 @@ function renderZones(zones, total, occupied) {
   }
 
   const occZones = entries.filter(([, value]) => value === true).length;
-  const freeZones = entries.filter(([, value]) => value === false).length;
+  const freeZones = entries.filter(([name, value]) => value === false && statusById[name] !== 'reserved').length;
   const knownZones = occZones + freeZones;
   if (freeCountEl) freeCountEl.textContent = knownZones ? freeZones : '--';
   if (occCountEl) occCountEl.textContent = knownZones ? occZones : '--';
 
-  list.innerHTML = entries.map(([name, isOccupied], i) => {
+  list.innerHTML = entries.map(([name, isOccupied]) => {
     const known = typeof isOccupied === 'boolean';
-    const cls = known ? (isOccupied ? 'occ' : 'free') : 'unknown';
-    const label = known ? (isOccupied ? 'Occupied' : 'Free') : 'Unknown';
+    const cls = known ? (isOccupied ? 'occ' : statusById[name] === 'reserved' ? 'reserved' : 'free') : 'unknown';
+    const label = known ? (isOccupied ? 'Occupied' : cls === 'reserved' ? 'Reserved' : 'Free') : 'Unknown';
     return `
       <div class="zone-row">
-        <div class="zone-dot" style="background:${ZONE_COLORS[i % ZONE_COLORS.length]}"></div>
+        <div class="zone-dot ${cls}"></div>
         <span class="zone-name">${escapeHtml(name)}</span>
         <span class="zone-badge ${cls}">${label}</span>
       </div>`;
@@ -4535,8 +4552,8 @@ function renderZones(zones, total, occupied) {
 
   if (lotGrid) {
     lotGrid.innerHTML = entries.map(([name, isOccupied]) => {
-      const cls = isOccupied === true ? 'occ' : isOccupied === false ? 'free' : '';
-      return `<div class="lot-cell ${cls}" title="${escapeHtml(name)}: ${isOccupied === true ? 'Occupied' : isOccupied === false ? 'Free' : 'Unknown'}"></div>`;
+      const cls = isOccupied === true ? 'occ' : isOccupied === false ? (statusById[name] === 'reserved' ? 'reserved' : 'free') : '';
+      return `<div class="lot-cell ${cls}" title="${escapeHtml(name)}: ${isOccupied === true ? 'Occupied' : isOccupied === false ? (cls === 'reserved' ? 'Reserved' : 'Free') : 'Unknown'}"></div>`;
     }).join('');
   }
 }

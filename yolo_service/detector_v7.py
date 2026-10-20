@@ -305,8 +305,8 @@ def _debug_filename(filename):
 def _save_debug_zones(frame_or_bg, slots):
     dbg = frame_or_bg.copy() if frame_or_bg is not None else \
           np.zeros((FEED_H, FEED_W, 3), dtype=np.uint8)
-    for i, (name, (x1,y1,x2,y2)) in enumerate(slots.items()):
-        col = _COLORS[i % len(_COLORS)]
+    for name, (x1,y1,x2,y2) in slots.items():
+        col = _FREE_COLOR
         _draw_rounded_rect(dbg, x1, y1, x2, y2, col, 2)
         cv2.putText(dbg, name, (x1+3, y1+14),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.38, col, 1)
@@ -529,14 +529,8 @@ def yolo_boxes(model, frame):
 #   DRAW
 # ══════════════════════════════════════════════════════════════════════════════
 
-_COLORS = [
-    (0,210,80),(0,185,235),(200,100,255),(255,175,0),(0,130,255),
-    (255,200,0),(0,230,205),(255,100,155),(80,255,80),(255,80,80),
-    (80,200,255),(255,255,80),(180,100,255),(100,255,180),(255,140,60),
-    (60,140,255),(200,255,60),(255,60,200),(60,255,200),(200,60,255),
-]
+_FREE_COLOR = (0,210,80)
 _OCC_COLOR = (30,30,220)
-_NAME_CI   = {}
 _DEMAND_COLORS = {
     DemandLevel.LOW:    (0,200,100),
     DemandLevel.NORMAL: (0,229,160),
@@ -567,10 +561,7 @@ def _draw_rounded_rect(img, x1, y1, x2, y2, color, thickness=1, fill=False):
 
 
 def _slot_color(name, occ):
-    if occ: return _OCC_COLOR
-    if name not in _NAME_CI:
-        _NAME_CI[name] = len(_NAME_CI) % len(_COLORS)
-    return _COLORS[_NAME_CI[name]]
+    return _OCC_COLOR if occ else _FREE_COLOR
 
 
 def draw_zones(frame, zones, zone_status):

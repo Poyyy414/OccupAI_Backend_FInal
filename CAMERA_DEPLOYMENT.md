@@ -78,10 +78,16 @@ backend publishes a combined occupied/free percentage only while both workers
 are fresh and reporting. Otherwise the combined occupancy is Unknown while
 the official configured capacity remains 30.
 
-## Important stream limitation
+## Online live video
 
-Sending `/yolo/update` makes online occupancy and prediction data work. The
-Render live video feed is separate: Render cannot proxy `localhost:8001` on the
-laptop. To display video online, the camera stream must be hosted at a public
-HTTPS URL and configured as `CAMERA_STREAM_URL_MAIN`, or the system needs a
-separate authenticated frame-upload/stream relay.
+The detector includes its latest annotated JPEG in each authenticated
+`/yolo/update`. The hosted backend keeps the newest frame for each camera and
+relays it through the authenticated `/api/stream?camera_id=cars` and
+`/api/stream?camera_id=motorcycles` endpoints. The driver page therefore shows
+both feeds online without exposing ports 8001/8002 or the laptop's local IP.
+
+Keep both workers and the laptop internet connection running. The relay is a
+near-live monitoring view whose update rate follows detector pushes; the local
+direct MJPEG stream remains smoother. If `CAMERA_STREAM_URLS` is configured,
+the backend prefers those direct URLs. Otherwise it automatically uses the
+pushed-frame relay.

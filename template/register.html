@@ -298,6 +298,18 @@
     .field input.invalid { border-color: rgba(255, 92, 122, .78); }
     .field input::placeholder { color: rgba(180, 191, 203, .55); }
 
+    .code-row { display: grid; grid-template-columns: minmax(0, 1fr) 132px; gap: 10px; }
+    .code-btn {
+      min-height: 46px;
+      border: 1px solid rgba(69, 223, 173, .48);
+      border-radius: var(--radius);
+      background: rgba(69, 223, 173, .1);
+      color: #b8ffe7;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .code-btn:disabled { cursor: wait; opacity: .62; }
+
     .strength-bar {
       height: 4px;
       margin-top: 8px;
@@ -460,6 +472,7 @@
 
     @media (max-width: 620px) {
       .form-row { grid-template-columns: 1fr; gap: 0; }
+      .code-row { grid-template-columns: minmax(0, 1fr) 120px; }
     }
 
     @media (max-width: 520px) {
@@ -526,6 +539,14 @@
             </div>
 
             <div class="field">
+              <label for="verification_code">Email verification code</label>
+              <div class="code-row">
+                <input type="text" id="verification_code" placeholder="6-digit code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" />
+                <button class="code-btn" id="btn-code" type="button">Send code</button>
+              </div>
+            </div>
+
+            <div class="field">
               <label for="password">Password</label>
               <input type="password" id="password" placeholder="At least 8 characters, with a number" autocomplete="new-password" />
               <div class="strength-bar"><div class="strength-fill" id="strength-fill"></div></div>
@@ -570,10 +591,17 @@
     const firstName = document.getElementById('first_name');
     const lastName = document.getElementById('last_name');
     const email = document.getElementById('email');
+    const verificationCode = document.getElementById('verification_code');
     const password = document.getElementById('password');
+    const codeBtn = document.getElementById('btn-code');
 
     form.addEventListener('submit', doRegister);
+    codeBtn.addEventListener('click', sendVerificationCode);
     [firstName, lastName, email].forEach(input => input.addEventListener('input', validate));
+    verificationCode.addEventListener('input', () => {
+      verificationCode.value = verificationCode.value.replace(/\D/g, '').slice(0, 6);
+      verificationCode.className = /^\d{6}$/.test(verificationCode.value) ? 'valid' : '';
+    });
     password.addEventListener('input', onPwInput);
 
     function validate() {
@@ -601,6 +629,41 @@
       password.className = pw.length >= 8 && /[A-Za-z]/.test(pw) && /[0-9]/.test(pw) ? 'valid' : pw.length > 0 ? 'invalid' : '';
     }
 
+    async function sendVerificationCode() {
+      const address = email.value.trim();
+      showErr('');
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) {
+        showErr('Please enter a valid email address first.');
+        return;
+      }
+      codeBtn.disabled = true;
+      codeBtn.textContent = 'Sending...';
+      try {
+        const res = await fetch('/auth/register/request-code', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-OccupAI-Client': 'web' },
+          body: JSON.stringify({ email: address }),
+        });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || 'Could not send verification code.');
+        const successBox = document.getElementById('success-box');
+        successBox.textContent = result.message;
+        successBox.style.display = 'block';
+        verificationCode.focus();
+        let remaining = Number(result.resend_after_seconds) || 60;
+        codeBtn.textContent = `Resend in ${remaining}s`;
+        const timer = setInterval(() => {
+          remaining -= 1;
+          codeBtn.textContent = remaining > 0 ? `Resend in ${remaining}s` : 'Resend code';
+          if (remaining <= 0) { clearInterval(timer); codeBtn.disabled = false; }
+        }, 1000);
+      } catch (e) {
+        showErr(e.message);
+        codeBtn.disabled = false;
+        codeBtn.textContent = 'Send code';
+      }
+    }
+
     async function doRegister(event) {
       event.preventDefault();
 
@@ -609,6 +672,7 @@
         last_name: lastName.value.trim(),
         email: email.value.trim(),
         password: password.value,
+        verification_code: verificationCode.value.trim(),
       };
       const btn = document.getElementById('btn-reg');
       const successBox = document.getElementById('success-box');
@@ -616,7 +680,7 @@
       showErr('');
       successBox.style.display = 'none';
 
-      if (!data.first_name || !data.last_name || !data.email || !data.password) {
+      if (!data.first_name || !data.last_name || !data.email || !data.password || !data.verification_code) {
         showErr('Please fill in all fields.');
         return;
       }
@@ -626,6 +690,10 @@
       }
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.email)) {
         showErr('Please enter a valid email address.');
+        return;
+      }
+      if (!/^\d{6}$/.test(data.verification_code)) {
+        showErr('Enter the 6-digit code sent to your email.');
         return;
       }
       if (data.password.length < 8 || !/[A-Za-z]/.test(data.password) || !/[0-9]/.test(data.password)) {

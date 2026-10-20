@@ -7,6 +7,10 @@ class UserRegister(BaseModel):
     last_name:  str = Field(min_length=1, max_length=80)
     email:      str = Field(min_length=3, max_length=254)
     password:   str = Field(min_length=8, max_length=128)
+    verification_code: str = Field(pattern=r"^\d{6}$")
+
+class RegistrationCodeRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
 
 class UserLogin(BaseModel):
     email:    str = Field(min_length=3, max_length=254)

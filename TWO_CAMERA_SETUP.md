@@ -18,9 +18,11 @@ CAMERA_STATE_TTL_SECONDS=15
 CAMERA_STREAM_URLS=cars=http://127.0.0.1:8001/stream,motorcycles=http://127.0.0.1:8002/stream
 ```
 
-The USB feeds remain local when the workers and dashboard are on the same
-computer. A hosted backend can receive occupancy updates without being able to
-proxy a local-only video stream.
+The configured URLs provide the smoother direct feed when the workers and
+dashboard are on the same computer. On a hosted backend, leave these local-only
+stream URLs unset. It will automatically relay the annotated JPEG snapshots
+already included in authenticated detector updates, so the driver and admin
+pages can show both cameras online without opening laptop ports.
 
 ## Start both camera workers
 

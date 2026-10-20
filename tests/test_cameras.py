@@ -1,6 +1,59 @@
+import asyncio
+import base64
 import time
 
+import pytest
+from fastapi import HTTPException
+
 import backend.main as m
+
+
+def test_camera_snapshot_decoder_accepts_jpeg_and_rejects_other_data():
+    jpeg = b"\xff\xd8\xfftest-frame\xff\xd9"
+    assert m._decode_camera_snapshot(base64.b64encode(jpeg).decode()) == jpeg
+    assert m._decode_camera_snapshot("") is None
+
+    with pytest.raises(HTTPException) as invalid_base64:
+        m._decode_camera_snapshot("not-base64!")
+    assert invalid_base64.value.status_code == 422
+
+    with pytest.raises(HTTPException) as not_jpeg:
+        m._decode_camera_snapshot(base64.b64encode(b"not an image").decode())
+    assert not_jpeg.value.status_code == 422
+
+
+def test_driver_template_contains_both_secure_live_feeds():
+    html = (m.TEMPLATE_DIR / "driver.html").read_text(encoding="utf-8")
+    assert "carsCameraImage" in html
+    assert "motorcyclesCameraImage" in html
+    assert "'/api/stream?camera_id='" in html
+    assert "Secure online feed" in html
+
+
+def test_online_relay_emits_the_latest_camera_frame():
+    jpeg = b"\xff\xd8\xffrelay-frame\xff\xd9"
+    previous = dict(m.camera_frames)
+    try:
+        m.camera_frames["cars"] = {
+            "jpeg": jpeg,
+            "received_at": time.monotonic(),
+            "version": 1,
+        }
+        response = m._relay_camera_stream("cars")
+
+        async def first_chunk():
+            iterator = response.body_iterator
+            chunk = await iterator.__anext__()
+            await iterator.aclose()
+            return chunk
+
+        chunk = asyncio.run(first_chunk())
+        assert b"Content-Type: image/jpeg" in chunk
+        assert jpeg in chunk
+        assert response.media_type == "multipart/x-mixed-replace; boundary=occupaiframe"
+    finally:
+        m.camera_frames.clear()
+        m.camera_frames.update(previous)
 
 
 def _camera(*, role, occupied, free, total, car_count=0, motorcycle_count=0,

@@ -330,6 +330,21 @@
       background: rgba(255, 92, 122, .12);
     }
 
+    .space-cell.reserved { border-color: #d8a700; color: #765a00; background: #fff0a6; }
+    .space-cell.unknown { border-color: var(--line); color: var(--muted); background: #dfe3e8; }
+    button.space-cell { width: 100%; cursor: pointer; }
+    button.space-cell:disabled { cursor: not-allowed; }
+    .space-cell.selected { outline: 3px solid #14202c; outline-offset: 2px; }
+    .slot-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 9px; font-size: 12px; color: var(--muted); }
+    .slot-legend span::before { content: ''; display: inline-block; width: 9px; height: 9px; margin-right: 5px; border-radius: 2px; background: var(--green); }
+    .slot-legend .reserved-key::before { background: #e9bd18; }
+    .slot-legend .occupied-key::before { background: var(--red); }
+    .reservation-controls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; align-items: end; margin-top: 18px; }
+    .reservation-controls label { display: block; margin-bottom: 5px; color: var(--muted); font-size: 12px; font-weight: 800; }
+    .reservation-controls .gcash-select { margin: 0; }
+    .reservation-controls .gcash-btn { min-height: 40px; padding: 8px; }
+    .reservation-info { margin-top: 10px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+
     .space-cell.extra {
       border-style: dashed;
       opacity: .5;
@@ -417,6 +432,22 @@
       font-size: 12px;
       line-height: 1.4;
     }
+
+    .plan-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .plan-item {
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255,255,255,.48);
+    }
+    .plan-item span { display: block; color: var(--muted); font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .09em; }
+    .plan-item strong { display: block; margin-top: 7px; color: var(--ink); font-size: 14px; line-height: 1.35; }
+    .plan-status { color: var(--green-dark); font-weight: 800; }
+    .plan-status.expired { color: #c63350; }
 
     .vehicle-rate-grid {
       display: grid;
@@ -577,6 +608,81 @@
       line-height: 1.25;
     }
 
+    .live-camera-section {
+      border: 1px solid rgba(255,255,255,.52);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      backdrop-filter: blur(18px);
+    }
+
+    .camera-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      padding: 16px;
+    }
+
+    .camera-view {
+      min-width: 0;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #07100d;
+    }
+
+    .camera-view-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 11px 12px;
+      color: #f3faf7;
+      background: #0b1b15;
+    }
+
+    .camera-view-title { font-size: 13px; font-weight: 800; }
+    .camera-view-state { color: #a8b8b1; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
+    .camera-view-state.online { color: var(--green); }
+    .camera-view-state.offline { color: var(--red); }
+
+    .camera-frame {
+      position: relative;
+      display: grid;
+      place-items: center;
+      aspect-ratio: 4 / 3;
+      overflow: hidden;
+      background: #050a08;
+    }
+
+    .camera-frame img { width: 100%; height: 100%; object-fit: contain; display: none; }
+    .camera-frame img.visible { display: block; }
+
+    .camera-placeholder {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      color: #a8b8b1;
+      text-align: center;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .camera-placeholder.hidden { display: none; }
+
+    .camera-retry {
+      padding: 6px 9px;
+      border: 1px solid rgba(34,201,150,.5);
+      border-radius: 6px;
+      color: #dff9ef;
+      background: rgba(34,201,150,.14);
+      font-size: 11px;
+      font-weight: 800;
+    }
+
     .footer-strip {
       display: flex;
       align-items: center;
@@ -608,6 +714,8 @@
       .availability-main { grid-template-columns: 1fr; }
       .space-map { grid-template-columns: repeat(4, minmax(0, 1fr)); }
       .meters { grid-template-columns: 1fr; }
+      .reservation-controls { grid-template-columns: 1fr; }
+      .camera-grid { grid-template-columns: 1fr; }
     }
 
     @media (max-width: 520px) {
@@ -630,6 +738,7 @@
     <symbol id="i-map" viewBox="0 0 24 24"><path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3V6Z"/><path d="M9 3v15"/><path d="M15 6v15"/></symbol>
     <symbol id="i-route" viewBox="0 0 24 24"><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M8 19h3a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h7"/></symbol>
     <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 20 6v6c0 5-3.4 8.4-8 9-4.6-.6-8-4-8-9V6l8-3Z"/><path d="m9 12 2 2 4-5"/></symbol>
+    <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 7h3l2-2h6l2 2h3v12H4z"/><circle cx="12" cy="13" r="3.5"/></symbol>
   </svg>
 
   <main class="page">
@@ -679,7 +788,8 @@
 
             <div>
               <div class="label" style="margin-bottom:10px">Parking layout</div>
-              <div class="space-map" id="spaceMap" aria-label="Parking space preview"></div>
+              <div class="space-map" id="spaceMap" aria-label="Selectable parking slots"></div>
+              <div class="slot-legend"><span>Available</span><span class="reserved-key">Reserved</span><span class="occupied-key">Occupied</span></div>
             </div>
           </div>
 
@@ -688,6 +798,13 @@
             <div class="metric"><span>Occupied</span><strong id="occupiedSpaces">--</strong></div>
             <div class="metric"><span>Occupancy</span><strong id="occupancyPct">--</strong></div>
           </div>
+          <div class="reservation-info" id="selectedSlotInfo">Select a green slot to reserve it. The full parking rate is paid in advance; no reservation is active until GCash payment is confirmed.</div>
+          <div class="reservation-controls">
+            <div><label for="reservationDuration">Reservation duration</label><select class="gcash-select" id="reservationDuration" onchange="updateReservationQuote()"><option value="daily">1 day</option><option value="weekly">1 week</option><option value="monthly">1 month</option></select></div>
+            <div><label for="reservationMobile">GCash mobile number</label><input class="gcash-select" id="reservationMobile" type="tel" inputmode="numeric" autocomplete="tel-national" placeholder="09XXXXXXXXX" maxlength="11" /></div>
+            <button class="gcash-btn" type="button" id="reservationPayButton" onclick="payForReservation()" disabled>Select a slot</button>
+          </div>
+          <p class="reservation-info" id="reservationActionStatus" role="status"></p>
         </div>
       </article>
 
@@ -757,6 +874,38 @@
           </div>
         </article>
 
+        <article class="card">
+          <div class="card-head"><span>My reservation</span><span class="plan-status" id="reservationStatus">None</span></div>
+          <div class="card-body">
+            <div class="plan-grid">
+              <div class="plan-item"><span>Slot</span><strong id="reservationSlot">--</strong></div>
+              <div class="plan-item"><span>Payment</span><strong id="reservationPayment">--</strong></div>
+              <div class="plan-item"><span>Account email</span><strong id="reservationEmail">--</strong></div>
+              <div class="plan-item"><span>Reserved at</span><strong id="reservationDate">--</strong></div>
+              <div class="plan-item"><span>Duration</span><strong id="reservationDurationLabel">--</strong></div>
+              <div class="plan-item"><span>Starts</span><strong id="reservationStarts">--</strong></div>
+              <div class="plan-item"><span>Expires</span><strong id="reservationExpires">--</strong></div>
+            </div>
+            <p class="reservation-info">A red slot means a vehicle is physically detected; the camera cannot verify who parked it. If a paid slot is occupied by someone else, contact the administrator.</p>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <span><svg class="icon" aria-hidden="true"><use href="#i-clock"></use></svg> My paid plan</span>
+            <span class="plan-status" id="planStatus">No payment</span>
+          </div>
+          <div class="card-body">
+            <div class="plan-grid">
+              <div class="plan-item"><span>Duration paid</span><strong id="planDuration">--</strong></div>
+              <div class="plan-item"><span>Time remaining</span><strong id="planRemaining">--</strong></div>
+              <div class="plan-item"><span>Paid on</span><strong id="planStarted">--</strong></div>
+              <div class="plan-item"><span>Expires on</span><strong id="planExpires">--</strong></div>
+            </div>
+            <p class="detail-line" id="planDetail">Completed payments linked to your account will appear here.</p>
+          </div>
+        </article>
+
         <article class="card quick-card">
           <h2>Before you go</h2>
           <div class="quick-list">
@@ -776,6 +925,41 @@
         </article>
       </div>
     </section>
+
+    <section class="live-camera-section" aria-labelledby="liveCameraTitle">
+      <div class="card-head">
+        <span id="liveCameraTitle"><svg class="icon" aria-hidden="true"><use href="#i-camera"></use></svg> Live parking cameras</span>
+        <span>Secure online feed</span>
+      </div>
+      <div class="camera-grid">
+        <article class="camera-view">
+          <div class="camera-view-head">
+            <span class="camera-view-title">Car parking area</span>
+            <span class="camera-view-state" id="carsCameraState">Connecting</span>
+            <button class="camera-retry" type="button" onclick="retryCamera('cars')">Retry</button>
+          </div>
+          <div class="camera-frame">
+            <img id="carsCameraImage" alt="Live car parking camera" onload="cameraLoaded('cars')" onerror="cameraFailed('cars')" />
+            <div class="camera-placeholder" id="carsCameraPlaceholder">Waiting for the car camera...</div>
+          </div>
+        </article>
+        <article class="camera-view">
+          <div class="camera-view-head">
+            <span class="camera-view-title">Motorcycle parking area</span>
+            <span class="camera-view-state" id="motorcyclesCameraState">Connecting</span>
+            <button class="camera-retry" type="button" onclick="retryCamera('motorcycles')">Retry</button>
+          </div>
+          <div class="camera-frame">
+            <img id="motorcyclesCameraImage" alt="Live motorcycle parking camera" onload="cameraLoaded('motorcycles')" onerror="cameraFailed('motorcycles')" />
+            <div class="camera-placeholder" id="motorcyclesCameraPlaceholder">Waiting for the motorcycle camera...</div>
+          </div>
+        </article>
+      </div>
+      <div class="footer-strip">
+        <span>The feeds are visible only while signed in.</span>
+        <span class="mono">Updates automatically</span>
+      </div>
+    </section>
   </main>
 
   <script nonce="__OCCUPAI_CSP_NONCE__">
@@ -789,17 +973,95 @@
     const ADMIN_ROLES = ['admin'];
     let selectedVehicleType = 'car';
     let latestSummary = null;
+    let latestSlots = [];
+    let selectedSlotId = null;
+    let gcashEnabled = false;
+    const cameraFeeds = {
+      cars: { retryTimer: null, retries: 0 },
+      motorcycles: { retryTimer: null, retries: 0 },
+    };
     const user = getUser();
     if (!user) {
       window.location.href = '/login';
     } else {
       hydrateUser(user);
       renderSpaceMap(0, null, null);
+      startLiveCameras();
       fetchSummary();
+      fetchReservationSlots();
       fetchDiscountAvailability();
       setInterval(fetchSummary, 3000);
+      setInterval(fetchReservationSlots, 5000);
       setInterval(fetchDiscountAvailability, 30000);
     }
+
+    function cameraElement(cameraId, suffix) {
+      return document.getElementById(cameraId + 'Camera' + suffix);
+    }
+
+    function cameraStreamUrl(cameraId) {
+      return '/api/stream?camera_id=' + encodeURIComponent(cameraId) + '&v=' + Date.now();
+    }
+
+    function startLiveCameras() {
+      retryCamera('cars');
+      retryCamera('motorcycles');
+    }
+
+    function retryCamera(cameraId) {
+      const feed = cameraFeeds[cameraId];
+      const img = cameraElement(cameraId, 'Image');
+      const state = cameraElement(cameraId, 'State');
+      const placeholder = cameraElement(cameraId, 'Placeholder');
+      if (!feed || !img || !state || !placeholder) return;
+      if (feed.retryTimer) {
+        clearTimeout(feed.retryTimer);
+        feed.retryTimer = null;
+      }
+      state.textContent = 'Connecting';
+      state.className = 'camera-view-state';
+      placeholder.textContent = 'Connecting to the secure online feed...';
+      placeholder.classList.remove('hidden');
+      img.classList.remove('visible');
+      img.src = cameraStreamUrl(cameraId);
+    }
+
+    function cameraLoaded(cameraId) {
+      const feed = cameraFeeds[cameraId];
+      const img = cameraElement(cameraId, 'Image');
+      const state = cameraElement(cameraId, 'State');
+      const placeholder = cameraElement(cameraId, 'Placeholder');
+      if (!feed || !img || !state || !placeholder) return;
+      feed.retries = 0;
+      state.textContent = 'Live';
+      state.className = 'camera-view-state online';
+      img.classList.add('visible');
+      placeholder.classList.add('hidden');
+    }
+
+    function cameraFailed(cameraId) {
+      const feed = cameraFeeds[cameraId];
+      const img = cameraElement(cameraId, 'Image');
+      const state = cameraElement(cameraId, 'State');
+      const placeholder = cameraElement(cameraId, 'Placeholder');
+      if (!feed || !img || !state || !placeholder) return;
+      img.classList.remove('visible');
+      state.textContent = 'Offline';
+      state.className = 'camera-view-state offline';
+      placeholder.textContent = 'Camera is offline or has not sent a recent frame.';
+      placeholder.classList.remove('hidden');
+      feed.retries += 1;
+      if (!feed.retryTimer && document.visibilityState !== 'hidden') {
+        feed.retryTimer = setTimeout(() => {
+          feed.retryTimer = null;
+          retryCamera(cameraId);
+        }, Math.min(15000, 2000 + feed.retries * 1500));
+      }
+    }
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') startLiveCameras();
+    });
 
     function updateGcashAmount() {
       if (!latestSummary) return;
@@ -905,6 +1167,8 @@
       const activeRate = selectedVehicleType === 'motorcycle' ? moto : car;
       document.getElementById('priceNote').textContent = activeRate.price_note || 'Current parking rate.';
       updateGcashAmount();
+      updateReservationQuote();
+      updatePaymentPlan(data.payment_plan);
       document.getElementById('generatedAt').textContent = data.generated_at_ph ? 'Updated ' + data.generated_at_ph.slice(11, 16) : '--';
       document.getElementById('lastUpdate').textContent = data.last_update ? 'Live ' + data.last_update.slice(11, 16) : 'No live update';
 
@@ -912,12 +1176,21 @@
       const full = !!data.lot_full || (online && available === 0);
       setLiveState(online, full, full ? 'Full' : (online ? 'Live' : 'Waiting'));
 
+      for (const cameraId of Object.keys(cameraFeeds)) {
+        const info = (data.cameras || {})[cameraId] || {};
+        const state = cameraElement(cameraId, 'State');
+        if (!info.online && state && !cameraElement(cameraId, 'Image')?.classList.contains('visible')) {
+          state.textContent = 'Offline';
+          state.className = 'camera-view-state offline';
+        }
+      }
+
       const bar = document.getElementById('occupancyBar');
       const width = pct === null ? 0 : Math.max(0, Math.min(100, pct));
       bar.style.width = width + '%';
       bar.style.background = full ? 'linear-gradient(90deg, #ff5c7a, #ff8ba0)' : (width >= 70 ? 'linear-gradient(90deg, #f4a261, #ffd19d)' : 'linear-gradient(90deg, #20c997, #73e8c2)');
 
-      renderSpaceMap(total, available, occupied);
+      renderSpaceMap();
 
       if (!online) {
         document.getElementById('driverHeroTitle').textContent = 'Waiting for live parking data.';
@@ -926,11 +1199,11 @@
         document.getElementById('routeAdvice').textContent = 'Keep this page open. It refreshes automatically when the camera updates.';
         document.getElementById('quickAvailability').textContent = 'Availability will appear once the camera connects.';
       } else if (full) {
-        document.getElementById('driverHeroTitle').textContent = 'Parking is full right now.';
+        document.getElementById('driverHeroTitle').textContent = 'No slots are available right now.';
         document.getElementById('availableSub').textContent = 'No spaces available';
         document.getElementById('availabilityDetail').textContent = '0 available out of ' + total + ' spaces.';
         document.getElementById('routeAdvice').textContent = 'Consider waiting before entering the parking area.';
-        document.getElementById('quickAvailability').textContent = 'The lot is currently full.';
+        document.getElementById('quickAvailability').textContent = 'All slots are occupied or reserved.';
       } else {
         document.getElementById('driverHeroTitle').textContent = 'There are spaces available.';
         document.getElementById('availableSub').textContent = 'Spaces available';
@@ -940,20 +1213,147 @@
       }
     }
 
-    function renderSpaceMap(total, available, occupied) {
+    function formatPlanDate(value) {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return '--';
+      return date.toLocaleString('en-PH', {
+        timeZone: 'Asia/Manila', month: 'short', day: 'numeric', year: 'numeric',
+        hour: 'numeric', minute: '2-digit'
+      });
+    }
+
+    function formatRemaining(seconds) {
+      let remaining = Math.max(0, Number(seconds) || 0);
+      const days = Math.floor(remaining / 86400);
+      remaining %= 86400;
+      const hours = Math.floor(remaining / 3600);
+      const minutes = Math.floor((remaining % 3600) / 60);
+      if (days) return `${days}d ${hours}h ${minutes}m`;
+      if (hours) return `${hours}h ${minutes}m`;
+      return `${minutes}m`;
+    }
+
+    function updatePaymentPlan(plan) {
+      const status = document.getElementById('planStatus');
+      if (!plan) {
+        status.textContent = 'No payment';
+        status.className = 'plan-status';
+        document.getElementById('planDuration').textContent = '--';
+        document.getElementById('planRemaining').textContent = '--';
+        document.getElementById('planStarted').textContent = '--';
+        document.getElementById('planExpires').textContent = '--';
+        document.getElementById('planDetail').textContent = 'Completed payments linked to your account will appear here.';
+        return;
+      }
+      const active = plan.status === 'active';
+      status.textContent = active ? 'Active' : 'Expired';
+      status.className = 'plan-status' + (active ? '' : ' expired');
+      document.getElementById('planDuration').textContent = plan.duration_label || plan.duration_type || '--';
+      document.getElementById('planRemaining').textContent = active ? formatRemaining(plan.remaining_seconds) : 'Expired';
+      document.getElementById('planStarted').textContent = formatPlanDate(plan.starts_at);
+      document.getElementById('planExpires').textContent = formatPlanDate(plan.expires_at);
+      const vehicle = plan.vehicle_type === 'motorcycle' ? 'Motorcycle' : 'Car';
+      document.getElementById('planDetail').textContent = `${vehicle} plan paid via ${String(plan.payment_method || 'payment').toUpperCase()}.`;
+    }
+
+    function renderSpaceMap() {
       const map = document.getElementById('spaceMap');
       if (!map) return;
-      const count = total > 0 ? Math.min(total, 24) : 12;
-      const busyCount = Number.isFinite(Number(occupied)) ? Math.min(Number(occupied), count) : 0;
-      let html = '';
-      for (let i = 0; i < count; i++) {
-        const busy = i < busyCount;
-        html += '<div class="space-cell ' + (busy ? 'busy' : '') + '">S' + (i + 1) + '</div>';
+      if (!latestSlots.length) {
+        map.innerHTML = '<div class="space-cell unknown">Waiting for slots</div>';
+        return;
       }
-      if (total > count) {
-        html += '<div class="space-cell extra">+' + (total - count) + '</div>';
+      map.innerHTML = latestSlots.map(slot => {
+        const label = slot.slot_id.split(':')[1];
+        const cls = slot.status === 'occupied' ? 'busy' : slot.status;
+        const selected = slot.slot_id === selectedSlotId ? ' selected' : '';
+        const disabled = slot.status !== 'available' ? 'disabled' : '';
+        const title = `${slot.slot_id}: ${slot.status}${slot.mine ? ' (yours)' : ''}`;
+        return `<button type="button" class="space-cell ${cls}${selected}" title="${title}" onclick="selectReservationSlot('${slot.slot_id}')" ${disabled}>${label}</button>`;
+      }).join('');
+    }
+
+    async function fetchReservationSlots() {
+      try {
+        const response = await fetch('/api/reservations/slots', { cache: 'no-store' });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || 'Could not load slots');
+        latestSlots = Array.isArray(data.slots) ? data.slots : [];
+        if (selectedSlotId && !latestSlots.some(slot => slot.slot_id === selectedSlotId && slot.status === 'available')) selectedSlotId = null;
+        renderSpaceMap();
+        updateReservationQuote();
+        showMyReservation(data.my_reservation);
+      } catch (error) {
+        latestSlots = [];
+        selectedSlotId = null;
+        renderSpaceMap();
+        document.getElementById('reservationActionStatus').textContent = error.message;
+        updateReservationQuote();
       }
-      map.innerHTML = html;
+    }
+
+    function selectReservationSlot(slotId) {
+      const slot = latestSlots.find(item => item.slot_id === slotId);
+      if (!slot || slot.status !== 'available') return;
+      selectedSlotId = slotId;
+      selectVehicleType(slot.vehicle_type);
+      renderSpaceMap();
+      updateReservationQuote();
+    }
+
+    function updateReservationQuote() {
+      const button = document.getElementById('reservationPayButton');
+      const info = document.getElementById('selectedSlotInfo');
+      const slot = latestSlots.find(item => item.slot_id === selectedSlotId && item.status === 'available');
+      const duration = document.getElementById('reservationDuration').value;
+      const price = Number(latestSummary?.duration_pricing?.[duration + '_rate_php_' + (slot?.vehicle_type || 'car')]);
+      button.disabled = !slot || !gcashEnabled || !Number.isFinite(price) || price < 1;
+      button.textContent = slot ? `Reserve & pay PHP ${formatPrice(price)}` : 'Select a slot';
+      info.textContent = slot
+        ? `${slot.slot_id} · ${duration} · PHP ${formatPrice(price)} prepaid via GCash. The slot is held for 15 minutes while you complete payment.`
+        : 'Select a green slot to reserve it. The full parking rate is paid in advance; no reservation is active until GCash payment is confirmed.';
+      if (!gcashEnabled && slot) info.textContent += ' Online payment is currently unavailable.';
+    }
+
+    function showMyReservation(reservation) {
+      const active = reservation && ['pending_payment', 'reserved', 'occupied'].includes(reservation.status);
+      document.getElementById('reservationStatus').textContent = reservation ? reservation.status.replaceAll('_', ' ') : 'None';
+      document.getElementById('reservationStatus').className = 'plan-status' + (active ? '' : ' expired');
+      document.getElementById('reservationSlot').textContent = reservation?.slot_id || '--';
+      document.getElementById('reservationPayment').textContent = reservation?.payment_status === 'paid' ? `Paid PHP ${formatPrice(reservation.amount_php)}` : reservation ? 'Awaiting payment' : '--';
+      document.getElementById('reservationEmail').textContent = reservation?.account_email || '--';
+      document.getElementById('reservationDate').textContent = reservation ? formatPlanDate(reservation.created_at) : '--';
+      document.getElementById('reservationDurationLabel').textContent = reservation?.duration_type || '--';
+      document.getElementById('reservationStarts').textContent = reservation?.starts_at ? formatPlanDate(reservation.starts_at) : '--';
+      document.getElementById('reservationExpires').textContent = reservation?.expires_at ? formatPlanDate(reservation.expires_at) : '--';
+    }
+
+    async function payForReservation() {
+      const slot = latestSlots.find(item => item.slot_id === selectedSlotId && item.status === 'available');
+      if (!slot) return;
+      const mobile = document.getElementById('reservationMobile').value.replace(/\D/g, '');
+      const status = document.getElementById('reservationActionStatus');
+      if (!/^09\d{9}$/.test(mobile)) {
+        status.textContent = 'Enter a valid GCash number in 09XXXXXXXXX format.';
+        return;
+      }
+      const button = document.getElementById('reservationPayButton');
+      button.disabled = true;
+      status.textContent = 'Creating your secure GCash checkout...';
+      try {
+        const response = await fetch('/api/gcash/create-checkout', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ slot_id: slot.slot_id, vehicle_type: slot.vehicle_type,
+            duration_type: document.getElementById('reservationDuration').value,
+            discount_type: 'none', mobile_number: mobile }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || 'Could not create checkout');
+        window.location.href = data.checkout_url;
+      } catch (error) {
+        status.textContent = error.message;
+        fetchReservationSlots();
+      }
     }
 
     function selectVehicleType(type) {
@@ -1002,6 +1402,8 @@
         if (d.enabled) {
           document.getElementById('gcashSection').style.display = '';
         }
+        gcashEnabled = !!d.enabled;
+        updateReservationQuote();
       } catch (e) {}
     })();
 
