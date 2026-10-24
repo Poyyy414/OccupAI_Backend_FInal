@@ -4448,8 +4448,8 @@ async function fetchDiscountVerifications() {
         </div>
         <img src="/api/admin/discount-verifications/${Number(item.verification_id)}/image" alt="Uploaded ${escapeHtml(cleanText(item.discount_type))} ID for review" loading="lazy">
         <div class="discount-review-actions">
-          <button class="setting-save-btn" type="button" onclick="reviewDiscountVerification(${Number(item.verification_id)}, 'approve')">Approve discount</button>
-          <button class="ghost-btn" type="button" onclick="reviewDiscountVerification(${Number(item.verification_id)}, 'reject')">Reject</button>
+          <button class="setting-save-btn" type="button" data-discount-review-action="approve" data-verification-id="${Number(item.verification_id)}">Approve discount</button>
+          <button class="ghost-btn" type="button" data-discount-review-action="reject" data-verification-id="${Number(item.verification_id)}">Reject</button>
         </div>
       </article>`).join('')
       : '<div class="report-empty">No pending PWD or Senior ID submissions.</div>';
@@ -4472,6 +4472,9 @@ async function reviewDiscountVerification(verificationId, action) {
   } else if (!window.confirm('Approve this ID and allow the driver to pay the discounted price?')) {
     return;
   }
+  const card = document.getElementById(`discount-review-${verificationId}`);
+  const buttons = card ? [...card.querySelectorAll('[data-discount-review-action]')] : [];
+  buttons.forEach(button => { button.disabled = true; });
   try {
     const response = await fetch(`/api/admin/discount-verifications/${verificationId}/review`, {
       method: 'POST',
@@ -4487,8 +4490,19 @@ async function reviewDiscountVerification(verificationId, action) {
     }
   } catch (error) {
     window.alert(error.message || 'Could not review this ID.');
+  } finally {
+    buttons.forEach(button => { button.disabled = false; });
   }
 }
+
+document.getElementById('discountVerificationReviewList')?.addEventListener('click', event => {
+  const button = event.target.closest('[data-discount-review-action]');
+  if (!button || button.disabled) return;
+  const verificationId = Number(button.dataset.verificationId);
+  const action = button.dataset.discountReviewAction;
+  if (!Number.isInteger(verificationId) || verificationId <= 0 || !['approve', 'reject'].includes(action)) return;
+  reviewDiscountVerification(verificationId, action);
+});
 
 function suggestedPaymentAmount(vehicleType, durationType) {
   const key = `${durationType}_rate_php_${vehicleType}`;

@@ -14,6 +14,17 @@ def _data_url(mime, payload):
     return f"data:{mime};base64," + base64.b64encode(payload).decode("ascii")
 
 
+def test_admin_review_buttons_use_csp_safe_delegated_events():
+    dashboard = (Path(__file__).parents[1] / "template" / "dashboard.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'data-discount-review-action="approve"' in dashboard
+    assert 'data-discount-review-action="reject"' in dashboard
+    assert "[data-discount-review-action]" in dashboard
+    assert 'onclick="reviewDiscountVerification(' not in dashboard
+
+
 @pytest.mark.parametrize(
     "mime,payload",
     [
