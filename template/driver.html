@@ -990,6 +990,8 @@
     let gcashEnabled = false;
     let activeDiscountVerification = null;
     let discountVerificationTimer = null;
+    let summaryRequestInFlight = false;
+    let reservationRequestInFlight = false;
     const cameraFeeds = {
       cars: { retryTimer: null, retries: 0 },
       motorcycles: { retryTimer: null, retries: 0 },
@@ -1250,6 +1252,8 @@
     }
 
     async function fetchSummary() {
+      if (summaryRequestInFlight || document.visibilityState === 'hidden') return;
+      summaryRequestInFlight = true;
       try {
         const res = await fetch('/api/driver/summary', { cache: 'no-store' });
         const data = await res.json();
@@ -1259,6 +1263,8 @@
       } catch (e) {
         showError(e.message);
         setLiveState(false, false, 'Offline');
+      } finally {
+        summaryRequestInFlight = false;
       }
     }
 
@@ -1391,6 +1397,8 @@
     }
 
     async function fetchReservationSlots() {
+      if (reservationRequestInFlight || document.visibilityState === 'hidden') return;
+      reservationRequestInFlight = true;
       try {
         const response = await fetch('/api/reservations/slots', { cache: 'no-store' });
         const data = await response.json();
@@ -1406,6 +1414,8 @@
         renderSpaceMap();
         document.getElementById('reservationActionStatus').textContent = error.message;
         updateReservationQuote();
+      } finally {
+        reservationRequestInFlight = false;
       }
     }
 

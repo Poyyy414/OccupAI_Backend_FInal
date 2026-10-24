@@ -3750,7 +3750,10 @@ function updateDualCameraFeeds(cameras, aggregate) {
 }
 
 let _statsSeq = 0;
+let _statsInFlight = false;
 async function fetchStats() {
+  if (_statsInFlight || document.visibilityState === 'hidden') return;
+  _statsInFlight = true;
   // Guard against a slow response landing after a newer one already rendered
   // (interval fires every 3s; a request that takes longer than that would
   // otherwise overwrite fresh data with stale data).
@@ -3817,6 +3820,8 @@ async function fetchStats() {
     if (seq !== _statsSeq) return;
     setConnected(false);
     setText('overviewPressure', 'Unknown');
+  } finally {
+    _statsInFlight = false;
   }
 }
 

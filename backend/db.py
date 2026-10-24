@@ -1,5 +1,6 @@
 import os
 import threading
+import time
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
@@ -19,9 +20,18 @@ def _safe_int(value, default):
         return default
 
 
+def _safe_float(value, default):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        print(f"[DB] Invalid numeric env value {value!r}, falling back to {default}")
+        return default
+
+
 DB_CONNECT_TIMEOUT = _safe_int(os.getenv("DB_CONNECT_TIMEOUT", "5"), 5)
 DB_POOL_MIN = _safe_int(os.getenv("DB_POOL_MIN", "1"), 1)
 DB_POOL_MAX = _safe_int(os.getenv("DB_POOL_MAX", "10"), 10)
+DB_POOL_WAIT_SECONDS = max(0.1, _safe_float(os.getenv("DB_POOL_WAIT_SECONDS", "3"), 3.0))
 
 
 def _current_dsn():
@@ -113,13 +123,21 @@ def _get_pool():
 
 
 def _borrow():
-    pool = _get_pool()
-    try:
-        return pool.getconn()
-    except psycopg2.OperationalError as exc:
-        raise HTTPException(status_code=503, detail=_database_error_detail(exc)) from exc
-    except psycopg2.pool.PoolError as exc:
-        raise HTTPException(status_code=503, detail="Database connection pool exhausted. Try again shortly.") from exc
+    """Borrow a connection, absorbing short request bursts before failing."""
+    deadline = time.monotonic() + DB_POOL_WAIT_SECONDS
+    while True:
+        pool = _get_pool()
+        try:
+            return pool.getconn()
+        except psycopg2.OperationalError as exc:
+            raise HTTPException(status_code=503, detail=_database_error_detail(exc)) from exc
+        except psycopg2.pool.PoolError as exc:
+            if time.monotonic() >= deadline:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Database is busy. Please try again shortly.",
+                ) from exc
+            time.sleep(0.05)
 
 
 def _release(conn):
@@ -136,31 +154,43 @@ def _release(conn):
 def query(sql, params=None, fetch="all"):
     """Run a SELECT and return all rows."""
     conn = _borrow()
+    cur = None
     try:
         cur = conn.cursor()
         cur.execute(sql, params or ())
         rows = cur.fetchall()
-        cur.close()
+        # psycopg begins a transaction even for SELECT. End it before returning
+        # the connection so Supavisor never sees pooled readers sitting "idle
+        # in transaction" while the next request waits for a slot.
+        conn.rollback()
         return rows
     except psycopg2.Error as exc:
         conn.rollback()
         print(f"[DB] query failed: {exc}")
         raise HTTPException(status_code=500, detail="Database query failed.") from exc
     finally:
-        _release(conn)
+        try:
+            if cur is not None:
+                cur.close()
+        finally:
+            _release(conn)
 
 
 def execute(sql, params=None):
     """Run an INSERT/UPDATE/DELETE and commit."""
     conn = _borrow()
+    cur = None
     try:
         cur = conn.cursor()
         cur.execute(sql, params or ())
         conn.commit()
-        cur.close()
     except psycopg2.Error as exc:
         conn.rollback()
         print(f"[DB] execute failed: {exc}")
         raise HTTPException(status_code=500, detail="Database operation failed.") from exc
     finally:
-        _release(conn)
+        try:
+            if cur is not None:
+                cur.close()
+        finally:
+            _release(conn)
