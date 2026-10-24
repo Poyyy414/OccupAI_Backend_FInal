@@ -1547,6 +1547,7 @@ def _ensure_payment_table():
         # themselves — nobody on staff sees those IDs, which is the real gap in
         # verifying them (see _check_discount_id_abuse below).
         execute("ALTER TABLE parking_payments ADD COLUMN IF NOT EXISTS verified_by_user_id INTEGER")
+        execute("ALTER TABLE parking_payments ADD COLUMN IF NOT EXISTS discount_verification_id BIGINT")
     except Exception as e:
         print(f"[DB] payment table setup warning: {e}")
 
@@ -1572,8 +1573,47 @@ def _ensure_gcash_checkout_table():
         execute("ALTER TABLE gcash_checkouts ADD COLUMN IF NOT EXISTS duration_type TEXT NOT NULL DEFAULT 'daily'")
         execute("ALTER TABLE gcash_checkouts ADD COLUMN IF NOT EXISTS customer_mobile TEXT")
         execute("ALTER TABLE gcash_checkouts ADD COLUMN IF NOT EXISTS reservation_id BIGINT")
+        execute("ALTER TABLE gcash_checkouts ADD COLUMN IF NOT EXISTS discount_verification_id BIGINT")
     except Exception as e:
         print(f"[DB] gcash checkout table setup warning: {e}")
+
+
+def _ensure_discount_verification_table():
+    """Store protected PWD/Senior card evidence and its owner review state."""
+    try:
+        execute("""
+            CREATE TABLE IF NOT EXISTS discount_verifications (
+                verification_id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                discount_type TEXT NOT NULL CHECK (discount_type IN ('pwd', 'senior')),
+                id_number TEXT NOT NULL,
+                image_bytes BYTEA NOT NULL,
+                image_mime TEXT NOT NULL CHECK (image_mime IN ('image/jpeg', 'image/png', 'image/webp')),
+                status TEXT NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending', 'approved', 'rejected', 'consumed', 'cancelled')),
+                submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                reviewed_at TIMESTAMPTZ,
+                reviewed_by_user_id BIGINT REFERENCES users(user_id),
+                review_note TEXT,
+                checkout_ref TEXT,
+                reserved_at TIMESTAMPTZ,
+                consumed_at TIMESTAMPTZ
+            )
+        """)
+        execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_discount_verifications_one_pending "
+            "ON discount_verifications (user_id, discount_type) WHERE status='pending'"
+        )
+        execute(
+            "CREATE INDEX IF NOT EXISTS idx_discount_verifications_admin_pending "
+            "ON discount_verifications (submitted_at) WHERE status='pending'"
+        )
+        execute(
+            "CREATE INDEX IF NOT EXISTS idx_discount_verifications_user_latest "
+            "ON discount_verifications (user_id, submitted_at DESC)"
+        )
+    except Exception as e:
+        print(f"[DB] discount verification table setup warning: {e}")
 
 
 def _ensure_reservation_table():
@@ -1654,6 +1694,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[auth] Default admin setup warning: {e}")
     _ensure_parking_log_indexes()
+    _ensure_discount_verification_table()
     _ensure_payment_table()
     _ensure_gcash_checkout_table()
     try:
@@ -3248,6 +3289,7 @@ def _record_parking_payment(payload, verified_by_user_id=None, external_referenc
         raise HTTPException(400, "payment_method must be one of: " + ", ".join(sorted(_PAYMENT_METHODS)))
     notes = (payload.notes or "").strip()[:500] or None
     paid_at = _coerce_datetime(payload.paid_at) if payload.paid_at else datetime.now(PH_TZ)
+    discount_verification_id = getattr(payload, "discount_verification_id", None)
 
     conn = get_db()
     cur = conn.cursor()
@@ -3257,19 +3299,20 @@ def _record_parking_payment(payload, verified_by_user_id=None, external_referenc
             INSERT INTO parking_payments (
                 vehicle_type, duration_type, regular_price_php, discount_type, discount_rate,
                 discount_amount_php, final_amount_php, payment_method, notes, paid_at, user_id,
-                discount_id_number, verified_by_user_id, external_reference
+                discount_id_number, verified_by_user_id, external_reference, discount_verification_id
             )
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (external_reference) WHERE external_reference IS NOT NULL DO NOTHING
             RETURNING payment_id, vehicle_type, duration_type, regular_price_php, discount_type,
                       discount_rate, discount_amount_php, final_amount_php,
                       payment_method, notes, paid_at, discount_id_number, verified_by_user_id,
-                      external_reference
+                      external_reference, discount_verification_id
             """,
             (
                 vehicle_type, duration_type, regular_price, discount_type, discount_rate,
                 discount_amount, final_amount, payment_method, notes, paid_at,
                 payload.user_id, discount_id_number, verified_by_user_id, external_reference,
+                discount_verification_id,
             ),
         )
         row = cur.fetchone()
@@ -3278,7 +3321,7 @@ def _record_parking_payment(payload, verified_by_user_id=None, external_referenc
             cur.execute(
                 "SELECT payment_id, vehicle_type, duration_type, regular_price_php, discount_type, "
                 "discount_rate, discount_amount_php, final_amount_php, payment_method, notes, paid_at, "
-                "discount_id_number, verified_by_user_id, external_reference "
+                "discount_id_number, verified_by_user_id, external_reference, discount_verification_id "
                 "FROM parking_payments WHERE external_reference=%s",
                 (external_reference,),
             )
@@ -3306,6 +3349,7 @@ def _record_parking_payment(payload, verified_by_user_id=None, external_referenc
             "discount_id_number": row["discount_id_number"],
             "verified_by_user_id": row["verified_by_user_id"],
             "external_reference": row.get("external_reference"),
+            "discount_verification_id": row.get("discount_verification_id"),
             "idempotent_replay": idempotent_replay,
             "paid_at_ph": paid_at_ph,
             "expires_at_ph": expires_at_dt.strftime("%Y-%m-%d %H:%M:%S"),
@@ -3912,6 +3956,7 @@ class PaymentRecordPayload(BaseModel):
     paid_at: Optional[str] = None
     user_id: Optional[int] = None
     customer_email: Optional[str] = None
+    discount_verification_id: Optional[int] = None
 
 
 @app.post("/api/payments")
@@ -3932,6 +3977,180 @@ def api_record_payment(payload: PaymentRecordPayload, request: Request, _admin=D
     # The admin recording this payment is the one who checked the physical
     # PWD/Senior ID card in person — stamp who, for an audit trail.
     return _record_parking_payment(payload, verified_by_user_id=_admin.get("user_id"))
+
+
+class DiscountVerificationSubmitPayload(BaseModel):
+    discount_type: str
+    id_number: str
+    image_data_url: str
+
+
+class DiscountVerificationReviewPayload(BaseModel):
+    action: str
+    note: Optional[str] = None
+
+
+_DISCOUNT_ID_MAX_BYTES = 3 * 1024 * 1024
+
+
+def _decode_discount_id_image(data_url: str):
+    """Decode a small browser image and verify its MIME type from file bytes."""
+    value = str(data_url or "")
+    if len(value) > 4_200_000:
+        raise HTTPException(413, "ID image is too large. Maximum size is 3 MB.")
+    match = re.fullmatch(r"data:(image/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=\r\n]+)", value)
+    if not match:
+        raise HTTPException(400, "Upload a JPEG, PNG, or WebP image of the ID card.")
+    claimed_mime = match.group(1)
+    try:
+        image_bytes = base64.b64decode(match.group(2), validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(400, "The uploaded ID image is invalid.") from exc
+    if not image_bytes or len(image_bytes) > _DISCOUNT_ID_MAX_BYTES:
+        raise HTTPException(413, "ID image is empty or larger than 3 MB.")
+    detected_mime = None
+    if image_bytes.startswith(b"\xff\xd8\xff"):
+        detected_mime = "image/jpeg"
+    elif image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        detected_mime = "image/png"
+    elif len(image_bytes) >= 12 and image_bytes[:4] == b"RIFF" and image_bytes[8:12] == b"WEBP":
+        detected_mime = "image/webp"
+    if detected_mime != claimed_mime:
+        raise HTTPException(400, "The ID image file type does not match its contents.")
+    return image_bytes, detected_mime
+
+
+def _public_discount_verification(row):
+    if not row:
+        return None
+    return {
+        "verification_id": row.get("verification_id"),
+        "discount_type": row.get("discount_type"),
+        "id_number": row.get("id_number"),
+        "status": row.get("status"),
+        "submitted_at": row.get("submitted_at").isoformat() if row.get("submitted_at") else None,
+        "reviewed_at": row.get("reviewed_at").isoformat() if row.get("reviewed_at") else None,
+        "review_note": row.get("review_note") or None,
+    }
+
+
+@app.post("/api/discount-verifications")
+def submit_discount_verification(payload: DiscountVerificationSubmitPayload, request: Request, _auth=Depends(require_user)):
+    _rate_limit(request, "discount-verification-submit", max_calls=5, window_seconds=300)
+    discount_type, _ = _discount_rate_for_type(payload.discount_type, payload.id_number)
+    if discount_type == "none":
+        raise HTTPException(400, "Choose PWD or Senior discount.")
+    id_number = payload.id_number.strip()[:64]
+    image_bytes, image_mime = _decode_discount_id_image(payload.image_data_url)
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "UPDATE discount_verifications SET status='cancelled' "
+            "WHERE user_id=%s AND discount_type=%s AND status='pending'",
+            (int(_auth["user_id"]), discount_type),
+        )
+        cur.execute(
+            "INSERT INTO discount_verifications "
+            "(user_id, discount_type, id_number, image_bytes, image_mime) "
+            "VALUES (%s,%s,%s,%s,%s) "
+            "RETURNING verification_id, discount_type, id_number, status, submitted_at, reviewed_at, review_note",
+            (int(_auth["user_id"]), discount_type, id_number, psycopg2.Binary(image_bytes), image_mime),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        return _public_discount_verification(row)
+    except Exception as exc:
+        conn.rollback()
+        print(f"[discount verification submit] {exc}")
+        raise HTTPException(500, "Could not submit ID for review.") from exc
+    finally:
+        cur.close()
+        conn.close()
+
+
+@app.get("/api/discount-verifications/mine")
+def get_my_discount_verification(discount_type: str, id_number: str, _auth=Depends(require_user)):
+    kind = str(discount_type or "").strip().lower()
+    cleaned_id = str(id_number or "").strip()[:64]
+    if kind not in {"pwd", "senior"} or not cleaned_id:
+        raise HTTPException(400, "A PWD/Senior type and ID number are required.")
+    rows = query(
+        "SELECT verification_id, discount_type, id_number, status, submitted_at, reviewed_at, review_note "
+        "FROM discount_verifications WHERE user_id=%s AND discount_type=%s AND id_number=%s "
+        "ORDER BY submitted_at DESC LIMIT 1",
+        (int(_auth["user_id"]), kind, cleaned_id),
+    )
+    return {"verification": _public_discount_verification(rows[0]) if rows else None}
+
+
+@app.get("/api/admin/discount-verifications")
+def list_discount_verifications(status: str = "pending", _admin=Depends(require_admin)):
+    safe_status = str(status or "pending").strip().lower()
+    if safe_status not in {"pending", "approved", "rejected", "consumed", "all"}:
+        raise HTTPException(400, "Invalid verification status filter.")
+    where = "" if safe_status == "all" else "WHERE dv.status=%s"
+    params = () if safe_status == "all" else (safe_status,)
+    rows = query(
+        f"SELECT dv.verification_id, dv.discount_type, dv.id_number, dv.status, "
+        f"dv.submitted_at, dv.reviewed_at, dv.review_note, u.full_name, u.email "
+        f"FROM discount_verifications dv JOIN users u ON u.user_id=dv.user_id {where} "
+        f"ORDER BY CASE WHEN dv.status='pending' THEN 0 ELSE 1 END, dv.submitted_at DESC LIMIT 100",
+        params,
+    )
+    items = []
+    for row in rows:
+        item = _public_discount_verification(row)
+        item.update({"full_name": row.get("full_name") or "Driver", "email": row.get("email") or ""})
+        items.append(item)
+    return {"items": items}
+
+
+@app.get("/api/admin/discount-verifications/{verification_id}/image")
+def get_discount_verification_image(verification_id: int, _admin=Depends(require_admin)):
+    rows = query("SELECT image_bytes, image_mime FROM discount_verifications WHERE verification_id=%s", (verification_id,))
+    if not rows:
+        raise HTTPException(404, "Verification not found.")
+    data = rows[0]["image_bytes"]
+    return Response(content=bytes(data) if isinstance(data, memoryview) else data,
+                    media_type=rows[0]["image_mime"],
+                    headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+
+
+@app.post("/api/admin/discount-verifications/{verification_id}/review")
+def review_discount_verification(verification_id: int, payload: DiscountVerificationReviewPayload,
+                                 request: Request, _admin=Depends(require_admin)):
+    _rate_limit(request, "discount-verification-review", max_calls=60, window_seconds=60)
+    action = str(payload.action or "").strip().lower()
+    if action not in {"approve", "reject"}:
+        raise HTTPException(400, "action must be approve or reject.")
+    note = (payload.note or "").strip()[:500] or None
+    if action == "reject" and not note:
+        raise HTTPException(400, "Add a reason when rejecting an ID.")
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "UPDATE discount_verifications SET status=%s, reviewed_at=NOW(), reviewed_by_user_id=%s, review_note=%s "
+            "WHERE verification_id=%s AND status='pending' "
+            "RETURNING verification_id, discount_type, id_number, status, submitted_at, reviewed_at, review_note",
+            ("approved" if action == "approve" else "rejected", int(_admin["user_id"]), note, verification_id),
+        )
+        row = cur.fetchone()
+        if not row:
+            conn.rollback()
+            raise HTTPException(409, "This submission was already reviewed or no longer exists.")
+        conn.commit()
+        return {"ok": True, "verification": _public_discount_verification(row)}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        conn.rollback()
+        print(f"[discount verification review] {exc}")
+        raise HTTPException(500, "Could not review this ID.") from exc
+    finally:
+        cur.close()
+        conn.close()
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -4030,6 +4249,78 @@ class GcashCheckoutPayload(BaseModel):
     user_id: Optional[int] = None
     mobile_number: str
     slot_id: Optional[str] = None
+    discount_verification_id: Optional[int] = None
+
+
+def _claim_discount_verification(user_id: int, discount_type: str, id_number: str,
+                                 verification_id: Optional[int], checkout_ref: str):
+    """Atomically reserve one approved ID review for a single checkout."""
+    if discount_type == "none":
+        return None
+    if not verification_id:
+        raise HTTPException(403, "Your PWD/Senior ID must be approved by the owner before payment.")
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "UPDATE discount_verifications SET checkout_ref=%s, reserved_at=NOW() "
+            "WHERE verification_id=%s AND user_id=%s AND discount_type=%s AND id_number=%s "
+            "AND status='approved' AND consumed_at IS NULL "
+            "AND (checkout_ref IS NULL OR reserved_at < NOW() - INTERVAL '20 minutes') "
+            "RETURNING verification_id",
+            (checkout_ref, int(verification_id), int(user_id), discount_type, id_number),
+        )
+        row = cur.fetchone()
+        if not row:
+            conn.rollback()
+            raise HTTPException(403, "This discount approval is missing, expired, or already used.")
+        conn.commit()
+        return int(row["verification_id"])
+    except HTTPException:
+        raise
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def _release_discount_verification(verification_id, checkout_ref):
+    if not verification_id:
+        return
+    try:
+        execute(
+            "UPDATE discount_verifications SET checkout_ref=NULL, reserved_at=NULL "
+            "WHERE verification_id=%s AND checkout_ref=%s AND status='approved'",
+            (verification_id, checkout_ref),
+        )
+    except Exception as exc:
+        print(f"[discount verification release] {exc}")
+
+
+def _consume_discount_verification(verification_id, checkout_ref):
+    if not verification_id:
+        return
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "UPDATE discount_verifications SET status='consumed', consumed_at=NOW() "
+            "WHERE verification_id=%s AND checkout_ref=%s AND status='approved' "
+            "RETURNING verification_id",
+            (verification_id, checkout_ref),
+        )
+        if not cur.fetchone():
+            conn.rollback()
+            raise RuntimeError("Approved discount verification could not be consumed")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
 
 
 def _normalize_ph_mobile(value: str) -> str:
@@ -4101,25 +4392,34 @@ def gcash_create_checkout(
     import urllib.error
 
     ref = secrets.token_urlsafe(24)
+    discount_verification_id = _claim_discount_verification(
+        int(_auth["user_id"]), discount_type, discount_id_number,
+        payload.discount_verification_id, ref,
+    )
     slot_id = (payload.slot_id or "").strip()
     reservation_id = None
-    if slot_id:
-        _, slot_vehicle_type = _reservation_slot_role(slot_id)
-        if slot_vehicle_type != vehicle_type:
-            raise HTTPException(400, "Selected slot does not match the vehicle type")
-        reservation_id = _hold_reservation(
-            int(_auth["user_id"]), slot_id, duration_type, final_amount, ref
-        )
+    try:
+        if slot_id:
+            _, slot_vehicle_type = _reservation_slot_role(slot_id)
+            if slot_vehicle_type != vehicle_type:
+                raise HTTPException(400, "Selected slot does not match the vehicle type")
+            reservation_id = _hold_reservation(
+                int(_auth["user_id"]), slot_id, duration_type, final_amount, ref
+            )
+    except Exception:
+        _release_discount_verification(discount_verification_id, ref)
+        raise
     try:
         execute(
             """
-            INSERT INTO gcash_checkouts (ref, user_id, vehicle_type, duration_type, regular_price_php, discount_type, final_amount_php, discount_id_number, customer_mobile, reservation_id)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            INSERT INTO gcash_checkouts (ref, user_id, vehicle_type, duration_type, regular_price_php, discount_type, final_amount_php, discount_id_number, customer_mobile, reservation_id, discount_verification_id)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             """,
-            (ref, int(_auth["user_id"]), vehicle_type, duration_type, regular_price, discount_type, final_amount, discount_id_number, mobile_number, reservation_id),
+            (ref, int(_auth["user_id"]), vehicle_type, duration_type, regular_price, discount_type, final_amount, discount_id_number, mobile_number, reservation_id, discount_verification_id),
         )
     except Exception:
         _release_unpaid_reservation(reservation_id)
+        _release_discount_verification(discount_verification_id, ref)
         raise
 
     body = json.dumps({
@@ -4160,9 +4460,11 @@ def gcash_create_checkout(
         error_body = e.read().decode() if e.fp else str(e)
         print(f"[PayMongo] {e.code}: {error_body}")
         _release_unpaid_reservation(reservation_id)
+        _release_discount_verification(discount_verification_id, ref)
         raise HTTPException(502, f"PayMongo error: {e.code}")
     except Exception as exc:
         _release_unpaid_reservation(reservation_id)
+        _release_discount_verification(discount_verification_id, ref)
         raise HTTPException(502, "Could not connect to PayMongo") from exc
 
     checkout_url = result["data"]["attributes"]["checkout_url"]
@@ -4334,14 +4636,15 @@ def _finalize_paid_reservation(checkout):
             "INSERT INTO parking_payments "
             "(vehicle_type, duration_type, regular_price_php, discount_type, discount_rate, "
             "discount_amount_php, final_amount_php, payment_method, notes, paid_at, user_id, "
-            "discount_id_number, external_reference) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,'gcash',%s,NOW(),%s,%s,%s) "
+            "discount_id_number, external_reference, discount_verification_id) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,'gcash',%s,NOW(),%s,%s,%s,%s) "
             "ON CONFLICT (external_reference) WHERE external_reference IS NOT NULL DO NOTHING "
             "RETURNING payment_id, paid_at",
             (reservation["vehicle_type"], reservation["duration_type"], regular,
              checkout["discount_type"], rate, discount, final,
              f"Reserved slot {reservation['slot_id']} via GCash (PayMongo)",
-             reservation["user_id"], checkout.get("discount_id_number"), external_ref),
+             reservation["user_id"], checkout.get("discount_id_number"), external_ref,
+             checkout.get("discount_verification_id")),
         )
         payment = cur.fetchone()
         if not payment:
@@ -4358,6 +4661,14 @@ def _finalize_paid_reservation(checkout):
             "UPDATE gcash_checkouts SET status='paid', error_message=NULL WHERE ref=%s",
             (checkout["ref"],),
         )
+        if checkout.get("discount_verification_id"):
+            cur.execute(
+                "UPDATE discount_verifications SET status='consumed', consumed_at=NOW() "
+                "WHERE verification_id=%s AND checkout_ref=%s AND status='approved'",
+                (checkout["discount_verification_id"], checkout["ref"]),
+            )
+            if cur.rowcount != 1:
+                raise RuntimeError("Approved discount verification could not be consumed")
         conn.commit()
         _invalidate_payment_revenue_dashboard_cache()
         return {"ok": True, "payment_id": payment["payment_id"],
@@ -4394,6 +4705,7 @@ def _finalize_gcash_checkout(ref: str, allow_processing: bool = False):
             payment_method="gcash",
             notes="Paid via GCash (PayMongo)",
             user_id=checkout["user_id"],
+            discount_verification_id=checkout.get("discount_verification_id"),
         )
         payment = _record_parking_payment(
             payment_payload,
@@ -4403,6 +4715,8 @@ def _finalize_gcash_checkout(ref: str, allow_processing: bool = False):
             "UPDATE gcash_checkouts SET status='paid', error_message=NULL WHERE ref=%s",
             (ref,),
         )
+        if checkout.get("discount_verification_id"):
+            _consume_discount_verification(checkout["discount_verification_id"], ref)
         return checkout, "paid", payment
     except Exception as exc:
         print(f"[GCash] Could not auto-record payment {ref}: {exc}")

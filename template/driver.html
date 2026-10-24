@@ -544,6 +544,12 @@
       color: var(--muted);
       text-align: center;
     }
+    .discount-verification-box { margin: 4px 0 12px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: #f8faf9; }
+    .discount-verification-box .gcash-btn { padding: 10px; background: #177245; font-size: 13px; }
+    .discount-verification-status { margin-top: 8px; font-size: 12px; font-weight: 700; line-height: 1.45; color: var(--muted); }
+    .discount-verification-status.approved { color: #177245; }
+    .discount-verification-status.pending { color: #8a6500; }
+    .discount-verification-status.rejected { color: var(--red); }
 
     .bar {
       position: relative;
@@ -854,7 +860,13 @@
               </select>
               <div id="gcashDiscountIdWrap" style="display:none">
                 <label>PWD / Senior ID Number</label>
-                <input class="gcash-select" id="gcashDiscountId" type="text" placeholder="Required to apply this discount" maxlength="64" />
+                <input class="gcash-select" id="gcashDiscountId" type="text" placeholder="Required to apply this discount" maxlength="64" oninput="queueDiscountVerificationCheck()" />
+                <div class="discount-verification-box">
+                  <label for="gcashDiscountImage">Capture or upload the front of your ID</label>
+                  <input class="gcash-select" id="gcashDiscountImage" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" />
+                  <button class="gcash-btn" id="discountVerificationBtn" type="button" onclick="submitDiscountVerification()">Submit ID for owner approval</button>
+                  <div class="discount-verification-status" id="discountVerificationStatus">Upload your ID before paying with the discount.</div>
+                </div>
               </div>
               <button class="gcash-btn" id="gcashBtn" onclick="payWithGcash()">
                 Pay with GCash
@@ -976,6 +988,8 @@
     let latestSlots = [];
     let selectedSlotId = null;
     let gcashEnabled = false;
+    let activeDiscountVerification = null;
+    let discountVerificationTimer = null;
     const cameraFeeds = {
       cars: { retryTimer: null, retries: 0 },
       motorcycles: { retryTimer: null, retries: 0 },
@@ -1071,7 +1085,11 @@
       const dp = latestSummary.duration_pricing || {};
       const key = durationType + '_rate_php_' + selectedVehicleType;
       const unit = durationType === 'monthly' ? 'month' : (durationType === 'weekly' ? 'week' : 'day');
-      amountEl.textContent = 'PHP ' + formatPrice(dp[key]) + ' / ' + unit;
+      const regular = Number(dp[key] || 0);
+      const discounted = document.getElementById('gcashDiscount')?.value !== 'none';
+      amountEl.textContent = discounted
+        ? 'PHP ' + formatPrice(regular * 0.8) + ' / ' + unit + ' (20% discount; subject to approval)'
+        : 'PHP ' + formatPrice(regular) + ' / ' + unit;
     }
 
     function onGcashDurationChange() {
@@ -1085,6 +1103,105 @@
       if (!needsId) {
         const idInput = document.getElementById('gcashDiscountId');
         if (idInput) idInput.value = '';
+        activeDiscountVerification = null;
+        setDiscountVerificationState(null);
+      } else {
+        activeDiscountVerification = null;
+        setDiscountVerificationState(null);
+        queueDiscountVerificationCheck();
+      }
+      updateGcashAmount();
+    }
+
+    function setDiscountVerificationState(verification) {
+      activeDiscountVerification = verification || null;
+      const type = document.getElementById('gcashDiscount')?.value || 'none';
+      const statusEl = document.getElementById('discountVerificationStatus');
+      const payBtn = document.getElementById('gcashBtn');
+      if (!statusEl || !payBtn) return;
+      statusEl.className = 'discount-verification-status';
+      if (type === 'none') {
+        statusEl.textContent = '';
+        payBtn.disabled = false;
+        return;
+      }
+      const state = verification?.status;
+      if (state === 'approved') {
+        statusEl.textContent = 'Approved by the owner. You can now pay the discounted price.';
+        statusEl.classList.add('approved');
+        payBtn.disabled = false;
+      } else if (state === 'pending') {
+        statusEl.textContent = 'Pending — waiting for owner approval. This page checks automatically.';
+        statusEl.classList.add('pending');
+        payBtn.disabled = true;
+        scheduleDiscountVerificationCheck();
+      } else if (state === 'rejected') {
+        statusEl.textContent = 'Rejected' + (verification.review_note ? ': ' + verification.review_note : '. Upload a clear valid ID and submit again.');
+        statusEl.classList.add('rejected');
+        payBtn.disabled = true;
+      } else {
+        statusEl.textContent = 'Upload your ID and wait for owner approval before paying.';
+        payBtn.disabled = true;
+      }
+    }
+
+    function scheduleDiscountVerificationCheck() {
+      clearTimeout(discountVerificationTimer);
+      discountVerificationTimer = setTimeout(checkDiscountVerification, 6000);
+    }
+
+    function queueDiscountVerificationCheck() {
+      clearTimeout(discountVerificationTimer);
+      activeDiscountVerification = null;
+      setDiscountVerificationState(null);
+      discountVerificationTimer = setTimeout(checkDiscountVerification, 500);
+    }
+
+    async function checkDiscountVerification() {
+      const type = document.getElementById('gcashDiscount')?.value || 'none';
+      const idNumber = document.getElementById('gcashDiscountId')?.value.trim() || '';
+      if (type === 'none' || !idNumber) return setDiscountVerificationState(null);
+      try {
+        const r = await fetch('/api/discount-verifications/mine?discount_type=' + encodeURIComponent(type) + '&id_number=' + encodeURIComponent(idNumber), { headers: authHeaders(), cache: 'no-store' });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.detail || 'Could not check ID approval.');
+        setDiscountVerificationState(data.verification);
+      } catch (error) {
+        const el = document.getElementById('discountVerificationStatus');
+        if (el) el.textContent = error.message || 'Could not check ID approval.';
+      }
+    }
+
+    async function submitDiscountVerification() {
+      const type = document.getElementById('gcashDiscount')?.value || 'none';
+      const idNumber = document.getElementById('gcashDiscountId')?.value.trim() || '';
+      const file = document.getElementById('gcashDiscountImage')?.files?.[0];
+      const button = document.getElementById('discountVerificationBtn');
+      const statusEl = document.getElementById('discountVerificationStatus');
+      if (type === 'none' || !idNumber) return statusEl.textContent = 'Select PWD/Senior and enter the ID number.';
+      if (!file) return statusEl.textContent = 'Capture or choose an ID image first.';
+      if (file.size > 3 * 1024 * 1024) return statusEl.textContent = 'The ID image must be 3 MB or smaller.';
+      button.disabled = true;
+      statusEl.textContent = 'Uploading ID securely...';
+      try {
+        const imageDataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = () => reject(new Error('Could not read the selected image.'));
+          reader.readAsDataURL(file);
+        });
+        const r = await fetch('/api/discount-verifications', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({ discount_type: type, id_number: idNumber, image_data_url: imageDataUrl })
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.detail || 'Could not submit ID.');
+        setDiscountVerificationState(data);
+      } catch (error) {
+        statusEl.textContent = error.message || 'Could not submit ID.';
+        statusEl.className = 'discount-verification-status rejected';
+      } finally {
+        button.disabled = false;
       }
     }
 
@@ -1430,6 +1547,11 @@
         status.textContent = `Enter your ${discountType.toUpperCase()} ID number to apply this discount.`;
         return;
       }
+      if (discountType !== 'none' && (!activeDiscountVerification || activeDiscountVerification.status !== 'approved' || activeDiscountVerification.id_number !== discountId)) {
+        status.textContent = 'Wait for the owner to approve this ID before paying the discounted price.';
+        await checkDiscountVerification();
+        return;
+      }
 
       btn.disabled = true;
       btn.textContent = 'Redirecting to GCash...';
@@ -1444,6 +1566,7 @@
             duration_type: durationType,
             discount_type: discountType,
             discount_id_number: discountId || null,
+            discount_verification_id: activeDiscountVerification?.verification_id ?? null,
             mobile_number: mobileNumber,
             description: 'OccupAI Parking (' + (selectedVehicleType === 'motorcycle' ? 'Motorcycle' : 'Car') + ') - ' + (document.getElementById('driverName')?.textContent || 'Driver'),
             user_id: getUser()?.user_id ?? null,

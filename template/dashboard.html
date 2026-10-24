@@ -1856,6 +1856,11 @@
     .stat-value { line-height: 1.2; overflow-wrap: anywhere; }
     #content-revenue .stat-value { font-size: 24px; }
     .revenue-basis-note { color: var(--muted); font-size: 12px; line-height: 1.5; margin: -4px 0 16px; }
+    .discount-review-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:14px; }
+    .discount-review-card { border:1px solid var(--line); border-radius:12px; padding:14px; background:var(--panel); }
+    .discount-review-card img { width:100%; height:190px; object-fit:contain; margin:10px 0; border:1px solid var(--line); border-radius:8px; background:#eef2f0; }
+    .discount-review-meta { color:var(--muted); font-size:12px; line-height:1.55; overflow-wrap:anywhere; }
+    .discount-review-actions { display:flex; gap:8px; margin-top:10px; }
     .panel-header, .revenue-head, .report-chart-title { flex-wrap: wrap; gap: 10px; }
     .panel-header > *, .revenue-head > * { min-width: 0; }
     .payment-form { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: end; gap: 12px; }
@@ -2240,6 +2245,17 @@
         <div class="trend-chart-wrap" style="height:200px"><canvas id="discountChart"></canvas></div>
       </section>
     </div>
+
+    <section class="panel-card" style="margin-bottom:16px">
+      <div class="panel-header">
+        <span class="panel-title">PWD / Senior ID Review</span>
+        <button class="ghost-btn" type="button" onclick="fetchDiscountVerifications()">Refresh</button>
+      </div>
+      <p class="revenue-basis-note">Review the uploaded card before allowing the driver to pay the discounted price.</p>
+      <div class="discount-review-grid" id="discountVerificationReviewList">
+        <div class="report-empty">Loading pending ID submissions...</div>
+      </div>
+    </section>
 
     <section class="panel-card" style="margin-bottom:16px">
       <div class="panel-header">
@@ -3532,7 +3548,7 @@ function _loadPanelData(name, force = false) {
   if (name === 'overview') {
     requests = [fetchStats, fetchHistory, fetchPredictions, fetchRevenueDashboard, fetchInsights, fetchGcashIssues];
   } else if (name === 'revenue') {
-    requests = [fetchRevenueDashboard, fetchTransactionLogs];
+    requests = [fetchRevenueDashboard, fetchTransactionLogs, fetchDiscountVerifications];
   } else if (name === 'insights') {
     requests = [fetchInsights, fetchMlConfidence];
   } else if (name === 'predictions') {
@@ -4404,6 +4420,68 @@ async function fetchRevenueDashboard() {
     setText('weeklyRevenueValue', 'PHP --');
     setText('monthlyRevenueValue', 'PHP --');
     setText('revenueBasis', 'Revenue dashboard unavailable.');
+  }
+}
+
+async function fetchDiscountVerifications() {
+  const list = document.getElementById('discountVerificationReviewList');
+  if (!list) return;
+  try {
+    const response = await fetchWithRetry('/api/admin/discount-verifications?status=pending', {
+      headers: authHeaders(), cache: 'no-store'
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Could not load ID submissions.');
+    const items = Array.isArray(data.items) ? data.items : [];
+    list.innerHTML = items.length ? items.map(item => `
+      <article class="discount-review-card" id="discount-review-${Number(item.verification_id)}">
+        <strong>${escapeHtml(cleanText(item.full_name))} · ${escapeHtml(String(item.discount_type || '').toUpperCase())}</strong>
+        <div class="discount-review-meta">
+          ${escapeHtml(cleanText(item.email))}<br>
+          ID number: <strong>${escapeHtml(cleanText(item.id_number))}</strong><br>
+          Submitted: ${escapeHtml(formatDashboardDate(item.submitted_at))}
+        </div>
+        <img src="/api/admin/discount-verifications/${Number(item.verification_id)}/image" alt="Uploaded ${escapeHtml(cleanText(item.discount_type))} ID for review" loading="lazy">
+        <div class="discount-review-actions">
+          <button class="setting-save-btn" type="button" onclick="reviewDiscountVerification(${Number(item.verification_id)}, 'approve')">Approve discount</button>
+          <button class="ghost-btn" type="button" onclick="reviewDiscountVerification(${Number(item.verification_id)}, 'reject')">Reject</button>
+        </div>
+      </article>`).join('')
+      : '<div class="report-empty">No pending PWD or Senior ID submissions.</div>';
+  } catch (error) {
+    list.innerHTML = `<div class="report-empty">${escapeHtml(error.message || 'Could not load ID submissions.')}</div>`;
+  }
+}
+
+function formatDashboardDate(value) {
+  if (!value) return '--';
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? cleanText(value) : parsed.toLocaleString('en-PH');
+}
+
+async function reviewDiscountVerification(verificationId, action) {
+  let note = '';
+  if (action === 'reject') {
+    note = window.prompt('Reason for rejection (shown to the driver):', 'ID image is unclear or the details cannot be verified.') || '';
+    if (!note.trim()) return;
+  } else if (!window.confirm('Approve this ID and allow the driver to pay the discounted price?')) {
+    return;
+  }
+  try {
+    const response = await fetch(`/api/admin/discount-verifications/${verificationId}/review`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ action, note })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Could not review this ID.');
+    document.getElementById(`discount-review-${verificationId}`)?.remove();
+    const list = document.getElementById('discountVerificationReviewList');
+    if (list && !list.querySelector('.discount-review-card')) {
+      list.innerHTML = '<div class="report-empty">No pending PWD or Senior ID submissions.</div>';
+    }
+  } catch (error) {
+    window.alert(error.message || 'Could not review this ID.');
   }
 }
 
