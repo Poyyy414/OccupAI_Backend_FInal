@@ -34,6 +34,17 @@
       --red: #ff5c7a;
       --red-soft: rgba(255, 92, 122, .13);
       --yellow: #f8d66d;
+      --available: #32e6ad;
+      --reserved: #f8d66d;
+      --occupied: #ff5c7a;
+      --chart-line: #61adff;
+      --chart-fill: rgba(97, 173, 255, .14);
+      --chart-grid: rgba(151, 165, 184, .16);
+      --heat-0: #14231d;
+      --heat-1: #1d4d3d;
+      --heat-2: #247457;
+      --heat-3: #2ca87c;
+      --heat-4: #45dfad;
       --sidebar-w: 248px;
       --radius: 8px;
       --shadow: 0 22px 65px rgba(0, 0, 0, .38);
@@ -53,6 +64,22 @@
       --text: #1b2431;
       --muted: #5f6d7f;
       --muted-2: #788596;
+      --green: #087a55;
+      --blue: #1666b1;
+      --orange: #9a4f05;
+      --red: #b4233d;
+      --yellow: #7a5b00;
+      --available: #087a55;
+      --reserved: #7a5b00;
+      --occupied: #b4233d;
+      --chart-line: #1666b1;
+      --chart-fill: rgba(22, 102, 177, .12);
+      --chart-grid: rgba(82, 97, 115, .18);
+      --heat-0: #edf3f0;
+      --heat-1: #c5e1d7;
+      --heat-2: #7fc3aa;
+      --heat-3: #248766;
+      --heat-4: #075d43;
       --green-soft: rgba(10, 164, 118, .12);
       --blue-soft: rgba(41, 128, 220, .13);
       --orange-soft: rgba(217, 126, 38, .13);
@@ -450,15 +477,12 @@
     .panel-card, .zone-panel, .insight-card, .insight-summary-card {
       border: 1px solid var(--border-soft);
       border-radius: var(--radius);
-      background: var(--glass);
-      box-shadow: 0 12px 32px rgba(0, 0, 0, .16);
-      backdrop-filter: blur(14px);
-      transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+      background: var(--surface);
+      box-shadow: 0 6px 18px rgba(0, 0, 0, .12);
+      transition: border-color .18s ease;
     }
 
     .panel-card:hover, .zone-panel:hover, .insight-card:hover, .insight-summary-card:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 18px 40px rgba(0, 0, 0, .22);
       border-color: var(--border);
     }
 
@@ -580,9 +604,7 @@
 
     .panel-card.feature {
       border-color: rgba(50, 230, 173, .28);
-      background:
-        linear-gradient(135deg, rgba(50, 230, 173, .12), rgba(97, 173, 255, .04)),
-        var(--glass);
+      background: var(--surface);
     }
 
     .panel-header {
@@ -594,7 +616,7 @@
     }
 
     .panel-title { font-size: 15px; font-weight: 700; }
-    .panel-note { color: var(--muted); font-size: 12px; }
+    .panel-note { color: var(--muted); font-size: 13px; }
     .occ-pct { color: var(--green); font-family: "Space Mono", monospace; font-size: 22px; font-weight: 700; }
 
     .panel-actions {
@@ -1696,17 +1718,75 @@
     .gcash-alert-item strong { color: var(--text); }
     .gcash-alert-item .mono { color: var(--text); }
 
+    .forecast-chart-wrap {
+      position: relative;
+      height: 320px;
+      min-width: 0;
+    }
+    .forecast-summary {
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+    .forecast-data-table { margin-top: 10px; color: var(--muted); font-size: 13px; }
+    .forecast-data-table summary {
+      width: fit-content;
+      min-height: 44px;
+      display: flex;
+      align-items: center;
+      cursor: pointer;
+      color: var(--blue);
+      font-weight: 700;
+    }
+    .forecast-values-grid {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 1px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--border);
+    }
+    .forecast-value-cell { padding: 8px; background: var(--surface-2); }
+    .forecast-value-cell strong { display: block; color: var(--text); font-size: 13px; }
+    .forecast-value-cell span { color: var(--muted); font-size: 12px; }
+
     .heatmap-grid {
       display: grid;
       grid-template-columns: 46px repeat(24, minmax(22px, 1fr));
       gap: 3px;
       min-width: 640px;
       font-family: "Space Mono", monospace;
-      font-size: 10px;
+      font-size: 12px;
     }
     .heatmap-row-label { display: flex; align-items: center; color: var(--muted); }
     .heatmap-hour-label { text-align: center; color: var(--muted-2); padding-bottom: 3px; }
-    .heatmap-cell { aspect-ratio: 1; border-radius: 3px; background: rgba(50, 230, 173, .06); }
+    .heatmap-cell {
+      aspect-ratio: 1;
+      min-width: 22px;
+      padding: 0;
+      border: 1px solid var(--border-soft);
+      border-radius: 3px;
+      background: var(--heat-0);
+    }
+    .heatmap-cell.level-1 { background: var(--heat-1); }
+    .heatmap-cell.level-2 { background: var(--heat-2); }
+    .heatmap-cell.level-3 { background: var(--heat-3); }
+    .heatmap-cell.level-4 { background: var(--heat-4); }
+    .heatmap-cell.no-data {
+      background: repeating-linear-gradient(135deg, var(--surface-2), var(--surface-2) 4px, var(--border-soft) 4px, var(--border-soft) 6px);
+    }
+    .heatmap-cell:focus-visible { outline: 3px solid var(--blue); outline-offset: 1px; }
+    .heatmap-legend { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0 0 12px 46px; color: var(--muted); font-size: 12px; }
+    .heatmap-legend-scale { display: flex; overflow: hidden; border: 1px solid var(--border); border-radius: 4px; }
+    .heatmap-legend-scale span { width: 28px; height: 14px; }
+    .heatmap-legend-scale span:nth-child(1) { background: var(--heat-0); }
+    .heatmap-legend-scale span:nth-child(2) { background: var(--heat-1); }
+    .heatmap-legend-scale span:nth-child(3) { background: var(--heat-2); }
+    .heatmap-legend-scale span:nth-child(4) { background: var(--heat-3); }
+    .heatmap-legend-scale span:nth-child(5) { background: var(--heat-4); }
+    .heatmap-no-data-key { width: 18px; height: 14px; border: 1px solid var(--border); border-radius: 3px; background: repeating-linear-gradient(135deg, var(--surface-2), var(--surface-2) 4px, var(--border-soft) 4px, var(--border-soft) 6px); }
 
     ::-webkit-scrollbar { width: 8px; }
     ::-webkit-scrollbar-track { background: transparent; }
@@ -1744,6 +1824,11 @@
       .payment-form { grid-template-columns: 1fr; }
       .stream-toolbar { align-items: flex-start; flex-direction: column; }
       .stream-actions { justify-content: flex-start; }
+    }
+    @media (max-width: 640px) {
+      .forecast-chart-wrap { min-width: 680px; height: 280px; }
+      .forecast-chart-scroll { overflow-x: auto; padding-bottom: 4px; }
+      .forecast-values-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     }
 
     @media (max-width: 560px) {
@@ -1861,6 +1946,71 @@
     .discount-review-card img { width:100%; height:190px; object-fit:contain; margin:10px 0; border:1px solid var(--line); border-radius:8px; background:#eef2f0; }
     .discount-review-meta { color:var(--muted); font-size:12px; line-height:1.55; overflow-wrap:anywhere; }
     .discount-review-actions { display:flex; gap:8px; margin-top:10px; }
+    .discount-review-dialog-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      display: grid;
+      place-items: center;
+      padding: 20px;
+      background: rgba(2, 9, 6, .76);
+      backdrop-filter: blur(6px);
+    }
+    .discount-review-dialog-backdrop[hidden] { display: none; }
+    .discount-review-dialog {
+      width: min(440px, 100%);
+      padding: 24px;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+    .discount-review-dialog-icon {
+      display: grid;
+      place-items: center;
+      width: 44px;
+      height: 44px;
+      margin-bottom: 16px;
+      border-radius: 50%;
+      color: var(--green);
+      background: var(--green-soft);
+      font-size: 22px;
+      font-weight: 800;
+    }
+    .discount-review-dialog.is-reject .discount-review-dialog-icon {
+      color: var(--red);
+      background: var(--red-soft);
+    }
+    .discount-review-dialog h2 { margin: 0 0 8px; color: var(--text); font-size: 20px; }
+    .discount-review-dialog p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.6; }
+    .discount-review-note-wrap { display: grid; gap: 7px; margin-top: 18px; }
+    .discount-review-note-wrap[hidden] { display: none; }
+    .discount-review-note-wrap label { color: var(--text); font-size: 12px; font-weight: 700; }
+    .discount-review-note {
+      width: 100%;
+      min-height: 94px;
+      resize: vertical;
+      padding: 11px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      outline: none;
+      background: var(--surface-2);
+      color: var(--text);
+      font: inherit;
+      line-height: 1.45;
+    }
+    .discount-review-note:focus { border-color: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
+    .discount-review-dialog-error { min-height: 18px; margin-top: 6px; color: var(--red); font-size: 12px; }
+    .discount-review-dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
+    .discount-review-dialog-actions button { min-height: 42px; padding: 10px 18px; border-radius: 8px; font-weight: 700; }
+    .discount-review-dialog-confirm { color: #06110d; background: var(--green); }
+    .discount-review-dialog-confirm:hover { filter: brightness(1.07); }
+    .discount-review-dialog.is-reject .discount-review-dialog-confirm { color: #fff; background: var(--red); }
+    @media (max-width: 480px) {
+      .discount-review-dialog { padding: 20px; }
+      .discount-review-dialog-actions { flex-direction: column-reverse; }
+      .discount-review-dialog-actions button { width: 100%; }
+    }
     .panel-header, .revenue-head, .report-chart-title { flex-wrap: wrap; gap: 10px; }
     .panel-header > *, .revenue-head > * { min-width: 0; }
     .payment-form { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: end; gap: 12px; }
@@ -2697,19 +2847,29 @@
         <span class="panel-title">24-hour occupancy forecast</span>
         <span class="panel-note" id="predFullHourNote">--</span>
       </div>
-      <div class="hour-bars" id="predFullHourBars" style="height:110px"></div>
-      <div class="pred-grid" id="predFullGrid" style="margin-top:14px">
-        <div class="empty-state" style="grid-column:1/-1">
-          <strong>Waiting for prediction data</strong>
-          Forecasts will appear when the API responds.
+      <div class="forecast-chart-scroll">
+        <div class="forecast-chart-wrap">
+          <canvas id="predFullForecastChart" role="img" aria-label="Hourly occupancy forecast from midnight through 11 PM" aria-describedby="predFullForecastSummary"></canvas>
         </div>
       </div>
+      <div class="empty-state" id="predFullForecastEmpty" hidden><strong>No forecast data</strong>Predictions will appear after enough parking activity is recorded.</div>
+      <p class="forecast-summary" id="predFullForecastSummary">Waiting for prediction data.</p>
+      <details class="forecast-data-table">
+        <summary>View exact hourly values</summary>
+        <div class="forecast-values-grid" id="predFullForecastValues" aria-label="Exact hourly occupancy forecast values"></div>
+      </details>
     </section>
 
     <section class="panel-card" style="margin-top:14px">
       <div class="panel-header">
         <span class="panel-title">Weekly Occupancy Heatmap</span>
         <span class="panel-note">Average occupancy by hour, last 30 days</span>
+      </div>
+      <div class="heatmap-legend" aria-label="Heatmap occupancy scale from zero to one hundred percent">
+        <span>0%</span>
+        <span class="heatmap-legend-scale" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></span>
+        <span>100%</span>
+        <span class="heatmap-no-data-key" aria-hidden="true"></span><span>No data</span>
       </div>
       <div id="heatmapWrap" style="overflow-x:auto">
         <div class="empty-state"><strong>Loading heatmap...</strong></div>
@@ -2786,6 +2946,23 @@
     <div class="report-footer" id="reportFooter"></div>
   </section>
 </main>
+
+<div class="discount-review-dialog-backdrop" id="discountReviewDialogBackdrop" hidden>
+  <section class="discount-review-dialog" id="discountReviewDialog" role="dialog" aria-modal="true" aria-labelledby="discountReviewDialogTitle" aria-describedby="discountReviewDialogMessage">
+    <div class="discount-review-dialog-icon" id="discountReviewDialogIcon" aria-hidden="true">&#10003;</div>
+    <h2 id="discountReviewDialogTitle">Approve discount?</h2>
+    <p id="discountReviewDialogMessage">Confirm that this ID is legitimate and allow the driver to pay the discounted price.</p>
+    <div class="discount-review-note-wrap" id="discountReviewNoteWrap" hidden>
+      <label for="discountReviewNote">Reason for rejection</label>
+      <textarea class="discount-review-note" id="discountReviewNote" maxlength="500" placeholder="Explain why the ID could not be approved."></textarea>
+      <div class="discount-review-dialog-error" id="discountReviewDialogError" role="alert"></div>
+    </div>
+    <div class="discount-review-dialog-actions">
+      <button class="ghost-btn" id="discountReviewDialogCancel" type="button">Cancel</button>
+      <button class="discount-review-dialog-confirm" id="discountReviewDialogConfirm" type="button">Approve ID</button>
+    </div>
+  </section>
+</div>
 
 <script nonce="__OCCUPAI_CSP_NONCE__">
 const _occupaiFetch = window.fetch.bind(window);
@@ -3107,6 +3284,10 @@ function applyTheme(mode) {
     toggle.setAttribute('aria-pressed', String(light));
   }
   if (label) label.textContent = light ? 'On' : 'Off';
+  if (lastFullPredictionsPayload) {
+    requestAnimationFrame(() => renderFullOccupancyForecast(lastFullPredictionsPayload.predictions || {}));
+  }
+  requestAnimationFrame(refreshExistingChartTheme);
 }
 
 function initTheme() {
@@ -3835,6 +4016,10 @@ function updateTrendChart(items) {
     return raw ? new Date(raw).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
   });
   const values = ordered.map(h => Number(h.pct ?? 0));
+  const chartLine = dashboardThemeValue('--chart-line', '#1666b1');
+  const chartFill = dashboardThemeValue('--chart-fill', 'rgba(22,102,177,.12)');
+  const chartMuted = dashboardThemeValue('--muted', '#5f6d7f');
+  const chartGrid = dashboardThemeValue('--chart-grid', 'rgba(82,97,115,.18)');
   const label = document.getElementById('trendRangeLabel');
   if (label) label.textContent = ordered.length ? `Last ${ordered.length} readings` : 'Waiting for data';
 
@@ -3851,8 +4036,8 @@ function updateTrendChart(items) {
       datasets: [{
         label: 'Occupancy %',
         data: values,
-        borderColor: 'rgba(50,230,173,1)',
-        backgroundColor: 'rgba(50,230,173,0.14)',
+        borderColor: chartLine,
+        backgroundColor: chartFill,
         borderWidth: 2.5,
         pointRadius: 0,
         pointHoverRadius: 4,
@@ -3869,8 +4054,8 @@ function updateTrendChart(items) {
         tooltip: { callbacks: { label: ctx => ' ' + ctx.parsed.y + '% occupied' } }
       },
       scales: {
-        x: { ticks: { color: '#7d8aa0', maxTicksLimit: 8 }, grid: { display: false } },
-        y: { min: 0, max: 100, ticks: { color: '#7d8aa0', callback: v => v + '%' }, grid: { color: 'rgba(255,255,255,.05)' } }
+        x: { ticks: { color: chartMuted, maxTicksLimit: 8 }, grid: { display: false } },
+        y: { min: 0, max: 100, ticks: { color: chartMuted, callback: v => v + '%' }, grid: { color: chartGrid } }
       }
     }
   });
@@ -3990,11 +4175,149 @@ async function fetchPredictions() {
 }
 
 const PREDICTIONS_CACHE_KEY = 'predictions_full';
+let fullOccupancyChartInstance = null;
+let lastFullPredictionsPayload = null;
+
+function dashboardThemeValue(name, fallback) {
+  const value = getComputedStyle(document.body).getPropertyValue(name).trim();
+  return value || fallback;
+}
+
+function refreshExistingChartTheme() {
+  if (typeof Chart === 'undefined' || !Chart.instances) return;
+  const muted = dashboardThemeValue('--muted', '#5f6d7f');
+  const grid = dashboardThemeValue('--chart-grid', 'rgba(82,97,115,.18)');
+  const green = dashboardThemeValue('--green', '#087a55');
+  const blue = dashboardThemeValue('--blue', '#1666b1');
+  const orange = dashboardThemeValue('--orange', '#9a4f05');
+  const instances = typeof Chart.instances.values === 'function'
+    ? [...Chart.instances.values()]
+    : Object.values(Chart.instances);
+  instances.forEach(chart => {
+    const legend = chart.options?.plugins?.legend?.labels;
+    if (legend) legend.color = muted;
+    Object.values(chart.options?.scales || {}).forEach(scale => {
+      if (scale.ticks) scale.ticks.color = muted;
+      if (scale.title) scale.title.color = muted;
+      if (scale.grid && scale.grid.display !== false) scale.grid.color = grid;
+    });
+    (chart.data?.datasets || []).forEach(dataset => {
+      const label = String(dataset.label || '').toLowerCase();
+      const color = label.includes('discount') ? orange
+        : label.includes('predict') || label.includes('occupancy') ? blue
+          : green;
+      if (!Array.isArray(dataset.borderColor)) dataset.borderColor = color;
+      if (!Array.isArray(dataset.pointBackgroundColor)) dataset.pointBackgroundColor = color;
+    });
+    chart.update('none');
+  });
+}
+
+function renderFullOccupancyForecast(predictions) {
+  const hourly = predictions.hourly_est || {};
+  const sourceHasData = Object.keys(hourly).length > 0;
+  const hours = Array.from({ length: 24 }, (_, hour) => {
+    const value = Number(hourly[String(hour)]);
+    return Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0;
+  });
+  // An explicit 0% is valid data; only a missing hourly source is unavailable.
+  const hasData = sourceHasData;
+  const canvas = document.getElementById('predFullForecastChart');
+  const empty = document.getElementById('predFullForecastEmpty');
+  const summary = document.getElementById('predFullForecastSummary');
+  const values = document.getElementById('predFullForecastValues');
+  if (!canvas || typeof Chart === 'undefined') return;
+
+  canvas.hidden = !hasData;
+  if (empty) empty.hidden = hasData;
+  if (fullOccupancyChartInstance) {
+    fullOccupancyChartInstance.destroy();
+    fullOccupancyChartInstance = null;
+  }
+  if (!hasData) {
+    if (summary) summary.textContent = 'No reliable hourly forecast is available yet.';
+    if (values) values.innerHTML = '<div class="forecast-value-cell"><strong>--</strong><span>No data</span></div>';
+    return;
+  }
+
+  const peakValue = Math.max(...hours);
+  const peakHour = hours.indexOf(peakValue);
+  const labels = hours.map((_, hour) => `${String(hour).padStart(2, '0')}:00`);
+  const line = dashboardThemeValue('--chart-line', '#1666b1');
+  const fill = dashboardThemeValue('--chart-fill', 'rgba(22,102,177,.12)');
+  const grid = dashboardThemeValue('--chart-grid', 'rgba(82,97,115,.18)');
+  const muted = dashboardThemeValue('--muted', '#5f6d7f');
+  const surface = dashboardThemeValue('--surface', '#101b17');
+  const text = dashboardThemeValue('--text', '#f4f7fb');
+  const peakColor = dashboardThemeValue('--orange', '#ffad66');
+
+  fullOccupancyChartInstance = new Chart(canvas.getContext('2d'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Forecast occupancy',
+        data: hours,
+        borderColor: line,
+        backgroundColor: fill,
+        borderWidth: 2.5,
+        fill: true,
+        tension: .28,
+        pointRadius: hours.map((_, hour) => hour === peakHour ? 5 : 0),
+        pointHoverRadius: 5,
+        pointBackgroundColor: hours.map((_, hour) => hour === peakHour ? peakColor : line),
+        pointBorderColor: surface,
+        pointBorderWidth: 2,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: surface,
+          titleColor: text,
+          bodyColor: text,
+          borderColor: line,
+          borderWidth: 1,
+          callbacks: { label: context => ` ${context.parsed.y}% occupancy` }
+        }
+      },
+      scales: {
+        x: {
+          ticks: { color: muted, maxTicksLimit: 12, maxRotation: 0, font: { size: 12 } },
+          grid: { display: false },
+          title: { display: true, text: 'Hour of day', color: muted, font: { size: 13, weight: '600' } }
+        },
+        y: {
+          min: 0,
+          max: 100,
+          ticks: { color: muted, stepSize: 25, callback: value => `${value}%`, font: { size: 12 } },
+          grid: { color: grid },
+          title: { display: true, text: 'Occupancy', color: muted, font: { size: 13, weight: '600' } }
+        }
+      }
+    }
+  });
+
+  const peakTime = `${String(peakHour).padStart(2, '0')}:00`;
+  if (summary) {
+    summary.textContent = `Peak forecast is ${peakValue}% at ${peakTime}. Use the chart tooltip or open the exact hourly values below for details.`;
+  }
+  if (values) {
+    values.innerHTML = hours.map((value, hour) => `
+      <div class="forecast-value-cell">
+        <strong>${String(hour).padStart(2, '0')}:00</strong>
+        <span>${value}% occupancy${hour === peakHour ? ' · Peak' : ''}</span>
+      </div>`).join('');
+  }
+}
 
 function renderFullPredictions(payload) {
+  lastFullPredictionsPayload = payload;
   const d = payload.predictions || {};
-  const hourly = d.hourly_est || {};
-  const hours = Array.from({ length: 24 }, (_, h) => Number(hourly[String(h)] ?? 0));
 
   setText('predFullPeak', d.peak_label ? cleanText(d.peak_label) : '--');
   setText('predFullCapacity', d.active_slot_capacity != null ? `${d.active_slot_capacity} slots` : '--');
@@ -4018,31 +4341,9 @@ function renderFullPredictions(payload) {
     setText('predFullCurrentOcc', '--');
   }
 
-  const bars = document.getElementById('predFullHourBars');
   const note = document.getElementById('predFullHourNote');
-  if (bars) {
-    const max = Math.max(1, ...hours);
-    const nowH = new Date().getHours();
-    bars.innerHTML = hours.map((v, h) => {
-      const height = Math.max(4, v / max * 100);
-      return `<div class="hour-bar ${h === nowH ? 'now' : ''}" title="${String(h).padStart(2, '0')}:00 - ${v}%" style="height:${height}%"></div>`;
-    }).join('');
-  }
   if (note) note.textContent = d.peak_label ? 'Peak: ' + cleanText(d.peak_label) : 'Full 24-hour pattern';
-
-  const grid = document.getElementById('predFullGrid');
-  if (grid) {
-    if (hours.every(v => v === 0)) {
-      grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><strong>Not enough data yet</strong>Predictions need more logged activity.</div>';
-    } else {
-      grid.innerHTML = hours.map((v, h) => `
-        <div class="pred-card">
-          <div class="pred-time">${String(h).padStart(2, '0')}:00</div>
-          <div class="pred-val">${v}%</div>
-          <div class="pred-label">avg occupancy</div>
-        </div>`).join('');
-    }
-  }
+  renderFullOccupancyForecast(d);
 
   const busyEl = document.getElementById('predFullBusyDays');
   if (busyEl) {
@@ -4225,6 +4526,12 @@ let monthlyRevenueChartInstance = null, vehicleRevenueChartInstance = null,
 
 function renderRevenueCharts(d) {
   if (typeof Chart === 'undefined') return;
+  const chartGreen = dashboardThemeValue('--green', '#087a55');
+  const chartBlue = dashboardThemeValue('--blue', '#1666b1');
+  const chartOrange = dashboardThemeValue('--orange', '#9a4f05');
+  const chartFill = dashboardThemeValue('--chart-fill', 'rgba(22,102,177,.12)');
+  const chartMuted = dashboardThemeValue('--muted', '#5f6d7f');
+  const chartGrid = dashboardThemeValue('--chart-grid', 'rgba(82,97,115,.18)');
 
   const monthlyCanvas = document.getElementById('monthlyRevenueChart');
   if (monthlyCanvas) {
@@ -4237,8 +4544,8 @@ function renderRevenueCharts(d) {
         datasets: [{
           label: 'Revenue (PHP)',
           data: monthly.map(m => Number(m.revenue_php || 0)),
-          borderColor: 'rgba(50,230,173,1)',
-          backgroundColor: 'rgba(50,230,173,0.14)',
+          borderColor: chartGreen,
+          backgroundColor: chartFill,
           borderWidth: 2.5,
           pointRadius: 3,
           fill: true,
@@ -4249,8 +4556,8 @@ function renderRevenueCharts(d) {
         responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ' ' + formatPhp(ctx.parsed.y) } } },
         scales: {
-          x: { ticks: { color: '#7d8aa0' }, grid: { display: false } },
-          y: { ticks: { color: '#7d8aa0', callback: v => 'PHP ' + Number(v).toLocaleString() }, grid: { color: 'rgba(255,255,255,.05)' } }
+          x: { ticks: { color: chartMuted }, grid: { display: false } },
+          y: { ticks: { color: chartMuted, callback: v => 'PHP ' + Number(v).toLocaleString() }, grid: { color: chartGrid } }
         }
       }
     });
@@ -4258,7 +4565,7 @@ function renderRevenueCharts(d) {
 
   const doughnutOpts = {
     responsive: true, maintainAspectRatio: false,
-    plugins: { legend: { position: 'bottom', labels: { color: '#aaa', font: { size: 11 }, boxWidth: 10 } } }
+    plugins: { legend: { position: 'bottom', labels: { color: chartMuted, font: { size: 12 }, boxWidth: 10 } } }
   };
 
   const vehicleCanvas = document.getElementById('vehicleRevenueChart');
@@ -4272,7 +4579,7 @@ function renderRevenueCharts(d) {
         labels: labels.map(l => l === 'motorcycle' ? 'Motorcycle' : 'Car'),
         datasets: [{
           data: labels.map(l => byVehicle[l].revenue_php || 0),
-          backgroundColor: ['rgba(72,199,142,.8)', 'rgba(97,173,255,.8)', 'rgba(244,162,97,.8)'],
+          backgroundColor: [chartGreen, chartBlue, chartOrange],
           borderWidth: 0,
         }]
       },
@@ -4464,14 +4771,89 @@ function formatDashboardDate(value) {
   return Number.isNaN(parsed.getTime()) ? cleanText(value) : parsed.toLocaleString('en-PH');
 }
 
+function openDiscountReviewDialog(action) {
+  const backdrop = document.getElementById('discountReviewDialogBackdrop');
+  const dialog = document.getElementById('discountReviewDialog');
+  const icon = document.getElementById('discountReviewDialogIcon');
+  const title = document.getElementById('discountReviewDialogTitle');
+  const message = document.getElementById('discountReviewDialogMessage');
+  const noteWrap = document.getElementById('discountReviewNoteWrap');
+  const noteInput = document.getElementById('discountReviewNote');
+  const error = document.getElementById('discountReviewDialogError');
+  const cancelButton = document.getElementById('discountReviewDialogCancel');
+  const confirmButton = document.getElementById('discountReviewDialogConfirm');
+  const isReject = action === 'reject';
+  const previousFocus = document.activeElement;
+
+  dialog.classList.toggle('is-reject', isReject);
+  icon.innerHTML = isReject ? '&#10005;' : '&#10003;';
+  title.textContent = isReject ? 'Reject this ID?' : 'Approve this ID?';
+  message.textContent = isReject
+    ? 'Enter a clear reason. The driver will see it and can submit a corrected ID.'
+    : 'Confirm that this ID is legitimate and allow the driver to pay the discounted price.';
+  confirmButton.textContent = isReject ? 'Reject ID' : 'Approve ID';
+  noteWrap.hidden = !isReject;
+  noteInput.value = isReject ? 'ID image is unclear or the details cannot be verified.' : '';
+  error.textContent = '';
+  backdrop.hidden = false;
+  document.body.style.overflow = 'hidden';
+
+  return new Promise(resolve => {
+    const close = result => {
+      backdrop.hidden = true;
+      document.body.style.overflow = '';
+      cancelButton.removeEventListener('click', cancel);
+      confirmButton.removeEventListener('click', confirm);
+      backdrop.removeEventListener('click', clickOutside);
+      document.removeEventListener('keydown', keydown);
+      if (previousFocus instanceof HTMLElement) previousFocus.focus();
+      resolve(result);
+    };
+    const cancel = () => close(null);
+    const confirm = () => {
+      const note = noteInput.value.trim();
+      if (isReject && !note) {
+        error.textContent = 'Please enter a reason for rejecting this ID.';
+        noteInput.focus();
+        return;
+      }
+      close(isReject ? note : '');
+    };
+    const clickOutside = event => {
+      if (event.target === backdrop) cancel();
+    };
+    const keydown = event => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        cancel();
+      }
+      if (event.key === 'Tab') {
+        const focusable = [...dialog.querySelectorAll('button:not([disabled]), textarea:not([disabled])')]
+          .filter(element => !element.closest('[hidden]'));
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    };
+
+    cancelButton.addEventListener('click', cancel);
+    confirmButton.addEventListener('click', confirm);
+    backdrop.addEventListener('click', clickOutside);
+    document.addEventListener('keydown', keydown);
+    (isReject ? noteInput : confirmButton).focus();
+    if (isReject) noteInput.select();
+  });
+}
+
 async function reviewDiscountVerification(verificationId, action) {
-  let note = '';
-  if (action === 'reject') {
-    note = window.prompt('Reason for rejection (shown to the driver):', 'ID image is unclear or the details cannot be verified.') || '';
-    if (!note.trim()) return;
-  } else if (!window.confirm('Approve this ID and allow the driver to pay the discounted price?')) {
-    return;
-  }
+  const note = await openDiscountReviewDialog(action);
+  if (note === null) return;
   const card = document.getElementById(`discount-review-${verificationId}`);
   const buttons = card ? [...card.querySelectorAll('[data-discount-review-action]')] : [];
   buttons.forEach(button => { button.disabled = true; });
@@ -4881,15 +5263,6 @@ async function fetchHeatmap() {
     const dayLabels = d.day_labels || ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
     const byDow = d.hourly_by_dow || {};
 
-    let maxPct = 1;
-    for (let dow = 0; dow < 7; dow++) {
-      const hours = byDow[dow] || byDow[String(dow)] || {};
-      for (let h = 0; h < 24; h++) {
-        const v = Number((hours[h] || hours[String(h)] || {}).occ_pct || 0);
-        if (v > maxPct) maxPct = v;
-      }
-    }
-
     const hourHeader = ['<div></div>'].concat(
       Array.from({ length: 24 }, (_, h) => `<div class="heatmap-hour-label">${h % 3 === 0 ? h : ''}</div>`)
     ).join('');
@@ -4897,9 +5270,13 @@ async function fetchHeatmap() {
     const rows = dayLabels.map((label, dow) => {
       const hours = byDow[dow] || byDow[String(dow)] || {};
       const cells = Array.from({ length: 24 }, (_, h) => {
-        const v = Number((hours[h] || hours[String(h)] || {}).occ_pct || 0);
-        const alpha = Math.max(0.05, v / maxPct);
-        return `<div class="heatmap-cell" style="background:rgba(50,230,173,${alpha.toFixed(2)})" title="${escapeHtml(label)} ${String(h).padStart(2,'0')}:00 — ${escapeHtml(v)}% avg occupancy"></div>`;
+        const entry = hours[h] || hours[String(h)];
+        const hasData = entry && entry.occ_pct != null && Number.isFinite(Number(entry.occ_pct));
+        const v = hasData ? Math.max(0, Math.min(100, Number(entry.occ_pct))) : null;
+        const level = !hasData ? 'no-data' : v === 0 ? '' : v <= 25 ? 'level-1' : v <= 50 ? 'level-2' : v <= 75 ? 'level-3' : 'level-4';
+        const valueText = hasData ? `${v}% average occupancy` : 'No occupancy data';
+        const description = `${label} ${String(h).padStart(2,'0')}:00 — ${valueText}`;
+        return `<button type="button" class="heatmap-cell ${level}" aria-label="${escapeHtml(description)}" title="${escapeHtml(description)}"></button>`;
       }).join('');
       return `<div class="heatmap-row-label">${escapeHtml(label)}</div>${cells}`;
     }).join('');
@@ -5366,24 +5743,28 @@ function renderReportChart(rows) {
   const ctx = document.getElementById('reportChart');
   if (!ctx) return;
   if (reportChartInstance) reportChartInstance.destroy();
+  const chartGreen = dashboardThemeValue('--green', '#087a55');
+  const chartOrange = dashboardThemeValue('--orange', '#9a4f05');
+  const chartMuted = dashboardThemeValue('--muted', '#5f6d7f');
+  const chartGrid = dashboardThemeValue('--chart-grid', 'rgba(82,97,115,.18)');
   reportChartInstance = new Chart(ctx.getContext('2d'), {
     type: 'bar',
     data: {
       labels: rows.map(getReportChartLabel),
       datasets: [
-        { label: 'Revenue (PHP)', data: rows.map(r => +(r.revenue_php || 0).toFixed(2)), backgroundColor: 'rgba(72,199,142,.75)', borderRadius: 5 },
-        { label: 'Discounts (PHP)', data: rows.map(r => +(r.discount_php || 0).toFixed(2)), backgroundColor: 'rgba(255,159,67,.65)', borderRadius: 5 },
+        { label: 'Revenue (PHP)', data: rows.map(r => +(r.revenue_php || 0).toFixed(2)), backgroundColor: chartGreen, borderRadius: 5 },
+        { label: 'Discounts (PHP)', data: rows.map(r => +(r.discount_php || 0).toFixed(2)), backgroundColor: chartOrange, borderRadius: 5 },
       ]
     },
     options: {
       responsive: true,
       plugins: {
-        legend: { labels: { color: '#aaa', font: { size: 12 } } },
+        legend: { labels: { color: chartMuted, font: { size: 12 } } },
         tooltip: { callbacks: { label: ctx => ' ' + phpFmt(ctx.parsed.y) } }
       },
       scales: {
-        x: { ticks: { color: '#888' }, grid: { color: 'rgba(255,255,255,.05)' } },
-        y: { ticks: { color: '#888', callback: v => 'PHP ' + v.toLocaleString() }, grid: { color: 'rgba(255,255,255,.05)' } }
+        x: { ticks: { color: chartMuted }, grid: { color: chartGrid } },
+        y: { ticks: { color: chartMuted, callback: v => 'PHP ' + v.toLocaleString() }, grid: { color: chartGrid } }
       }
     }
   });
@@ -5408,25 +5789,29 @@ async function fetchPredVsActual(dailyRows) {
     const ctx = document.getElementById('predVsActualChart');
     if (!ctx) return;
     if (predVsActualChartInstance) predVsActualChartInstance.destroy();
+    const chartGreen = dashboardThemeValue('--green', '#087a55');
+    const chartBlue = dashboardThemeValue('--blue', '#1666b1');
+    const chartMuted = dashboardThemeValue('--muted', '#5f6d7f');
+    const chartGrid = dashboardThemeValue('--chart-grid', 'rgba(82,97,115,.18)');
     predVsActualChartInstance = new Chart(ctx.getContext('2d'), {
       type: 'line',
       data: {
         labels: days,
         datasets: [
-          { label: 'Actual Avg Revenue (PHP)', data: actualAvg, borderColor: 'rgba(72,199,142,1)', backgroundColor: 'rgba(72,199,142,0.12)', borderWidth: 2.5, pointRadius: 5, pointBackgroundColor: 'rgba(72,199,142,1)', fill: true, tension: 0.3, spanGaps: true },
-          { label: 'AI Predicted Revenue (PHP)', data: predVals, borderColor: 'rgba(150,180,255,0.9)', backgroundColor: 'rgba(150,180,255,0.05)', borderWidth: 2, borderDash: [6,4], pointRadius: 4, pointBackgroundColor: 'rgba(150,180,255,0.9)', fill: false, tension: 0.3, spanGaps: true }
+          { label: 'Actual Avg Revenue (PHP)', data: actualAvg, borderColor: chartGreen, backgroundColor: 'rgba(8,122,85,0.12)', borderWidth: 2.5, pointRadius: 5, pointBackgroundColor: chartGreen, fill: true, tension: 0.3, spanGaps: true },
+          { label: 'Predicted Revenue (PHP)', data: predVals, borderColor: chartBlue, backgroundColor: 'rgba(22,102,177,0.08)', borderWidth: 2, borderDash: [6,4], pointRadius: 4, pointBackgroundColor: chartBlue, fill: false, tension: 0.3, spanGaps: true }
         ]
       },
       options: {
         responsive: true,
         interaction: { mode: 'index', intersect: false },
         plugins: {
-          legend: { labels: { color: '#aaa', font: { size: 12 } } },
+          legend: { labels: { color: chartMuted, font: { size: 12 } } },
           tooltip: { callbacks: { label: ctx => { const v = ctx.parsed.y; return v !== null ? ' ' + ctx.dataset.label + ': ' + phpFmt(v) : ' No data'; } } }
         },
         scales: {
-          x: { ticks: { color: '#888' }, grid: { color: 'rgba(255,255,255,.05)' } },
-          y: { ticks: { color: '#888', callback: v => 'PHP ' + Number(v).toLocaleString() }, grid: { color: 'rgba(255,255,255,.05)' } }
+          x: { ticks: { color: chartMuted }, grid: { color: chartGrid } },
+          y: { ticks: { color: chartMuted, callback: v => 'PHP ' + Number(v).toLocaleString() }, grid: { color: chartGrid } }
         }
       }
     });

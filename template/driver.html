@@ -839,6 +839,8 @@
             <p class="detail-line" id="priceNote">Checking current rate.</p>
 
             <div class="gcash-section" id="gcashSection" style="display:none">
+              <div class="label">Actual parking payment</div>
+              <p class="detail-line">Use this after parking without a reservation. This payment does not hold or reserve a slot.</p>
               <label>Paying for</label>
               <div class="gcash-vehicle-label" id="gcashVehicleLabel">Car</div>
               <label>Duration</label>
@@ -869,7 +871,7 @@
                 </div>
               </div>
               <button class="gcash-btn" id="gcashBtn" onclick="payWithGcash()">
-                Pay with GCash
+                Pay actual parking with GCash
               </button>
               <div class="gcash-status" id="gcashStatus"></div>
             </div>
@@ -1472,7 +1474,7 @@
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ slot_id: slot.slot_id, vehicle_type: slot.vehicle_type,
             duration_type: document.getElementById('reservationDuration').value,
-            discount_type: 'none', mobile_number: mobile }),
+            discount_type: 'none', mobile_number: mobile, payment_purpose: 'reservation' }),
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.detail || 'Could not create checkout');
@@ -1578,6 +1580,7 @@
             discount_id_number: discountId || null,
             discount_verification_id: activeDiscountVerification?.verification_id ?? null,
             mobile_number: mobileNumber,
+            payment_purpose: 'parking',
             description: 'OccupAI Parking (' + (selectedVehicleType === 'motorcycle' ? 'Motorcycle' : 'Car') + ') - ' + (document.getElementById('driverName')?.textContent || 'Driver'),
             user_id: getUser()?.user_id ?? null,
           })
@@ -1588,7 +1591,7 @@
       } catch (e) {
         status.textContent = e.message || 'Payment failed. Try again.';
         btn.disabled = false;
-        btn.textContent = 'Pay with GCash';
+        btn.textContent = 'Pay actual parking with GCash';
       }
     }
   </script>

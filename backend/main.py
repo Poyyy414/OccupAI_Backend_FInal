@@ -1574,6 +1574,7 @@ def _ensure_gcash_checkout_table():
         execute("ALTER TABLE gcash_checkouts ADD COLUMN IF NOT EXISTS customer_mobile TEXT")
         execute("ALTER TABLE gcash_checkouts ADD COLUMN IF NOT EXISTS reservation_id BIGINT")
         execute("ALTER TABLE gcash_checkouts ADD COLUMN IF NOT EXISTS discount_verification_id BIGINT")
+        execute("ALTER TABLE gcash_checkouts ADD COLUMN IF NOT EXISTS payment_purpose TEXT NOT NULL DEFAULT 'parking'")
     except Exception as e:
         print(f"[DB] gcash checkout table setup warning: {e}")
 
@@ -1652,6 +1653,9 @@ def _ensure_reservation_table():
     execute("CREATE INDEX IF NOT EXISTS idx_reservations_hold_expiry "
             "ON parking_reservations(hold_expires_at) "
             "WHERE status='pending_payment'")
+    execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reservations_current_user "
+            "ON parking_reservations(user_id) "
+            "WHERE status IN ('pending_payment', 'reserved', 'occupied')")
 
 
 def _ensure_admin_settings_table():
@@ -3546,6 +3550,17 @@ def _hold_reservation(user_id, slot_id, duration_type, amount_php, checkout_ref)
     conn = get_db()
     cur = conn.cursor()
     try:
+        # Serialize reservation attempts for this driver, including concurrent
+        # requests for different slots where a simple slot lock is insufficient.
+        cur.execute("SELECT pg_advisory_xact_lock(%s, %s)", (894211, int(user_id)))
+        cur.execute(
+            "SELECT reservation_id FROM parking_reservations "
+            "WHERE user_id=%s AND status IN ('pending_payment', 'reserved', 'occupied') "
+            "LIMIT 1 FOR UPDATE",
+            (user_id,),
+        )
+        if cur.fetchone():
+            raise HTTPException(409, "You already have an active reservation")
         cur.execute(
             "INSERT INTO parking_reservations "
             "(user_id, slot_id, vehicle_type, duration_type, amount_php, checkout_ref, hold_expires_at) "
@@ -3556,8 +3571,14 @@ def _hold_reservation(user_id, slot_id, duration_type, amount_php, checkout_ref)
         reservation_id = int(cur.fetchone()["reservation_id"])
         conn.commit()
         return reservation_id
+    except HTTPException:
+        conn.rollback()
+        raise
     except psycopg2.errors.UniqueViolation as exc:
         conn.rollback()
+        constraint = getattr(getattr(exc, "diag", None), "constraint_name", "")
+        if constraint == "idx_reservations_current_user":
+            raise HTTPException(409, "You already have an active reservation") from exc
         raise HTTPException(409, "Another driver is already paying for or using this slot") from exc
     except Exception:
         conn.rollback()
@@ -4250,6 +4271,7 @@ class GcashCheckoutPayload(BaseModel):
     mobile_number: str
     slot_id: Optional[str] = None
     discount_verification_id: Optional[int] = None
+    payment_purpose: str = "parking"
 
 
 def _claim_discount_verification(user_id: int, discount_type: str, id_number: str,
@@ -4362,6 +4384,14 @@ def gcash_create_checkout(
 
     vehicle_type = _normalize_vehicle_type(payload.vehicle_type, default="car")
     duration_type = _normalize_duration_type(payload.duration_type, default="daily")
+    payment_purpose = str(payload.payment_purpose or "").strip().lower()
+    if payment_purpose not in {"parking", "reservation"}:
+        raise HTTPException(400, "payment_purpose must be parking or reservation")
+    slot_id = (payload.slot_id or "").strip()
+    if payment_purpose == "reservation" and not slot_id:
+        raise HTTPException(400, "Select an available parking slot before reservation payment")
+    if payment_purpose == "parking" and slot_id:
+        raise HTTPException(400, "Actual parking payment cannot include a reservation slot")
     mobile_number = _normalize_ph_mobile(payload.mobile_number)
     customer_rows = query(
         "SELECT full_name, email FROM users WHERE user_id=%s AND is_active=TRUE LIMIT 1",
@@ -4396,10 +4426,9 @@ def gcash_create_checkout(
         int(_auth["user_id"]), discount_type, discount_id_number,
         payload.discount_verification_id, ref,
     )
-    slot_id = (payload.slot_id or "").strip()
     reservation_id = None
     try:
-        if slot_id:
+        if payment_purpose == "reservation":
             _, slot_vehicle_type = _reservation_slot_role(slot_id)
             if slot_vehicle_type != vehicle_type:
                 raise HTTPException(400, "Selected slot does not match the vehicle type")
@@ -4412,10 +4441,10 @@ def gcash_create_checkout(
     try:
         execute(
             """
-            INSERT INTO gcash_checkouts (ref, user_id, vehicle_type, duration_type, regular_price_php, discount_type, final_amount_php, discount_id_number, customer_mobile, reservation_id, discount_verification_id)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            INSERT INTO gcash_checkouts (ref, user_id, vehicle_type, duration_type, regular_price_php, discount_type, final_amount_php, discount_id_number, customer_mobile, reservation_id, discount_verification_id, payment_purpose)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             """,
-            (ref, int(_auth["user_id"]), vehicle_type, duration_type, regular_price, discount_type, final_amount, discount_id_number, mobile_number, reservation_id, discount_verification_id),
+            (ref, int(_auth["user_id"]), vehicle_type, duration_type, regular_price, discount_type, final_amount, discount_id_number, mobile_number, reservation_id, discount_verification_id, payment_purpose),
         )
     except Exception:
         _release_unpaid_reservation(reservation_id)
@@ -4426,8 +4455,9 @@ def gcash_create_checkout(
         "data": {
             "attributes": {
                 "line_items": [{
-                    "name": (f"Reserved Slot {slot_id} ({duration_type.title()})" if slot_id
-                             else f"Parking Fee ({vehicle_type.title()}, {duration_type.title()})"),
+                    "name": (f"Reserved Slot {slot_id} ({duration_type.title()})"
+                             if payment_purpose == "reservation"
+                             else f"Actual Parking Fee ({vehicle_type.title()}, {duration_type.title()})"),
                     "amount": amount_centavos,
                     "currency": "PHP",
                     "quantity": 1,
@@ -4485,6 +4515,7 @@ def gcash_create_checkout(
         "pricing_context": duration_pricing.get("pricing_context"),
         "reservation_id": reservation_id,
         "slot_id": slot_id or None,
+        "payment_purpose": payment_purpose,
     }
 
 

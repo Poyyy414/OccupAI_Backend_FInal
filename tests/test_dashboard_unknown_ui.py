@@ -25,3 +25,29 @@ def test_settings_use_one_duration_based_price_editor():
     assert "Demand Label" not in dashboard
     assert "per hour" not in driver
     assert driver.count("per day") == 2
+
+
+def test_predictions_use_one_accessible_chart_instead_of_hour_cards():
+    html = (Path(__file__).parents[1] / "template" / "dashboard.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'id="predFullForecastChart"' in html
+    assert 'id="predFullForecastSummary"' in html
+    assert 'id="predFullForecastValues"' in html
+    assert 'id="predFullGrid"' not in html
+    assert 'id="predFullHourBars"' not in html
+    assert "renderFullOccupancyForecast" in html
+
+
+def test_prediction_heatmap_has_theme_safe_levels_and_accessible_cells():
+    html = (Path(__file__).parents[1] / "template" / "dashboard.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "--heat-0:" in html
+    assert "--chart-line:" in html
+    assert 'class="heatmap-legend"' in html
+    assert 'type="button" class="heatmap-cell ${level}"' in html
+    assert 'aria-label="${escapeHtml(description)}"' in html
+    assert "rgba(50,230,173,${alpha.toFixed(2)})" not in html

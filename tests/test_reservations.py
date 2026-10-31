@@ -181,3 +181,60 @@ def test_reservation_templates_have_three_slot_colors():
     assert ".space-cell.reserved" in driver
     assert ".lot-cell.reserved" in admin
     assert "Reserved</span>" in admin
+
+
+def test_driver_with_active_reservation_cannot_hold_another_slot(monkeypatch):
+    class Cursor:
+        def __init__(self):
+            self.last_sql = ""
+
+        def execute(self, sql, params=None):
+            self.last_sql = " ".join(sql.split())
+
+        def fetchone(self):
+            if "FROM parking_reservations" in self.last_sql:
+                return {"reservation_id": 77}
+            return None
+
+        def close(self):
+            pass
+
+    class Connection:
+        def __init__(self):
+            self.cur = Cursor()
+            self.rollbacks = 0
+
+        def cursor(self):
+            return self.cur
+
+        def rollback(self):
+            self.rollbacks += 1
+
+        def commit(self):
+            raise AssertionError("A second reservation must not be committed")
+
+        def close(self):
+            pass
+
+    connection = Connection()
+    monkeypatch.setattr(m, "_expire_reservations", lambda: None)
+    monkeypatch.setattr(m, "get_db", lambda: connection)
+    monkeypatch.setattr(m, "_refresh_aggregated_state_locked", lambda: None)
+    monkeypatch.setitem(m.state["zones"], "cars:C02", False)
+
+    try:
+        m._hold_reservation(7, "cars:C02", "daily", 50, "second-checkout")
+    except Exception as exc:
+        assert getattr(exc, "status_code", None) == 409
+        assert "active reservation" in str(getattr(exc, "detail", ""))
+    else:
+        raise AssertionError("A driver with an active reservation was allowed another slot")
+    assert connection.rollbacks == 1
+
+
+def test_driver_template_separates_reservation_and_actual_parking_payment():
+    driver = (m.TEMPLATE_DIR / "driver.html").read_text(encoding="utf-8")
+    assert "payment_purpose: 'reservation'" in driver
+    assert "payment_purpose: 'parking'" in driver
+    assert "Actual parking payment" in driver
+    assert "does not hold or reserve a slot" in driver

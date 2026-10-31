@@ -340,3 +340,30 @@ def test_gcash_checkout_sends_required_customer_mobile_to_paymongo(monkeypatch):
         'phone': '09171234567',
     }
     assert result['checkout_url'] == 'https://checkout.example/test'
+
+
+def test_gcash_checkout_requires_explicit_matching_payment_purpose(monkeypatch):
+    monkeypatch.setattr(m, 'PAYMONGO_SECRET_KEY', 'sk_test_not_real')
+    monkeypatch.setattr(m, '_rate_limit', lambda *_args, **_kwargs: None)
+    request = SimpleNamespace(base_url='https://example.com/')
+    auth = {'user_id': 7, 'role': 'driver'}
+
+    invalid_payloads = (
+        (m.GcashCheckoutPayload(
+            mobile_number='09171234567', payment_purpose='reservation'
+        ), 'Select an available parking slot'),
+        (m.GcashCheckoutPayload(
+            mobile_number='09171234567', payment_purpose='parking', slot_id='cars:C01'
+        ), 'cannot include a reservation slot'),
+        (m.GcashCheckoutPayload(
+            mobile_number='09171234567', payment_purpose='other'
+        ), 'must be parking or reservation'),
+    )
+    for payload, expected in invalid_payloads:
+        try:
+            m.gcash_create_checkout(payload, request, auth)
+        except Exception as exc:
+            assert getattr(exc, 'status_code', None) == 400
+            assert expected in str(getattr(exc, 'detail', ''))
+        else:
+            raise AssertionError(f'{payload.payment_purpose!r} should have been rejected')
