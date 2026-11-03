@@ -117,6 +117,30 @@ def test_paid_reservation_commits_payment_and_expiry_together(monkeypatch):
     assert any("UPDATE gcash_checkouts SET status='paid'" in sql for sql, _ in conn.cur.statements)
 
 
+def test_weekly_and_monthly_reservations_are_dedicated_slots():
+    assert m._is_dedicated_reservation("daily") is False
+    assert m._is_dedicated_reservation("weekly") is True
+    assert m._is_dedicated_reservation("monthly") is True
+
+    row = {
+        "reservation_id": 4,
+        "slot_id": "cars:C01",
+        "vehicle_type": "car",
+        "duration_type": "monthly",
+        "status": "reserved",
+        "payment_status": "paid",
+        "account_email": "driver@example.com",
+        "amount_php": 1200,
+        "created_at": datetime.now(m.PH_TZ),
+        "starts_at": datetime.now(m.PH_TZ),
+        "expires_at": datetime.now(m.PH_TZ) + timedelta(days=30),
+    }
+    public = m._reservation_public(row)
+    assert public["dedicated_slot"] is True
+    assert public["reservation_type"] == "dedicated_slot"
+    assert public["release_policy"] == "at_expiry"
+
+
 def test_repeated_payment_callback_does_not_insert_another_payment(monkeypatch):
     expires = datetime.now(m.PH_TZ) + timedelta(days=1)
 
@@ -173,6 +197,49 @@ def test_camera_arrival_and_departure_transitions(monkeypatch):
     assert any("status='completed'" in sql for sql, _ in statements)
 
 
+def test_dedicated_slot_returns_to_reserved_after_departure(monkeypatch):
+    statements = []
+    monkeypatch.setattr(
+        m,
+        "query",
+        lambda *a, **kw: [{"slot_id": "cars:C01", "duration_type": "weekly"}],
+    )
+    monkeypatch.setattr(m, "execute", lambda sql, params=None: statements.append((sql, params)))
+
+    m._update_reservation_arrival("cars", {"C01": False})
+
+    assert any("status='reserved'" in sql for sql, _ in statements)
+    assert not any("status='completed'" in sql for sql, _ in statements)
+
+
+def test_paid_empty_reservations_count_as_committed_capacity(monkeypatch):
+    original = dict(m.state)
+    try:
+        m.state.update({
+            "combined_complete": True,
+            "occupied": 2,
+            "zones": {"cars:C01": False, "cars:C02": True},
+        })
+        monkeypatch.setattr(m, "_refresh_aggregated_state_locked", lambda: None)
+        monkeypatch.setattr(
+            m,
+            "query",
+            lambda *a, **kw: [
+                {"slot_id": "cars:C01"},  # empty paid reservation: add it
+                {"slot_id": "cars:C02"},  # physically occupied: do not double-count
+            ],
+        )
+
+        demand, capacity, available = m._pricing_occupancy_inputs()
+
+        assert demand == 3
+        assert capacity == 30
+        assert available is True
+    finally:
+        m.state.clear()
+        m.state.update(original)
+
+
 def test_reservation_templates_have_three_slot_colors():
     driver = (m.TEMPLATE_DIR / "driver.html").read_text(encoding="utf-8")
     admin = (m.TEMPLATE_DIR / "dashboard.html").read_text(encoding="utf-8")
@@ -180,7 +247,8 @@ def test_reservation_templates_have_three_slot_colors():
     assert "My reservation" in driver
     assert ".space-cell.reserved" in driver
     assert ".lot-cell.reserved" in admin
-    assert "Reserved</span>" in admin
+    assert "Reserved / dedicated" in admin
+    assert "slotById[name]?.dedicated_slot" in admin
 
 
 def test_driver_with_active_reservation_cannot_hold_another_slot(monkeypatch):
@@ -238,3 +306,5 @@ def test_driver_template_separates_reservation_and_actual_parking_payment():
     assert "payment_purpose: 'parking'" in driver
     assert "Actual parking payment" in driver
     assert "does not hold or reserve a slot" in driver
+    assert "Weekly · dedicated slot" in driver
+    assert "reservation.dedicated_slot" in driver

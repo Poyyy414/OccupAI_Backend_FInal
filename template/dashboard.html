@@ -2307,7 +2307,7 @@
           <div class="panel-actions">
             <span class="lot-legend status-chip"><span class="lot-cell free" style="width:9px;height:9px;border-radius:3px"></span>Free</span>
             <span class="lot-legend status-chip"><span class="lot-cell occ" style="width:9px;height:9px;border-radius:3px"></span>Occupied</span>
-            <span class="lot-legend status-chip"><span class="lot-cell reserved" style="width:9px;height:9px;border-radius:3px"></span>Reserved</span>
+            <span class="lot-legend status-chip"><span class="lot-cell reserved" style="width:9px;height:9px;border-radius:3px"></span>Reserved / dedicated</span>
           </div>
         </div>
         <div class="lot-status-grid" id="lotStatusGrid">
@@ -4983,7 +4983,9 @@ async function recordPayment() {
 
 function renderZones(zones, total, occupied, slotStatuses = []) {
   const list = document.getElementById('zoneList');
+  const slotById = Object.fromEntries(slotStatuses.map(slot => [slot.slot_id, slot]));
   const statusById = Object.fromEntries(slotStatuses.map(slot => [slot.slot_id, slot.status]));
+  const reservedLabel = name => slotById[name]?.dedicated_slot ? 'Dedicated' : 'Reserved';
   const entries = Object.entries(zones);
   const freeCountEl = document.getElementById('zoneFreeCount');
   const occCountEl = document.getElementById('zoneOccCount');
@@ -5020,7 +5022,7 @@ function renderZones(zones, total, occupied, slotStatuses = []) {
   list.innerHTML = entries.map(([name, isOccupied]) => {
     const known = typeof isOccupied === 'boolean';
     const cls = known ? (isOccupied ? 'occ' : statusById[name] === 'reserved' ? 'reserved' : 'free') : 'unknown';
-    const label = known ? (isOccupied ? 'Occupied' : cls === 'reserved' ? 'Reserved' : 'Free') : 'Unknown';
+    const label = known ? (isOccupied ? 'Occupied' : cls === 'reserved' ? reservedLabel(name) : 'Free') : 'Unknown';
     return `
       <div class="zone-row">
         <div class="zone-dot ${cls}"></div>
@@ -5032,7 +5034,7 @@ function renderZones(zones, total, occupied, slotStatuses = []) {
   if (lotGrid) {
     lotGrid.innerHTML = entries.map(([name, isOccupied]) => {
       const cls = isOccupied === true ? 'occ' : isOccupied === false ? (statusById[name] === 'reserved' ? 'reserved' : 'free') : '';
-      return `<div class="lot-cell ${cls}" title="${escapeHtml(name)}: ${isOccupied === true ? 'Occupied' : isOccupied === false ? (cls === 'reserved' ? 'Reserved' : 'Free') : 'Unknown'}"></div>`;
+      return `<div class="lot-cell ${cls}" title="${escapeHtml(name)}: ${isOccupied === true ? 'Occupied' : isOccupied === false ? (cls === 'reserved' ? reservedLabel(name) : 'Free') : 'Unknown'}"></div>`;
     }).join('');
   }
 }

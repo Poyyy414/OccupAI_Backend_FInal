@@ -999,6 +999,20 @@ Profile
 - Sign out - Ends the driver session and returns to login safely again.
 
 
+RESERVATION OWNERSHIP POLICY
+============================
+
+- Daily reservation - Reserves one selected slot for one parking session and releases it after the detected vehicle departs or the paid day expires.
+- Dedicated weekly slot - Assigns one selected physical slot exclusively to the paying driver for seven days, including periods when the slot is empty.
+- Dedicated monthly slot - Assigns one selected physical slot exclusively to the paying driver for one calendar month, including periods when the slot is empty.
+- One active assignment - Prevents a driver from holding or leasing more than one slot at the same time.
+- Payment hold - Holds an available slot for 15 minutes while the driver completes GCash checkout; unpaid holds expire automatically.
+- Dedicated departure behavior - Changes an empty weekly/monthly slot from occupied back to reserved instead of releasing it to another driver.
+- Paid expiration - Releases dedicated weekly/monthly slots automatically when their paid expiry is reached.
+- Committed-capacity pricing - Counts physically occupied slots and paid empty reservations once each when calculating effective demand; occupied reserved slots are never double-counted.
+- Identity limitation - Camera occupancy proves physical presence but does not prove vehicle ownership; a QR/AprilTag or administrator resolution is required for unauthorized-slot identification.
+
+
 NOTES FOR QA REVIEW
 ===================
 

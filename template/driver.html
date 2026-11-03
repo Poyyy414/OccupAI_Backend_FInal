@@ -804,9 +804,9 @@
             <div class="metric"><span>Occupied</span><strong id="occupiedSpaces">--</strong></div>
             <div class="metric"><span>Occupancy</span><strong id="occupancyPct">--</strong></div>
           </div>
-          <div class="reservation-info" id="selectedSlotInfo">Select a green slot to reserve it. The full parking rate is paid in advance; no reservation is active until GCash payment is confirmed.</div>
+          <div class="reservation-info" id="selectedSlotInfo">Select a green slot. Daily is a single parking session; weekly and monthly are dedicated-slot leases that keep the chosen slot assigned until expiry.</div>
           <div class="reservation-controls">
-            <div><label for="reservationDuration">Reservation duration</label><select class="gcash-select" id="reservationDuration" onchange="updateReservationQuote()"><option value="daily">1 day</option><option value="weekly">1 week</option><option value="monthly">1 month</option></select></div>
+            <div><label for="reservationDuration">Reservation plan</label><select class="gcash-select" id="reservationDuration" onchange="updateReservationQuote()"><option value="daily">Daily · single session</option><option value="weekly">Weekly · dedicated slot</option><option value="monthly">Monthly · dedicated slot</option></select></div>
             <div><label for="reservationMobile">GCash mobile number</label><input class="gcash-select" id="reservationMobile" type="tel" inputmode="numeric" autocomplete="tel-national" placeholder="09XXXXXXXXX" maxlength="11" /></div>
             <button class="gcash-btn" type="button" id="reservationPayButton" onclick="payForReservation()" disabled>Select a slot</button>
           </div>
@@ -897,10 +897,11 @@
               <div class="plan-item"><span>Account email</span><strong id="reservationEmail">--</strong></div>
               <div class="plan-item"><span>Reserved at</span><strong id="reservationDate">--</strong></div>
               <div class="plan-item"><span>Duration</span><strong id="reservationDurationLabel">--</strong></div>
+              <div class="plan-item"><span>Assignment</span><strong id="reservationType">--</strong></div>
               <div class="plan-item"><span>Starts</span><strong id="reservationStarts">--</strong></div>
               <div class="plan-item"><span>Expires</span><strong id="reservationExpires">--</strong></div>
             </div>
-            <p class="reservation-info">A red slot means a vehicle is physically detected; the camera cannot verify who parked it. If a paid slot is occupied by someone else, contact the administrator.</p>
+            <p class="reservation-info">Weekly and monthly dedicated slots remain assigned even when temporarily empty. A red slot means a vehicle is physically detected; the camera cannot verify who parked it. If someone else occupies your assigned slot, contact the administrator.</p>
           </div>
         </article>
 
@@ -1436,11 +1437,14 @@
       const slot = latestSlots.find(item => item.slot_id === selectedSlotId && item.status === 'available');
       const duration = document.getElementById('reservationDuration').value;
       const price = Number(latestSummary?.duration_pricing?.[duration + '_rate_php_' + (slot?.vehicle_type || 'car')]);
+      const dedicated = duration === 'weekly' || duration === 'monthly';
       button.disabled = !slot || !gcashEnabled || !Number.isFinite(price) || price < 1;
-      button.textContent = slot ? `Reserve & pay PHP ${formatPrice(price)}` : 'Select a slot';
+      button.textContent = slot
+        ? `${dedicated ? 'Lease slot' : 'Reserve session'} & pay PHP ${formatPrice(price)}`
+        : 'Select a slot';
       info.textContent = slot
-        ? `${slot.slot_id} · ${duration} · PHP ${formatPrice(price)} prepaid via GCash. The slot is held for 15 minutes while you complete payment.`
-        : 'Select a green slot to reserve it. The full parking rate is paid in advance; no reservation is active until GCash payment is confirmed.';
+        ? `${slot.slot_id} · ${duration} · PHP ${formatPrice(price)} prepaid via GCash. ${dedicated ? 'This dedicated slot remains assigned to you until the paid plan expires, including while it is empty.' : 'This daily reservation ends when you depart or when the paid day expires.'} The slot is held for 15 minutes while you complete payment.`
+        : 'Select a green slot. Daily is a single parking session; weekly and monthly are dedicated-slot leases that keep the chosen slot assigned until expiry.';
       if (!gcashEnabled && slot) info.textContent += ' Online payment is currently unavailable.';
     }
 
@@ -1453,6 +1457,9 @@
       document.getElementById('reservationEmail').textContent = reservation?.account_email || '--';
       document.getElementById('reservationDate').textContent = reservation ? formatPlanDate(reservation.created_at) : '--';
       document.getElementById('reservationDurationLabel').textContent = reservation?.duration_type || '--';
+      document.getElementById('reservationType').textContent = reservation
+        ? (reservation.dedicated_slot ? 'Dedicated slot' : 'Single session')
+        : '--';
       document.getElementById('reservationStarts').textContent = reservation?.starts_at ? formatPlanDate(reservation.starts_at) : '--';
       document.getElementById('reservationExpires').textContent = reservation?.expires_at ? formatPlanDate(reservation.expires_at) : '--';
     }

@@ -3432,6 +3432,11 @@ _DURATION_LABELS = {
 }
 
 
+def _is_dedicated_reservation(duration_type):
+    """Weekly and monthly reservations lease one specific physical slot."""
+    return str(duration_type or "").strip().lower() in {"weekly", "monthly"}
+
+
 def _payment_expiry_at(paid_at, duration_type):
     """Return the exact end of a paid plan in Philippine time."""
     starts_at = _coerce_datetime(paid_at)
@@ -3479,6 +3484,7 @@ def _reservation_expiry_scheduler():
 
 
 def _reservation_public(row):
+    dedicated = _is_dedicated_reservation(row["duration_type"])
     return {
         "reservation_id": row["reservation_id"],
         "slot_id": row["slot_id"],
@@ -3491,6 +3497,9 @@ def _reservation_public(row):
         "created_at": row["created_at"].isoformat(),
         "starts_at": row["starts_at"].isoformat() if row.get("starts_at") else None,
         "expires_at": row["expires_at"].isoformat() if row.get("expires_at") else None,
+        "dedicated_slot": dedicated,
+        "reservation_type": "dedicated_slot" if dedicated else "single_session",
+        "release_policy": "at_expiry" if dedicated else "on_departure_or_expiry",
     }
 
 
@@ -3500,7 +3509,7 @@ def _reservation_slot_statuses(user_id=None):
         _refresh_aggregated_state_locked()
         zones = dict(state["zones"])
     active_rows = query(
-        "SELECT slot_id, status, user_id FROM parking_reservations "
+        "SELECT slot_id, status, user_id, duration_type, payment_status FROM parking_reservations "
         "WHERE status IN ('pending_payment', 'reserved', 'occupied')"
     )
     claims = {row["slot_id"]: row for row in active_rows}
@@ -3519,6 +3528,11 @@ def _reservation_slot_statuses(user_id=None):
                 "vehicle_type": config["role"],
                 "status": status,
                 "claim_status": claim["status"] if claim else None,
+                "dedicated_slot": bool(
+                    claim
+                    and claim.get("payment_status") == "paid"
+                    and _is_dedicated_reservation(claim.get("duration_type"))
+                ),
                 "mine": bool(claim and user_id and int(claim["user_id"]) == int(user_id)),
             })
     return result
@@ -3596,15 +3610,20 @@ def _release_unpaid_reservation(reservation_id):
 
 
 def _update_reservation_arrival(camera_id, zones):
-    """Camera detects occupancy, not driver identity; vacant departure is debounced."""
+    """Update physical presence without releasing a paid dedicated slot.
+
+    Daily reservations are single-session bookings and complete after a
+    debounced departure. Weekly/monthly reservations lease the selected slot,
+    so departure changes them back to reserved until their paid expiry.
+    """
     if not zones:
         return
     active = query(
-        "SELECT slot_id FROM parking_reservations "
+        "SELECT slot_id, duration_type FROM parking_reservations "
         "WHERE status IN ('reserved', 'occupied') AND slot_id LIKE %s",
         (camera_id + ":%",),
     )
-    relevant = {row["slot_id"] for row in active}
+    relevant = {row["slot_id"]: row.get("duration_type") for row in active}
     for slot_name, occupied in zones.items():
         slot_id = f"{camera_id}:{slot_name}"
         if slot_id not in relevant:
@@ -3620,8 +3639,17 @@ def _update_reservation_arrival(camera_id, zones):
             execute("UPDATE parking_reservations SET vacant_since=COALESCE(vacant_since,NOW()) "
                     "WHERE slot_id=%s AND status='occupied' AND expires_at>NOW()",
                     (slot_id,))
-            execute("UPDATE parking_reservations SET status='completed', completed_at=NOW() "
+            if _is_dedicated_reservation(relevant[slot_id]):
+                execute("UPDATE parking_reservations SET status='reserved', vacant_since=NULL "
                     "WHERE slot_id=%s AND status='occupied' "
+                    "AND duration_type IN ('weekly','monthly') "
+                    "AND vacant_since <= NOW() - INTERVAL '10 seconds' "
+                    "AND expires_at>NOW()",
+                    (slot_id,))
+            else:
+                execute("UPDATE parking_reservations SET status='completed', completed_at=NOW() "
+                    "WHERE slot_id=%s AND status='occupied' "
+                    "AND duration_type='daily' "
                     "AND vacant_since <= NOW() - INTERVAL '10 seconds'",
                     (slot_id,))
 
@@ -5369,9 +5397,13 @@ def _regular_price_for_duration(vehicle_type="car", duration_type="daily"):
 
 
 def _pricing_occupancy_inputs(vehicles_hour=None, lot_capacity=None):
-    """Return the occupancy inputs used for a customer-facing price.
+    """Return committed-capacity inputs used for a customer-facing price.
 
     Only a complete, fresh two-camera reading may drive dynamic pricing.
+    Paid reservations whose slots are still physically empty are added to the
+    detected vehicle count because that capacity cannot be sold again. A
+    reserved slot that becomes occupied is counted only by the camera, never
+    twice.
     Missing/stale input returns unavailable instead of manufacturing zero
     demand or reusing stale history.
     """
@@ -5384,7 +5416,17 @@ def _pricing_occupancy_inputs(vehicles_hour=None, lot_capacity=None):
             _refresh_aggregated_state_locked()
             snapshot = dict(state)
         if snapshot.get("combined_complete"):
-            return max(0.0, float(snapshot.get("occupied") or 0.0)), capacity, True
+            physical_occupied = max(0.0, float(snapshot.get("occupied") or 0.0))
+            zones = snapshot.get("zones") or {}
+            paid_reserved = query(
+                "SELECT slot_id FROM parking_reservations "
+                "WHERE status='reserved' AND payment_status='paid' AND expires_at>NOW()"
+            )
+            committed_empty = sum(
+                1 for row in paid_reserved if zones.get(row.get("slot_id")) is False
+            )
+            effective_demand = min(float(capacity), physical_occupied + committed_empty)
+            return effective_demand, capacity, True
     except Exception as exc:
         print(f"[pricing] live occupancy unavailable: {exc}")
 
@@ -5445,7 +5487,7 @@ def _effective_duration_pricing(vehicles_hour=None, lot_capacity=None, when=None
             "combined_multiplier": round(combined_multiplier, 4),
         },
         "pricing_note": (
-            "Demand pricing is based on complete current occupancy and day type."
+            "Demand pricing is based on complete current occupancy, paid reserved capacity, and day type."
             if available
             else "Both cameras are required; normal base prices are in use."
         ),
