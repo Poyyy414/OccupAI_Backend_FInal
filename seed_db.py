@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 
 import bcrypt
 
-from backend.db import execute, query
+from backend.db import execute, get_db, query
 
 DEMO_DRIVERS = [
     ("Juan", "Dela Cruz", "juan.delacruz@example.com", "Driver123"),
@@ -79,13 +79,26 @@ def seed_drivers():
             driver_ids.append(rows[0]["user_id"])
             continue
         pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-        rows = query(
-            "INSERT INTO users (first_name,last_name,email,password_hash,role) "
-            "VALUES (%s,%s,%s,%s,'driver') RETURNING user_id",
-            (first, last, email, pw_hash),
-        )
-        user_id = rows[0]["user_id"]
-        execute("INSERT INTO drivers(user_id) VALUES(%s) ON CONFLICT DO NOTHING", (user_id,))
+        conn = get_db()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "INSERT INTO users (first_name,last_name,email,password_hash,role) "
+                "VALUES (%s,%s,%s,%s,'driver') RETURNING user_id",
+                (first, last, email, pw_hash),
+            )
+            user_id = cur.fetchone()["user_id"]
+            cur.execute(
+                "INSERT INTO drivers(user_id) VALUES(%s) ON CONFLICT DO NOTHING",
+                (user_id,),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cur.close()
+            conn.close()
         driver_ids.append(user_id)
         print(f"[seed] Created demo driver {email} (password: {password})")
     return driver_ids
