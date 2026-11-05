@@ -44,9 +44,8 @@ def test_stream_token_is_purpose_limited(monkeypatch):
 
 def test_driver_history_reports_server_total_not_page_length(monkeypatch):
     def fake_query(sql, params=None):
-        if "COUNT(*)" in sql:
-            return [{"total": 7}]
         return [{
+            "total_count": 7,
             "payment_id": 1,
             "vehicle_type": "car",
             "duration_type": "daily",
@@ -102,6 +101,7 @@ def test_driver_payment_plan_reports_duration_expiry_and_remaining_time(monkeypa
         "paid_at": started,
         "expires_at": expires,
     }])
+    m._invalidate_driver_payment_plan_cache(9)
 
     plan = m._driver_payment_plan(9)
 
@@ -110,6 +110,32 @@ def test_driver_payment_plan_reports_duration_expiry_and_remaining_time(monkeypa
     assert plan["vehicle_type"] == "car"
     assert plan["expires_at"] == expires.isoformat()
     assert 6 * 86400 < plan["remaining_seconds"] <= 7 * 86400
+
+
+def test_driver_payment_plan_cache_is_scoped_by_user(monkeypatch):
+    calls = []
+    started = datetime.now(m.PH_TZ)
+
+    def fake_query(_sql, params=None):
+        user_id = int(params[0])
+        calls.append(user_id)
+        return [{
+            "payment_id": user_id,
+            "vehicle_type": "car",
+            "duration_type": "daily",
+            "final_amount_php": 50,
+            "payment_method": "cash",
+            "paid_at": started,
+            "expires_at": started + timedelta(days=1),
+        }]
+
+    monkeypatch.setattr(m, "query", fake_query)
+    m._invalidate_driver_payment_plan_cache()
+
+    assert m._driver_payment_plan(7)["payment_id"] == 7
+    assert m._driver_payment_plan(8)["payment_id"] == 8
+    assert m._driver_payment_plan(7)["payment_id"] == 7
+    assert calls == [7, 8]
 
 
 def test_admin_payment_email_links_registered_driver(monkeypatch):
@@ -174,6 +200,16 @@ def test_html_response_gets_nonce_csp_and_security_headers():
     assert expected_handler_hash in event_policy
     assert response.headers['x-content-type-options'] == 'nosniff'
     assert response.headers['x-frame-options'] == 'DENY'
+
+
+def test_api_responses_are_not_browser_cached_and_include_safe_timing_headers():
+    with TestClient(m.app) as client:
+        response = client.get('/api/stats')
+
+    assert response.status_code == 401
+    assert response.headers['cache-control'] == 'no-store'
+    assert response.headers['server-timing'].startswith('app;dur=')
+    assert response.headers['x-request-id']
 
 
 def test_password_reset_pages_and_logo_are_served():

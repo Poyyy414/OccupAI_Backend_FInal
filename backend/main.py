@@ -29,7 +29,7 @@ from fastapi.responses import JSONResponse, FileResponse, StreamingResponse, HTM
 from fastapi.staticfiles import StaticFiles
 import httpx
 from pydantic import BaseModel
-from backend.db     import get_db, query, execute
+from backend.db     import get_db, query, execute, pool_metrics
 from backend.models import (
     UserRegister,
     RegistrationCodeRequest,
@@ -71,6 +71,10 @@ STREAM_PORT  = int(os.getenv("STREAM_PORT", "8001"))
 OFFICIAL_CAR_CAPACITY = 10
 OFFICIAL_MOTORCYCLE_CAPACITY = 20
 OFFICIAL_LOT_CAPACITY = OFFICIAL_CAR_CAPACITY + OFFICIAL_MOTORCYCLE_CAPACITY
+try:
+    REQUEST_SLOW_MS = max(1.0, float(os.getenv("REQUEST_SLOW_MS", "1000")))
+except (TypeError, ValueError):
+    REQUEST_SLOW_MS = 1000.0
 # Capacity is an operational invariant. Camera connectivity and demand never
 # change the official number of sellable spaces.
 LOT_CAPACITY = OFFICIAL_LOT_CAPACITY
@@ -1529,6 +1533,10 @@ def _ensure_payment_table():
             "ON parking_payments (paid_at DESC)"
         )
         execute("ALTER TABLE parking_payments ADD COLUMN IF NOT EXISTS user_id INTEGER")
+        execute(
+            "CREATE INDEX IF NOT EXISTS idx_parking_payments_user_paid_at_desc "
+            "ON parking_payments (user_id, paid_at DESC)"
+        )
         execute("ALTER TABLE parking_payments ADD COLUMN IF NOT EXISTS vehicle_type TEXT NOT NULL DEFAULT 'car'")
         execute("ALTER TABLE parking_payments ADD COLUMN IF NOT EXISTS discount_id_number TEXT")
         execute("ALTER TABLE parking_payments ADD COLUMN IF NOT EXISTS external_reference TEXT")
@@ -1768,6 +1776,8 @@ app.add_middleware(
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
+    request_started = time.monotonic()
+    request_id = secrets.token_hex(8)
     csp_nonce = base64.b64encode(secrets.token_bytes(16)).decode("ascii").rstrip("=")
     response = await call_next(request)
     if response.headers.get("content-type", "").lower().startswith("text/html"):
@@ -1785,6 +1795,7 @@ async def security_headers(request: Request, call_next):
             background=getattr(response, "background", None),
         )
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Request-ID", request_id)
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     response.headers.setdefault(
@@ -1809,6 +1820,24 @@ async def security_headers(request: Request, call_next):
         response.headers.setdefault(
             "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
         )
+    duration_ms = (time.monotonic() - request_started) * 1000
+    response.headers.setdefault("Server-Timing", f"app;dur={duration_ms:.1f}")
+    if request.url.path.startswith(("/api/", "/auth/")):
+        # Authenticated and live operational data must never be shared by a
+        # browser/proxy cache. Small server-side caches below contain only
+        # lot-wide data and add user-specific fields after authorization.
+        response.headers.setdefault("Cache-Control", "no-store")
+    if duration_ms >= REQUEST_SLOW_MS or response.status_code >= 500:
+        print(json.dumps({
+            "component": "http",
+            "event": "slow_request" if duration_ms >= REQUEST_SLOW_MS else "server_error",
+            "request_id": request_id,
+            "method": request.method,
+            "path": request.url.path,
+            "status": response.status_code,
+            "duration_ms": round(duration_ms, 3),
+            "db_pool": pool_metrics(),
+        }, sort_keys=True))
     return response
 
 
@@ -3089,35 +3118,32 @@ def _payment_revenue_dashboard():
     """)
     summary = summary_rows[0] if summary_rows else {}
 
-    vehicle_rows = query("""
-        SELECT vehicle_type,
+    # Four small categorical breakdowns previously required four sequential
+    # network round trips to PostgreSQL. UNION ALL preserves the same output
+    # while scanning/returning them in one request.
+    breakdown_rows = query("""
+        SELECT 'vehicle' AS dimension, COALESCE(vehicle_type, 'car') AS bucket,
                COALESCE(SUM(final_amount_php), 0) AS revenue,
-               COUNT(*) AS transaction_count
-        FROM parking_payments
-        GROUP BY vehicle_type
+               0::numeric AS discount, COUNT(*) AS transaction_count
+        FROM parking_payments GROUP BY vehicle_type
+        UNION ALL
+        SELECT 'payment_method', COALESCE(payment_method, 'cash'),
+               COALESCE(SUM(final_amount_php), 0), 0::numeric, COUNT(*)
+        FROM parking_payments GROUP BY payment_method
+        UNION ALL
+        SELECT 'discount', COALESCE(discount_type, 'none'),
+               COALESCE(SUM(final_amount_php), 0),
+               COALESCE(SUM(discount_amount_php), 0), COUNT(*)
+        FROM parking_payments GROUP BY discount_type
+        UNION ALL
+        SELECT 'duration', COALESCE(duration_type, 'daily'),
+               COALESCE(SUM(final_amount_php), 0), 0::numeric, COUNT(*)
+        FROM parking_payments GROUP BY duration_type
     """)
-    payment_method_rows = query("""
-        SELECT payment_method,
-               COALESCE(SUM(final_amount_php), 0) AS revenue,
-               COUNT(*) AS transaction_count
-        FROM parking_payments
-        GROUP BY payment_method
-    """)
-    discount_rows = query("""
-        SELECT discount_type,
-               COALESCE(SUM(final_amount_php), 0) AS revenue,
-               COALESCE(SUM(discount_amount_php), 0) AS discount,
-               COUNT(*) AS transaction_count
-        FROM parking_payments
-        GROUP BY discount_type
-    """)
-    duration_rows = query("""
-        SELECT duration_type,
-               COALESCE(SUM(final_amount_php), 0) AS revenue,
-               COUNT(*) AS transaction_count
-        FROM parking_payments
-        GROUP BY duration_type
-    """)
+    vehicle_rows = [row for row in breakdown_rows if row.get("dimension") == "vehicle"]
+    payment_method_rows = [row for row in breakdown_rows if row.get("dimension") == "payment_method"]
+    discount_rows = [row for row in breakdown_rows if row.get("dimension") == "discount"]
+    duration_rows = [row for row in breakdown_rows if row.get("dimension") == "duration"]
 
     daily_rows = query("""
         SELECT
@@ -3209,21 +3235,21 @@ def _payment_revenue_dashboard():
     total_count = _row_int(summary, "total_count")
 
     by_vehicle = {
-        (row.get("vehicle_type") or "car"): {
+        (row.get("bucket") or "car"): {
             "revenue_php": _row_float(row, "revenue"),
             "transaction_count": _row_int(row, "transaction_count"),
         }
         for row in vehicle_rows
     }
     by_payment_method = {
-        (row.get("payment_method") or "cash"): {
+        (row.get("bucket") or "cash"): {
             "revenue_php": _row_float(row, "revenue"),
             "transaction_count": _row_int(row, "transaction_count"),
         }
         for row in payment_method_rows
     }
     by_discount = {
-        (row.get("discount_type") or "none"): {
+        (row.get("bucket") or "none"): {
             "revenue_php": _row_float(row, "revenue"),
             "discount_php": _row_float(row, "discount"),
             "transaction_count": _row_int(row, "transaction_count"),
@@ -3231,7 +3257,7 @@ def _payment_revenue_dashboard():
         for row in discount_rows
     }
     by_duration = {
-        (row.get("duration_type") or "daily"): {
+        (row.get("bucket") or "daily"): {
             "revenue_php": _row_float(row, "revenue"),
             "transaction_count": _row_int(row, "transaction_count"),
         }
@@ -3334,6 +3360,7 @@ def _record_parking_payment(payload, verified_by_user_id=None, external_referenc
         if row is None:
             raise RuntimeError("Payment insert returned no row")
         conn.commit()
+        _invalidate_driver_payment_plan_cache(payload.user_id)
         _invalidate_payment_revenue_dashboard_cache()
         paid_at_dt = _coerce_datetime(row["paid_at"])
         expires_at_dt = _payment_expiry_at(paid_at_dt, row["duration_type"])
@@ -3464,23 +3491,95 @@ def _reservation_slot_role(slot_id: str):
     raise HTTPException(400, "Choose a configured car or motorcycle parking slot")
 
 
-def _expire_reservations():
-    """Expiry is durable and runs before every reservation read/write."""
-    execute(
-        "UPDATE parking_reservations SET status='expired' WHERE "
-        "(status='pending_payment' AND hold_expires_at <= NOW()) OR "
-        "(status IN ('reserved', 'occupied') AND expires_at <= NOW())"
-    )
+RESERVATION_CLAIMS_CACHE_TTL_SECONDS = max(
+    0.25, float(os.getenv("RESERVATION_CLAIMS_CACHE_TTL_SECONDS", "1.0"))
+)
+RESERVATION_EXPIRY_CHECK_SECONDS = max(
+    1.0, float(os.getenv("RESERVATION_EXPIRY_CHECK_SECONDS", "5.0"))
+)
+_reservation_cache_lock = threading.Lock()
+_reservation_cache_refresh_lock = threading.Lock()
+_reservation_claims_cache = {"computed_at": 0.0, "rows": None}
+_reservation_expiry_lock = threading.Lock()
+_reservation_expiry_last_check = 0.0
+
+
+def _invalidate_reservation_cache():
+    with _reservation_cache_lock:
+        _reservation_claims_cache["computed_at"] = 0.0
+        _reservation_claims_cache["rows"] = None
+
+
+def _active_reservation_claims():
+    """Return a one-second shared snapshot of active slot claims.
+
+    Stats, driver summary, reservation UI, pricing, and camera transitions all
+    consume the same internal lot-wide claim set. The short TTL absorbs
+    simultaneous web/mobile polls; every reservation write invalidates it.
+    """
+    now = time.monotonic()
+    with _reservation_cache_lock:
+        rows = _reservation_claims_cache["rows"]
+        if (
+            rows is not None
+            and now - _reservation_claims_cache["computed_at"]
+            < RESERVATION_CLAIMS_CACHE_TTL_SECONDS
+        ):
+            return [dict(row) for row in rows]
+
+    # Single-flight refresh prevents a burst of clients from issuing the same
+    # query concurrently after expiry.
+    with _reservation_cache_refresh_lock:
+        now = time.monotonic()
+        with _reservation_cache_lock:
+            rows = _reservation_claims_cache["rows"]
+            if (
+                rows is not None
+                and now - _reservation_claims_cache["computed_at"]
+                < RESERVATION_CLAIMS_CACHE_TTL_SECONDS
+            ):
+                return [dict(row) for row in rows]
+        rows = query(
+            "SELECT slot_id, status, user_id, duration_type, payment_status "
+            "FROM parking_reservations "
+            "WHERE (status='pending_payment' AND hold_expires_at>NOW()) OR "
+            "(status IN ('reserved', 'occupied') AND expires_at>NOW())"
+        )
+        snapshot = [dict(row) for row in rows]
+        with _reservation_cache_lock:
+            _reservation_claims_cache["computed_at"] = time.monotonic()
+            _reservation_claims_cache["rows"] = snapshot
+        return [dict(row) for row in snapshot]
+
+
+def _expire_reservations(force=False):
+    """Expire durable claims without issuing an UPDATE on every client poll."""
+    global _reservation_expiry_last_check
+    now = time.monotonic()
+    with _reservation_expiry_lock:
+        if not force and now - _reservation_expiry_last_check < RESERVATION_EXPIRY_CHECK_SECONDS:
+            return False
+        affected = execute(
+            "UPDATE parking_reservations SET status='expired' WHERE "
+            "(status='pending_payment' AND hold_expires_at <= NOW()) OR "
+            "(status IN ('reserved', 'occupied') AND expires_at <= NOW())"
+        )
+        _reservation_expiry_last_check = time.monotonic()
+    if affected:
+        _invalidate_reservation_cache()
+    return True
 
 
 def _reservation_expiry_scheduler():
+    # Slot reads already exclude time-expired claims and new holds perform a
+    # synchronous cleanup, so startup does not need to contend with migrations.
     time.sleep(15)
     while True:
         try:
-            _expire_reservations()
+            _expire_reservations(force=True)
         except Exception as exc:
             print(f"[reservation] Expiry check failed: {exc}")
-        time.sleep(15)
+        time.sleep(RESERVATION_EXPIRY_CHECK_SECONDS)
 
 
 def _reservation_public(row):
@@ -3504,14 +3603,10 @@ def _reservation_public(row):
 
 
 def _reservation_slot_statuses(user_id=None):
-    _expire_reservations()
     with state_lock:
         _refresh_aggregated_state_locked()
         zones = dict(state["zones"])
-    active_rows = query(
-        "SELECT slot_id, status, user_id, duration_type, payment_status FROM parking_reservations "
-        "WHERE status IN ('pending_payment', 'reserved', 'occupied')"
-    )
+    active_rows = _active_reservation_claims()
     claims = {row["slot_id"]: row for row in active_rows}
     result = []
     for camera_id, config in CAMERA_ROLE_CONFIG.items():
@@ -3528,6 +3623,9 @@ def _reservation_slot_statuses(user_id=None):
                 "vehicle_type": config["role"],
                 "status": status,
                 "claim_status": claim["status"] if claim else None,
+                "paid_reservation": bool(
+                    claim and claim.get("payment_status") == "paid"
+                ),
                 "dedicated_slot": bool(
                     claim
                     and claim.get("payment_status") == "paid"
@@ -3584,6 +3682,7 @@ def _hold_reservation(user_id, slot_id, duration_type, amount_php, checkout_ref)
         )
         reservation_id = int(cur.fetchone()["reservation_id"])
         conn.commit()
+        _invalidate_reservation_cache()
         return reservation_id
     except HTTPException:
         conn.rollback()
@@ -3607,6 +3706,7 @@ def _release_unpaid_reservation(reservation_id):
         execute("UPDATE parking_reservations SET status='cancelled' "
                 "WHERE reservation_id=%s AND status='pending_payment' AND payment_status='unpaid'",
                 (reservation_id,))
+        _invalidate_reservation_cache()
 
 
 def _update_reservation_arrival(camera_id, zones):
@@ -3618,43 +3718,71 @@ def _update_reservation_arrival(camera_id, zones):
     """
     if not zones:
         return
-    active = query(
-        "SELECT slot_id, duration_type FROM parking_reservations "
-        "WHERE status IN ('reserved', 'occupied') AND slot_id LIKE %s",
-        (camera_id + ":%",),
-    )
+    active = [
+        row for row in _active_reservation_claims()
+        if row.get("status") in {"reserved", "occupied"}
+        and str(row.get("slot_id") or "").startswith(camera_id + ":")
+    ]
     relevant = {row["slot_id"]: row.get("duration_type") for row in active}
     for slot_name, occupied in zones.items():
         slot_id = f"{camera_id}:{slot_name}"
         if slot_id not in relevant:
             continue
+        affected = 0
         if occupied is True:
-            execute("UPDATE parking_reservations SET status='occupied', occupied_at=COALESCE(occupied_at,NOW()), "
-                    "vacant_since=NULL WHERE slot_id=%s AND status='reserved' AND expires_at>NOW()",
-                    (slot_id,))
-            execute("UPDATE parking_reservations SET vacant_since=NULL "
-                    "WHERE slot_id=%s AND status='occupied' AND vacant_since IS NOT NULL",
-                    (slot_id,))
+            affected = execute(
+                "UPDATE parking_reservations SET status='occupied', "
+                "occupied_at=COALESCE(occupied_at,NOW()), vacant_since=NULL "
+                "WHERE slot_id=%s AND status IN ('reserved','occupied') "
+                "AND expires_at>NOW() AND (status='reserved' OR vacant_since IS NOT NULL)",
+                (slot_id,),
+            )
         elif occupied is False:
-            execute("UPDATE parking_reservations SET vacant_since=COALESCE(vacant_since,NOW()) "
-                    "WHERE slot_id=%s AND status='occupied' AND expires_at>NOW()",
-                    (slot_id,))
             if _is_dedicated_reservation(relevant[slot_id]):
-                execute("UPDATE parking_reservations SET status='reserved', vacant_since=NULL "
+                affected = execute(
+                    "UPDATE parking_reservations SET "
+                    "vacant_since=COALESCE(vacant_since,NOW()), "
+                    "status=CASE WHEN vacant_since <= NOW() - INTERVAL '10 seconds' "
+                    "THEN 'reserved' ELSE status END "
                     "WHERE slot_id=%s AND status='occupied' "
-                    "AND duration_type IN ('weekly','monthly') "
-                    "AND vacant_since <= NOW() - INTERVAL '10 seconds' "
-                    "AND expires_at>NOW()",
-                    (slot_id,))
+                    "AND duration_type IN ('weekly','monthly') AND expires_at>NOW() "
+                    "AND (vacant_since IS NULL OR "
+                    "vacant_since <= NOW() - INTERVAL '10 seconds')",
+                    (slot_id,),
+                )
             else:
-                execute("UPDATE parking_reservations SET status='completed', completed_at=NOW() "
-                    "WHERE slot_id=%s AND status='occupied' "
-                    "AND duration_type='daily' "
-                    "AND vacant_since <= NOW() - INTERVAL '10 seconds'",
-                    (slot_id,))
+                affected = execute(
+                    "UPDATE parking_reservations SET "
+                    "vacant_since=COALESCE(vacant_since,NOW()), "
+                    "status=CASE WHEN vacant_since <= NOW() - INTERVAL '10 seconds' "
+                    "THEN 'completed' ELSE status END, "
+                    "completed_at=CASE WHEN vacant_since <= NOW() - INTERVAL '10 seconds' "
+                    "THEN NOW() ELSE completed_at END "
+                    "WHERE slot_id=%s AND status='occupied' AND duration_type='daily' "
+                    "AND (vacant_since IS NULL OR "
+                    "vacant_since <= NOW() - INTERVAL '10 seconds')",
+                    (slot_id,),
+                )
+        if affected:
+            _invalidate_reservation_cache()
 
 
-def _driver_payment_plan(user_id):
+DRIVER_PAYMENT_PLAN_CACHE_TTL_SECONDS = max(
+    1.0, float(os.getenv("DRIVER_PAYMENT_PLAN_CACHE_TTL_SECONDS", "10"))
+)
+_driver_payment_plan_cache_lock = threading.Lock()
+_driver_payment_plan_cache = {}
+
+
+def _invalidate_driver_payment_plan_cache(user_id=None):
+    with _driver_payment_plan_cache_lock:
+        if user_id is None:
+            _driver_payment_plan_cache.clear()
+        else:
+            _driver_payment_plan_cache.pop(int(user_id), None)
+
+
+def _load_driver_payment_plan(user_id):
     if not user_id:
         return None
     rows = query(
@@ -3700,6 +3828,41 @@ def _driver_payment_plan(user_id):
     }
 
 
+def _driver_payment_plan(user_id):
+    """Return a short per-user payment snapshot without cross-user sharing."""
+    if not user_id:
+        return None
+    cache_key = int(user_id)
+    now = time.monotonic()
+    with _driver_payment_plan_cache_lock:
+        entry = _driver_payment_plan_cache.get(cache_key)
+        if entry and now - entry["computed_at"] < DRIVER_PAYMENT_PLAN_CACHE_TTL_SECONDS:
+            plan = dict(entry["value"]) if entry["value"] is not None else None
+        else:
+            plan = None
+            entry = None
+    if entry is None:
+        plan = _load_driver_payment_plan(cache_key)
+        with _driver_payment_plan_cache_lock:
+            if len(_driver_payment_plan_cache) >= 512:
+                oldest_key = min(
+                    _driver_payment_plan_cache,
+                    key=lambda key: _driver_payment_plan_cache[key]["computed_at"],
+                )
+                _driver_payment_plan_cache.pop(oldest_key, None)
+            _driver_payment_plan_cache[cache_key] = {
+                "computed_at": time.monotonic(),
+                "value": dict(plan) if plan is not None else None,
+            }
+    if plan is not None:
+        expires_at = _coerce_datetime(plan["expires_at"])
+        plan["remaining_seconds"] = max(
+            0, int((expires_at - datetime.now(PH_TZ)).total_seconds())
+        )
+        plan["status"] = "active" if plan["remaining_seconds"] > 0 else "expired"
+    return plan
+
+
 @app.get("/api/driver/summary")
 def api_driver_summary(_auth=Depends(require_user)):
     with state_lock:
@@ -3715,16 +3878,22 @@ def api_driver_summary(_auth=Depends(require_user)):
         slot_statuses = _reservation_slot_statuses()
         free = sum(slot["status"] == "available" for slot in slot_statuses)
         reserved = sum(slot["status"] == "reserved" for slot in slot_statuses)
+        paid_reserved = sum(
+            slot["status"] == "reserved" and slot.get("paid_reservation") is True
+            for slot in slot_statuses
+        )
         occupancy_pct = round(float(snapshot.get("occupancy_pct") or (occupied / max(total, 1) * 100)), 1)
     else:
         occupied = None
         free = None
         reserved = None
+        paid_reserved = 0
         occupancy_pct = None
 
-    price = _driver_price_summary(occupied if camera_online else None, total)
+    effective_demand = (occupied + paid_reserved) if camera_online else None
+    price = _driver_price_summary(effective_demand, total)
     duration_pricing = _effective_duration_pricing(
-        occupied if camera_online else None,
+        effective_demand,
         total,
     )
     status_text = "Live parking availability" if camera_online else "Waiting for camera update"
@@ -3960,22 +4129,27 @@ def api_payments_recent(limit: int = 10, offset: int = 0, _admin=Depends(require
     safe_limit = max(1, min(int(limit), 100))
     safe_offset = max(0, int(offset))
 
-    total_rows = query("SELECT COUNT(*) AS total FROM parking_payments")
-    total = _row_int(total_rows[0], "total") if total_rows else 0
-
     rows = query(
         """
-        SELECT payment_id, vehicle_type, duration_type, regular_price_php, discount_type,
-               discount_amount_php, final_amount_php, payment_method, paid_at,
-               discount_id_number, verified_by_user_id
-        FROM parking_payments
-        ORDER BY paid_at DESC
-        LIMIT %s OFFSET %s
+        WITH total AS (
+            SELECT COUNT(*) AS total FROM parking_payments
+        ), page AS (
+            SELECT payment_id, vehicle_type, duration_type, regular_price_php,
+                   discount_type, discount_amount_php, final_amount_php,
+                   payment_method, paid_at, discount_id_number, verified_by_user_id
+            FROM parking_payments
+            ORDER BY paid_at DESC
+            LIMIT %s OFFSET %s
+        )
+        SELECT total.total, page.* FROM total LEFT JOIN page ON TRUE
         """,
         (safe_limit, safe_offset),
     )
+    total = _row_int(rows[0], "total") if rows else 0
     items = []
     for row in rows:
+        if row.get("payment_id") is None:
+            continue
         paid_at = _coerce_datetime(row.get("paid_at"))
         items.append({
             "payment_id": row.get("payment_id"),
@@ -4219,15 +4393,9 @@ def api_driver_history(user_id: int, period: str = "all", limit: int = 50, _auth
         elif period == "month":
             period_filter = "AND paid_at >= DATE_TRUNC('month', NOW() AT TIME ZONE 'Asia/Manila')"
 
-        total_rows = query(f"""
-            SELECT COUNT(*) AS total
-            FROM parking_payments
-            WHERE user_id = %s {period_filter}
-        """, (user_id,))
-        total_sessions = int(total_rows[0]["total"]) if total_rows else 0
-
         rows = query(f"""
             SELECT
+                COUNT(*) OVER() AS total_count,
                 payment_id,
                 vehicle_type,
                 duration_type,
@@ -4249,6 +4417,7 @@ def api_driver_history(user_id: int, period: str = "all", limit: int = 50, _auth
             ORDER BY paid_at DESC
             LIMIT %s
         """, (user_id, safe_limit))
+        total_sessions = _row_int(rows[0], "total_count") if rows else 0
 
         records = []
         for r in rows:
@@ -4729,6 +4898,8 @@ def _finalize_paid_reservation(checkout):
             if cur.rowcount != 1:
                 raise RuntimeError("Approved discount verification could not be consumed")
         conn.commit()
+        _invalidate_reservation_cache()
+        _invalidate_driver_payment_plan_cache(reservation["user_id"])
         _invalidate_payment_revenue_dashboard_cache()
         return {"ok": True, "payment_id": payment["payment_id"],
                 "reservation_id": reservation["reservation_id"],
@@ -5418,10 +5589,11 @@ def _pricing_occupancy_inputs(vehicles_hour=None, lot_capacity=None):
         if snapshot.get("combined_complete"):
             physical_occupied = max(0.0, float(snapshot.get("occupied") or 0.0))
             zones = snapshot.get("zones") or {}
-            paid_reserved = query(
-                "SELECT slot_id FROM parking_reservations "
-                "WHERE status='reserved' AND payment_status='paid' AND expires_at>NOW()"
-            )
+            paid_reserved = [
+                row for row in _active_reservation_claims()
+                if row.get("status") == "reserved"
+                and row.get("payment_status") == "paid"
+            ]
             committed_empty = sum(
                 1 for row in paid_reserved if zones.get(row.get("slot_id")) is False
             )

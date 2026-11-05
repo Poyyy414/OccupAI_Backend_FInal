@@ -43,7 +43,7 @@ def test_slot_colors_prioritize_physical_occupancy_and_fail_closed(monkeypatch):
         m.camera_states["cars"] = _camera("car", 10, "C", occupied={"C02"})
         m.camera_states["motorcycles"] = _camera("motorcycle", 20, "M")
         monkeypatch.setattr(m, "_expire_reservations", lambda: None)
-        monkeypatch.setattr(m, "query", lambda *a, **kw: [
+        monkeypatch.setattr(m, "_active_reservation_claims", lambda: [
             {"slot_id": "cars:C01", "status": "reserved", "user_id": 7},
             {"slot_id": "cars:C02", "status": "reserved", "user_id": 8},
         ])
@@ -186,7 +186,11 @@ def test_repeated_payment_callback_does_not_insert_another_payment(monkeypatch):
 
 def test_camera_arrival_and_departure_transitions(monkeypatch):
     statements = []
-    monkeypatch.setattr(m, "query", lambda *a, **kw: [{"slot_id": "cars:C01"}])
+    monkeypatch.setattr(
+        m,
+        "_active_reservation_claims",
+        lambda: [{"slot_id": "cars:C01", "status": "reserved", "duration_type": "daily"}],
+    )
     monkeypatch.setattr(m, "execute", lambda sql, params=None: statements.append((sql, params)))
     m._update_reservation_arrival("cars", {"C01": True, "C02": True})
     assert any("status='occupied'" in sql for sql, _ in statements)
@@ -194,22 +198,22 @@ def test_camera_arrival_and_departure_transitions(monkeypatch):
     statements.clear()
     m._update_reservation_arrival("cars", {"C01": False})
     assert any("vacant_since=COALESCE" in sql for sql, _ in statements)
-    assert any("status='completed'" in sql for sql, _ in statements)
+    assert any("THEN 'completed'" in sql for sql, _ in statements)
 
 
 def test_dedicated_slot_returns_to_reserved_after_departure(monkeypatch):
     statements = []
     monkeypatch.setattr(
         m,
-        "query",
-        lambda *a, **kw: [{"slot_id": "cars:C01", "duration_type": "weekly"}],
+        "_active_reservation_claims",
+        lambda: [{"slot_id": "cars:C01", "status": "occupied", "duration_type": "weekly"}],
     )
     monkeypatch.setattr(m, "execute", lambda sql, params=None: statements.append((sql, params)))
 
     m._update_reservation_arrival("cars", {"C01": False})
 
-    assert any("status='reserved'" in sql for sql, _ in statements)
-    assert not any("status='completed'" in sql for sql, _ in statements)
+    assert any("THEN 'reserved'" in sql for sql, _ in statements)
+    assert not any("THEN 'completed'" in sql for sql, _ in statements)
 
 
 def test_paid_empty_reservations_count_as_committed_capacity(monkeypatch):
@@ -223,10 +227,10 @@ def test_paid_empty_reservations_count_as_committed_capacity(monkeypatch):
         monkeypatch.setattr(m, "_refresh_aggregated_state_locked", lambda: None)
         monkeypatch.setattr(
             m,
-            "query",
-            lambda *a, **kw: [
-                {"slot_id": "cars:C01"},  # empty paid reservation: add it
-                {"slot_id": "cars:C02"},  # physically occupied: do not double-count
+            "_active_reservation_claims",
+            lambda: [
+                {"slot_id": "cars:C01", "status": "reserved", "payment_status": "paid"},
+                {"slot_id": "cars:C02", "status": "reserved", "payment_status": "paid"},
             ],
         )
 
@@ -238,6 +242,39 @@ def test_paid_empty_reservations_count_as_committed_capacity(monkeypatch):
     finally:
         m.state.clear()
         m.state.update(original)
+
+
+def test_active_reservation_claims_cache_reuses_snapshot_and_returns_copies(monkeypatch):
+    calls = []
+    rows = [{
+        "slot_id": "cars:C01",
+        "status": "reserved",
+        "user_id": 7,
+        "duration_type": "weekly",
+        "payment_status": "paid",
+    }]
+    monkeypatch.setattr(m, "query", lambda *args, **kwargs: calls.append(args) or rows)
+    m._invalidate_reservation_cache()
+
+    first = m._active_reservation_claims()
+    first[0]["status"] = "tampered"
+    second = m._active_reservation_claims()
+
+    assert len(calls) == 1
+    assert second[0]["status"] == "reserved"
+
+
+def test_reservation_cache_invalidation_forces_a_fresh_read(monkeypatch):
+    calls = []
+    monkeypatch.setattr(m, "query", lambda *args, **kwargs: calls.append(args) or [])
+    m._invalidate_reservation_cache()
+
+    m._active_reservation_claims()
+    m._active_reservation_claims()
+    m._invalidate_reservation_cache()
+    m._active_reservation_claims()
+
+    assert len(calls) == 2
 
 
 def test_reservation_templates_have_three_slot_colors():

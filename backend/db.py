@@ -1,3 +1,4 @@
+import json
 import os
 import threading
 import time
@@ -29,9 +30,10 @@ def _safe_float(value, default):
 
 
 DB_CONNECT_TIMEOUT = _safe_int(os.getenv("DB_CONNECT_TIMEOUT", "5"), 5)
-DB_POOL_MIN = _safe_int(os.getenv("DB_POOL_MIN", "1"), 1)
-DB_POOL_MAX = _safe_int(os.getenv("DB_POOL_MAX", "10"), 10)
+DB_POOL_MIN = max(1, _safe_int(os.getenv("DB_POOL_MIN", "1"), 1))
+DB_POOL_MAX = max(DB_POOL_MIN, _safe_int(os.getenv("DB_POOL_MAX", "10"), 10))
 DB_POOL_WAIT_SECONDS = max(0.1, _safe_float(os.getenv("DB_POOL_WAIT_SECONDS", "3"), 3.0))
+DB_SLOW_QUERY_MS = max(1.0, _safe_float(os.getenv("DB_SLOW_QUERY_MS", "500"), 500.0))
 
 
 def _current_dsn():
@@ -68,33 +70,63 @@ def _database_error_detail(exc):
     return "Database connection failed. Check DATABASE_URL and database network access."
 
 
+class _PooledConnectionHandle:
+    """Connection-compatible handle whose close() returns it to the pool."""
+
+    def __init__(self, connection):
+        self._connection = connection
+        self._released = False
+
+    def __getattr__(self, name):
+        return getattr(self._connection, name)
+
+    def close(self):
+        if not self._released:
+            self._released = True
+            _release(self._connection)
+
+
 def get_db():
-    """Open a standalone connection. Caller owns its lifecycle (commit/rollback/close)."""
-    dsn = _current_dsn()
-    if not dsn:
-        raise HTTPException(status_code=503, detail="DATABASE_URL is not configured.")
-    try:
-        return psycopg2.connect(
-            dsn,
-            cursor_factory=psycopg2.extras.RealDictCursor,
-            connect_timeout=DB_CONNECT_TIMEOUT,
-        )
-    except psycopg2.OperationalError as exc:
-        raise HTTPException(status_code=503, detail=_database_error_detail(exc)) from exc
-    except psycopg2.Error as exc:
-        raise HTTPException(status_code=503, detail="Database connection failed.") from exc
+    """Borrow a pooled connection for a caller-managed short transaction."""
+    return _PooledConnectionHandle(_borrow())
 
 
 # ── Pooled path used internally by query()/execute() ──────────────────────
-# Kept separate from get_db() so existing callers that manage their own
-# connection (open it, run several statements, commit/rollback, close it
-# themselves — e.g. payment/registration flows) are unaffected: mixing a
-# pool with connections callers close directly would corrupt the pool's
-# bookkeeping (a connection closed by the caller instead of returned via
-# putconn() looks "still borrowed" forever).
+# query()/execute() and caller-managed payment/registration transactions share
+# one bounded pool. get_db() wraps close() so existing transaction code returns
+# rather than physically closes its borrowed connection.
 _pool_lock = threading.Lock()
 _pool = None
 _pool_dsn = None
+_pool_metrics_lock = threading.Lock()
+_pool_metrics = {
+    "borrow_count": 0,
+    "borrow_wait_ms_total": 0.0,
+    "borrow_wait_ms_max": 0.0,
+    "borrow_timeouts": 0,
+    "in_use": 0,
+    "in_use_max": 0,
+}
+
+
+def _structured_db_log(event, **fields):
+    """Emit operational metadata without SQL text, parameters, or credentials."""
+    print(json.dumps({"component": "database", "event": event, **fields}, sort_keys=True))
+
+
+def pool_metrics():
+    """Return a safe snapshot for diagnostics and performance tests."""
+    with _pool_metrics_lock:
+        snapshot = dict(_pool_metrics)
+    count = int(snapshot["borrow_count"])
+    snapshot["borrow_wait_ms_avg"] = round(
+        float(snapshot["borrow_wait_ms_total"]) / count, 3
+    ) if count else 0.0
+    snapshot["borrow_wait_ms_total"] = round(float(snapshot["borrow_wait_ms_total"]), 3)
+    snapshot["borrow_wait_ms_max"] = round(float(snapshot["borrow_wait_ms_max"]), 3)
+    snapshot["pool_min"] = DB_POOL_MIN
+    snapshot["pool_max"] = DB_POOL_MAX
+    return snapshot
 
 
 def _get_pool():
@@ -124,15 +156,35 @@ def _get_pool():
 
 def _borrow():
     """Borrow a connection, absorbing short request bursts before failing."""
-    deadline = time.monotonic() + DB_POOL_WAIT_SECONDS
+    started = time.monotonic()
+    deadline = started + DB_POOL_WAIT_SECONDS
     while True:
         pool = _get_pool()
         try:
-            return pool.getconn()
+            conn = pool.getconn()
+            wait_ms = (time.monotonic() - started) * 1000
+            with _pool_metrics_lock:
+                _pool_metrics["borrow_count"] += 1
+                _pool_metrics["borrow_wait_ms_total"] += wait_ms
+                _pool_metrics["borrow_wait_ms_max"] = max(
+                    _pool_metrics["borrow_wait_ms_max"], wait_ms
+                )
+                _pool_metrics["in_use"] += 1
+                _pool_metrics["in_use_max"] = max(
+                    _pool_metrics["in_use_max"], _pool_metrics["in_use"]
+                )
+            return conn
         except psycopg2.OperationalError as exc:
             raise HTTPException(status_code=503, detail=_database_error_detail(exc)) from exc
         except psycopg2.pool.PoolError as exc:
             if time.monotonic() >= deadline:
+                with _pool_metrics_lock:
+                    _pool_metrics["borrow_timeouts"] += 1
+                _structured_db_log(
+                    "pool_timeout",
+                    wait_ms=round((time.monotonic() - started) * 1000, 3),
+                    pool_max=DB_POOL_MAX,
+                )
                 raise HTTPException(
                     status_code=503,
                     detail="Database is busy. Please try again shortly.",
@@ -149,10 +201,14 @@ def _release(conn):
             conn.close()
         except Exception:
             pass
+    finally:
+        with _pool_metrics_lock:
+            _pool_metrics["in_use"] = max(0, _pool_metrics["in_use"] - 1)
 
 
 def query(sql, params=None, fetch="all"):
     """Run a SELECT and return all rows."""
+    started = time.monotonic()
     conn = _borrow()
     cur = None
     try:
@@ -174,16 +230,24 @@ def query(sql, params=None, fetch="all"):
                 cur.close()
         finally:
             _release(conn)
+        duration_ms = (time.monotonic() - started) * 1000
+        if duration_ms >= DB_SLOW_QUERY_MS:
+            _structured_db_log(
+                "slow_operation", operation="query", duration_ms=round(duration_ms, 3)
+            )
 
 
 def execute(sql, params=None):
     """Run an INSERT/UPDATE/DELETE and commit."""
+    started = time.monotonic()
     conn = _borrow()
     cur = None
     try:
         cur = conn.cursor()
         cur.execute(sql, params or ())
+        affected = cur.rowcount
         conn.commit()
+        return affected
     except psycopg2.Error as exc:
         conn.rollback()
         print(f"[DB] execute failed: {exc}")
@@ -194,3 +258,8 @@ def execute(sql, params=None):
                 cur.close()
         finally:
             _release(conn)
+        duration_ms = (time.monotonic() - started) * 1000
+        if duration_ms >= DB_SLOW_QUERY_MS:
+            _structured_db_log(
+                "slow_operation", operation="execute", duration_ms=round(duration_ms, 3)
+            )
