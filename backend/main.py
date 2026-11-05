@@ -544,10 +544,12 @@ _HTML_EVENT_ATTRIBUTE_RE = re.compile(
     re.DOTALL,
 )
 
+_TRUSTED_EVENT_TEMPLATES = ("dashboard.html", "driver.html", "login.html", "register.html")
+
 
 def _trusted_inline_event_hashes():
     hashes = set()
-    for template_name in ("dashboard.html", "driver.html", "login.html", "register.html"):
+    for template_name in _TRUSTED_EVENT_TEMPLATES:
         try:
             template = (TEMPLATE_DIR / template_name).read_bytes()
         except OSError:
@@ -559,6 +561,32 @@ def _trusted_inline_event_hashes():
             digest = base64.b64encode(hashlib.sha256(handler).digest()).decode("ascii")
             hashes.add(f"'sha256-{digest}'")
     return " ".join(sorted(hashes))
+
+
+def _trusted_template_signature():
+    signature = []
+    for template_name in _TRUSTED_EVENT_TEMPLATES:
+        try:
+            stat = (TEMPLATE_DIR / template_name).stat()
+        except OSError:
+            signature.append((template_name, None, None))
+        else:
+            signature.append((template_name, stat.st_mtime_ns, stat.st_size))
+    return tuple(signature)
+
+
+# Recompute only when a template file actually changes. Without this, editing
+# dashboard.html left the new inline handlers out of the CSP allowlist until
+# the server was restarted, so fresh buttons silently stopped responding.
+_INLINE_EVENT_HASH_CACHE = {"signature": None, "hashes": ""}
+
+
+def trusted_inline_event_hashes():
+    signature = _trusted_template_signature()
+    if _INLINE_EVENT_HASH_CACHE["signature"] != signature:
+        _INLINE_EVENT_HASH_CACHE["signature"] = signature
+        _INLINE_EVENT_HASH_CACHE["hashes"] = _trusted_inline_event_hashes()
+    return _INLINE_EVENT_HASH_CACHE["hashes"]
 
 
 TRUSTED_INLINE_EVENT_HASHES = _trusted_inline_event_hashes()
@@ -1805,6 +1833,7 @@ async def security_headers(request: Request, call_next):
     # policy still blocks object/plugin injection, framing, and unexpected
     # origins; moving those inline blocks to nonce-bearing external bundles is
     # tracked as the final CSP tightening step.
+    inline_event_hashes = trusted_inline_event_hashes()
     response.headers.setdefault(
         "Content-Security-Policy",
         "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; "
@@ -1812,8 +1841,8 @@ async def security_headers(request: Request, call_next):
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
         "font-src 'self' data: https://fonts.gstatic.com; "
         f"script-src 'self' 'nonce-{csp_nonce}' 'unsafe-hashes' https://cdn.jsdelivr.net "
-        f"{TRUSTED_INLINE_EVENT_HASHES}; "
-        f"script-src-attr 'unsafe-hashes' {TRUSTED_INLINE_EVENT_HASHES}; "
+        f"{inline_event_hashes}; "
+        f"script-src-attr 'unsafe-hashes' {inline_event_hashes}; "
         "connect-src 'self'; frame-src 'self' https://checkout.paymongo.com;",
     )
     if DEPLOY_MODE != "local":
@@ -2746,6 +2775,10 @@ def _dynamic_price_formula(
 
 
 _weekday_revenue_cache: dict = {}  # capacity -> (computed_at, weekday_revenue, today_revenue)
+
+# Display order used for weekday lists (busy/quiet days) on the dashboard.
+_WEEKDAY_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+_WEEKDAY_INDEX = {day: i for i, day in enumerate(_WEEKDAY_ORDER)}
 
 def _training_weekday_revenue_forecast(capacity=None):
     capacity = max(1, int(capacity or _active_slot_capacity(LOT_CAPACITY)))
@@ -4070,9 +4103,9 @@ def api_predictions(_auth=Depends(require_user)):
         if days_with_revenue:
             avg_rev = sum(days_with_revenue.values()) / len(days_with_revenue)
             busy_days  = sorted([d for d, v in days_with_revenue.items() if v >= avg_rev],
-                                key=lambda d: -days_with_revenue[d])
+                                key=lambda d: _WEEKDAY_INDEX.get(d, len(_WEEKDAY_ORDER)))
             quiet_days = sorted([d for d, v in weekday_revenue.items() if v < avg_rev],
-                                key=lambda d: weekday_revenue.get(d, 0))
+                                key=lambda d: _WEEKDAY_INDEX.get(d, len(_WEEKDAY_ORDER)))
         else:
             busy_days  = []
             quiet_days = []
