@@ -102,7 +102,7 @@ def test_discount_verification_controls_exist_in_driver_and_admin_ui():
     admin = (root / "template" / "dashboard.html").read_text(encoding="utf-8")
 
     assert 'capture="environment"' in driver
-    assert "Submit ID for owner approval" in driver
+    assert "Send ID for approval" in driver
     assert "discount_verification_id" in driver
     assert "PWD / Senior ID Review" in admin
     assert "reviewDiscountVerification" in admin

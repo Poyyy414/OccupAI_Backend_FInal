@@ -11,8 +11,8 @@ def test_web_dashboard_keeps_capacity_and_hides_unavailable_occupancy():
     assert "complete ? free : '--'" in html
     assert "s.combined_complete === true" in html
     assert "setText('predFullCurrentOcc', '--')" in html
-    assert "Both camera zones are Unknown. Official capacity remains 30." in html
-    assert "Partial data is not shown as complete lot occupancy." in html
+    assert "Neither camera is connected. The parking area still has 30 total spaces." in html
+    assert "Parking totals will appear when both are ready." in html
 
 
 def test_settings_use_one_duration_based_price_editor():

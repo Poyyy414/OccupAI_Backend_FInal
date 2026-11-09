@@ -341,7 +341,7 @@ def test_driver_template_separates_reservation_and_actual_parking_payment():
     driver = (m.TEMPLATE_DIR / "driver.html").read_text(encoding="utf-8")
     assert "payment_purpose: 'reservation'" in driver
     assert "payment_purpose: 'parking'" in driver
-    assert "Actual parking payment" in driver
-    assert "does not hold or reserve a slot" in driver
-    assert "Weekly · dedicated slot" in driver
+    assert "Pay for parking without a booking" in driver
+    assert "does not save a parking space" in driver
+    assert "One week · same space" in driver
     assert "reservation.dedicated_slot" in driver

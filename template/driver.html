@@ -17,10 +17,10 @@
       --surface-2: rgba(255, 255, 255, .72);
       --ink: #14202c;
       --muted: #607086;
-      --muted-2: #8794a6;
+      --muted-2: #64748b;
       --line: rgba(150, 165, 185, .48);
-      --green: #22c996;
-      --green-dark: #0f9f73;
+      --green: #047857;
+      --green-dark: #047857;
       --green-soft: rgba(34, 201, 150, .14);
       --blue: #4f8fe8;
       --orange: #f4a261;
@@ -753,7 +753,7 @@
         <div class="brand-mark"><img src="/static/occupai_logo.png" alt="OccupAI logo" /></div>
         <div>
           <div class="brand-name">OccupAI</div>
-          <div class="brand-meta">Driver parking view</div>
+          <div class="brand-meta">Parking for drivers</div>
         </div>
       </div>
       <div class="actions">
@@ -789,7 +789,7 @@
               <div class="label">Open parking spaces</div>
               <div class="big-number" id="availableNumber">--</div>
               <div class="big-sub" id="availableSub">Checking parking area</div>
-              <p class="detail-line" id="availabilityDetail">Waiting for live occupancy.</p>
+              <p class="detail-line" id="availabilityDetail">Waiting for the parking cameras.</p>
             </div>
 
             <div>
@@ -801,12 +801,12 @@
 
           <div class="meters">
             <div class="metric"><span>Total spaces</span><strong id="totalSpaces">--</strong></div>
-            <div class="metric"><span>Occupied</span><strong id="occupiedSpaces">--</strong></div>
-            <div class="metric"><span>Occupancy</span><strong id="occupancyPct">--</strong></div>
+            <div class="metric"><span>In use</span><strong id="occupiedSpaces">--</strong></div>
+            <div class="metric"><span>Spaces used</span><strong id="occupancyPct">--</strong></div>
           </div>
-          <div class="reservation-info" id="selectedSlotInfo">Select a green slot. Daily is a single parking session; weekly and monthly are dedicated-slot leases that keep the chosen slot assigned until expiry.</div>
+          <div class="reservation-info" id="selectedSlotInfo">Choose a green space. A daily booking is for one visit. Weekly and monthly bookings keep the same space for you until the end date.</div>
           <div class="reservation-controls">
-            <div><label for="reservationDuration">Reservation plan</label><select class="gcash-select" id="reservationDuration" onchange="updateReservationQuote()"><option value="daily">Daily · single session</option><option value="weekly">Weekly · dedicated slot</option><option value="monthly">Monthly · dedicated slot</option></select></div>
+            <div><label for="reservationDuration">How long do you need the space?</label><select class="gcash-select" id="reservationDuration" onchange="updateReservationQuote()"><option value="daily">One visit</option><option value="weekly">One week · same space</option><option value="monthly">One month · same space</option></select></div>
             <div><label for="reservationMobile">GCash mobile number</label><input class="gcash-select" id="reservationMobile" type="tel" inputmode="numeric" autocomplete="tel-national" placeholder="09XXXXXXXXX" maxlength="11" /></div>
             <button class="gcash-btn" type="button" id="reservationPayButton" onclick="payForReservation()" disabled>Select a slot</button>
           </div>
@@ -839,8 +839,8 @@
             <p class="detail-line" id="priceNote">Checking current rate.</p>
 
             <div class="gcash-section" id="gcashSection" style="display:none">
-              <div class="label">Actual parking payment</div>
-              <p class="detail-line">Use this after parking without a reservation. This payment does not hold or reserve a slot.</p>
+              <div class="label">Pay for parking without a booking</div>
+              <p class="detail-line">Use this if you parked without booking first. This payment does not save a parking space.</p>
               <label>Paying for</label>
               <div class="gcash-vehicle-label" id="gcashVehicleLabel">Car</div>
               <label>Duration</label>
@@ -866,8 +866,8 @@
                 <div class="discount-verification-box">
                   <label for="gcashDiscountImage">Capture or upload the front of your ID</label>
                   <input class="gcash-select" id="gcashDiscountImage" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" />
-                  <button class="gcash-btn" id="discountVerificationBtn" type="button" onclick="submitDiscountVerification()">Submit ID for owner approval</button>
-                  <div class="discount-verification-status" id="discountVerificationStatus">Upload your ID before paying with the discount.</div>
+                  <button class="gcash-btn" id="discountVerificationBtn" type="button" onclick="submitDiscountVerification()">Send ID for approval</button>
+                  <div class="discount-verification-status" id="discountVerificationStatus">Take or upload a clear photo of your ID. You can pay the discounted price after it is approved.</div>
                 </div>
               </div>
               <button class="gcash-btn" id="gcashBtn" onclick="payWithGcash()">
@@ -897,11 +897,11 @@
               <div class="plan-item"><span>Account email</span><strong id="reservationEmail">--</strong></div>
               <div class="plan-item"><span>Reserved at</span><strong id="reservationDate">--</strong></div>
               <div class="plan-item"><span>Duration</span><strong id="reservationDurationLabel">--</strong></div>
-              <div class="plan-item"><span>Assignment</span><strong id="reservationType">--</strong></div>
+              <div class="plan-item"><span>Booking type</span><strong id="reservationType">--</strong></div>
               <div class="plan-item"><span>Starts</span><strong id="reservationStarts">--</strong></div>
               <div class="plan-item"><span>Expires</span><strong id="reservationExpires">--</strong></div>
             </div>
-            <p class="reservation-info">Weekly and monthly dedicated slots remain assigned even when temporarily empty. A red slot means a vehicle is physically detected; the camera cannot verify who parked it. If someone else occupies your assigned slot, contact the administrator.</p>
+            <p class="reservation-info">A weekly or monthly booking keeps the same space for you, even when you leave temporarily. Red means the camera sees a vehicle in that space. If another vehicle uses your booked space, contact the parking administrator.</p>
           </div>
         </article>
 
@@ -951,7 +951,7 @@
           <div class="camera-view-head">
             <span class="camera-view-title">Car parking area</span>
             <span class="camera-view-state" id="carsCameraState">Connecting</span>
-            <button class="camera-retry" type="button" onclick="retryCamera('cars')">Retry</button>
+            <button class="camera-retry" type="button" onclick="retryCamera('cars')">Try again</button>
           </div>
           <div class="camera-frame">
             <img id="carsCameraImage" alt="Live car parking camera" onload="cameraLoaded('cars')" onerror="cameraFailed('cars')" />
@@ -962,7 +962,7 @@
           <div class="camera-view-head">
             <span class="camera-view-title">Motorcycle parking area</span>
             <span class="camera-view-state" id="motorcyclesCameraState">Connecting</span>
-            <button class="camera-retry" type="button" onclick="retryCamera('motorcycles')">Retry</button>
+            <button class="camera-retry" type="button" onclick="retryCamera('motorcycles')">Try again</button>
           </div>
           <div class="camera-frame">
             <img id="motorcyclesCameraImage" alt="Live motorcycle parking camera" onload="cameraLoaded('motorcycles')" onerror="cameraFailed('motorcycles')" />
@@ -1065,9 +1065,9 @@
       const placeholder = cameraElement(cameraId, 'Placeholder');
       if (!feed || !img || !state || !placeholder) return;
       img.classList.remove('visible');
-      state.textContent = 'Offline';
+      state.textContent = 'Not connected';
       state.className = 'camera-view-state offline';
-      placeholder.textContent = 'Camera is offline or has not sent a recent frame.';
+      placeholder.textContent = 'The camera is not connected. The app will keep trying.';
       placeholder.classList.remove('hidden');
       feed.retries += 1;
       if (!feed.retryTimer && document.visibilityState !== 'hidden') {
@@ -1265,7 +1265,7 @@
         showError('');
       } catch (e) {
         showError(e.message);
-        setLiveState(false, false, 'Offline');
+        setLiveState(false, false, 'Not connected');
       } finally {
         summaryRequestInFlight = false;
       }
@@ -1306,7 +1306,7 @@
         const info = (data.cameras || {})[cameraId] || {};
         const state = cameraElement(cameraId, 'State');
         if (!info.online && state && !cameraElement(cameraId, 'Image')?.classList.contains('visible')) {
-          state.textContent = 'Offline';
+          state.textContent = 'Not connected';
           state.className = 'camera-view-state offline';
         }
       }
@@ -1440,11 +1440,11 @@
       const dedicated = duration === 'weekly' || duration === 'monthly';
       button.disabled = !slot || !gcashEnabled || !Number.isFinite(price) || price < 1;
       button.textContent = slot
-        ? `${dedicated ? 'Lease slot' : 'Reserve session'} & pay PHP ${formatPrice(price)}`
-        : 'Select a slot';
+        ? `${dedicated ? 'Book this space' : 'Book this visit'} & pay PHP ${formatPrice(price)}`
+        : 'Choose a space';
       info.textContent = slot
-        ? `${slot.slot_id} · ${duration} · PHP ${formatPrice(price)} prepaid via GCash. ${dedicated ? 'This dedicated slot remains assigned to you until the paid plan expires, including while it is empty.' : 'This daily reservation ends when you depart or when the paid day expires.'} The slot is held for 15 minutes while you complete payment.`
-        : 'Select a green slot. Daily is a single parking session; weekly and monthly are dedicated-slot leases that keep the chosen slot assigned until expiry.';
+        ? `${slot.slot_id} · ${duration} · Pay PHP ${formatPrice(price)} with GCash. ${dedicated ? 'This space stays booked for you until your paid plan ends, even while it is empty.' : 'This booking ends when you leave or at the end of the paid day.'} You have 15 minutes to finish payment.`
+        : 'Choose a green space. A daily booking is for one visit. Weekly and monthly bookings keep the same space for you until the end date.';
       if (!gcashEnabled && slot) info.textContent += ' Online payment is currently unavailable.';
     }
 
@@ -1458,7 +1458,7 @@
       document.getElementById('reservationDate').textContent = reservation ? formatPlanDate(reservation.created_at) : '--';
       document.getElementById('reservationDurationLabel').textContent = reservation?.duration_type || '--';
       document.getElementById('reservationType').textContent = reservation
-        ? (reservation.dedicated_slot ? 'Dedicated slot' : 'Single session')
+        ? (reservation.dedicated_slot ? 'Same space for the full plan' : 'One visit')
         : '--';
       document.getElementById('reservationStarts').textContent = reservation?.starts_at ? formatPlanDate(reservation.starts_at) : '--';
       document.getElementById('reservationExpires').textContent = reservation?.expires_at ? formatPlanDate(reservation.expires_at) : '--';

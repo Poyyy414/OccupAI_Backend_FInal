@@ -125,8 +125,8 @@
       --bg-sidebar: #0F172A;
       --text-primary: #1E293B;
       --text-muted: #64748B;
-      --accent-mint: #10B981;
-      --accent-green: #059669;
+      --accent-mint: #047857;
+      --accent-green: #047857;
       --border-color: #E2E8F0;
 
       --bg: var(--bg-main);
@@ -138,7 +138,7 @@
       --border-soft: #EDF1F6;
       --text: var(--text-primary);
       --muted: var(--text-muted);
-      --muted-2: #94A3B8;
+      --muted-2: #64748B;
       --green: var(--accent-green);
       --green-strong: var(--accent-green);
       --green-soft: rgba(16, 185, 129, .10);
@@ -2227,11 +2227,11 @@
     </button>
     <button class="nav-item" onclick="switchPanel('insights', this)">
       <span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-sparkles"></use></svg></span>
-      <span>AI Insights</span>
+      <span>Parking Guide</span>
     </button>
     <button class="nav-item" onclick="switchPanel('predictions', this)">
       <span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-chart"></use></svg></span>
-      <span>Predictions</span>
+      <span>Expected Activity</span>
     </button>
     <button class="nav-item" onclick="switchPanel('reports', this)">
       <span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-sparkles"></use></svg></span>
@@ -2264,7 +2264,7 @@
     <div class="topbar-heading" id="topbarHeading">
       <div class="eyebrow" id="pageEyebrow">Real-time dashboard</div>
       <h1 class="page-title" id="pageTitle">Parking Overview</h1>
-      <p class="page-sub" id="pageSub">105 Penafrancia Ave, Naga City - live occupancy and forecasts</p>
+      <p class="page-sub" id="pageSub">See available spaces, parking activity, and expected busy times</p>
     </div>
     <div class="topbar-status">
       <div class="status-pill">
@@ -2289,15 +2289,15 @@
 
     <div class="summary-strip" aria-label="Operations summary">
       <div class="summary-item">
-        <span>Camera state</span>
+        <span>Camera status</span>
         <strong id="overviewCameraState">Connecting</strong>
       </div>
       <div class="summary-item">
-        <span>Lot pressure</span>
+        <span>Parking activity</span>
         <strong id="overviewPressure">Waiting</strong>
       </div>
       <div class="summary-item">
-        <span>Last detector update</span>
+        <span>Last camera update</span>
         <strong id="overviewLastUpdate">--</strong>
       </div>
     </div>
@@ -2305,7 +2305,7 @@
     <div class="stat-grid">
       <article class="stat-card green">
         <div class="stat-top">
-          <div class="stat-label">Free Slots</div>
+          <div class="stat-label">Available Spaces</div>
           <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-parking"></use></svg></div>
         </div>
         <div class="stat-value" id="statFree">--</div>
@@ -2314,38 +2314,38 @@
       </article>
       <article class="stat-card">
         <div class="stat-top">
-          <div class="stat-label">Occupied</div>
+          <div class="stat-label">Spaces In Use</div>
           <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-car"></use></svg></div>
         </div>
         <div class="stat-value" id="statOcc">--</div>
-        <div class="stat-sub" id="statOccSub">Cars detected</div>
+        <div class="stat-sub" id="statOccSub">Vehicles currently parked</div>
         <div class="stat-meter" aria-hidden="true"><span id="occMeter"></span></div>
       </article>
       <article class="stat-card">
         <div class="stat-top">
-          <div class="stat-label">Capacity</div>
+          <div class="stat-label">Total Spaces</div>
           <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-grid"></use></svg></div>
         </div>
         <div class="stat-value" id="statTotal">--</div>
-        <div class="stat-sub" id="statTotalSub">Tracked parking zones</div>
+        <div class="stat-sub" id="statTotalSub">All parking spaces</div>
         <div class="stat-meter" aria-hidden="true"><span id="totalMeter"></span></div>
       </article>
       <article class="stat-card">
         <div class="stat-top">
-          <div class="stat-label">Max Count</div>
+          <div class="stat-label">Most Vehicles Today</div>
           <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-chart"></use></svg></div>
         </div>
         <div class="stat-value" id="statMaxCount">--</div>
-        <div class="stat-sub" id="statMaxCountSub">Maximum tracked capacity</div>
+        <div class="stat-sub" id="statMaxCountSub">Highest number recorded today</div>
         <div class="stat-meter" aria-hidden="true"><span id="maxCountMeter"></span></div>
       </article>
       <article class="stat-card">
         <div class="stat-top">
-          <div class="stat-label">Occupancy Rate</div>
+          <div class="stat-label">Spaces In Use</div>
           <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-gauge"></use></svg></div>
         </div>
         <div class="stat-value" id="statRate">--%</div>
-        <div class="stat-sub" id="statRateSub">Share of total capacity</div>
+        <div class="stat-sub" id="statRateSub">Percentage of spaces currently used</div>
         <div class="stat-meter" aria-hidden="true"><span id="rateMeter"></span></div>
       </article>
       <article class="stat-card">
@@ -2366,7 +2366,7 @@
       </article>
       <article class="stat-card green" id="statPricingCard">
         <div class="stat-top">
-          <div class="stat-label">Dynamic Pricing</div>
+          <div class="stat-label">Current Parking Price</div>
           <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-gauge"></use></svg></div>
         </div>
         <div class="stat-value sz-md" id="statPricingStatus">--</div>
@@ -2377,7 +2377,7 @@
     <div class="overview-grid">
       <section class="panel-card feature">
         <div class="panel-header">
-          <span class="panel-title">Parking Occupancy Trend</span>
+          <span class="panel-title">Parking Use Over Time</span>
           <span class="status-chip good" id="trendRangeLabel">Recent activity</span>
         </div>
         <div class="trend-chart-wrap">
@@ -2387,32 +2387,32 @@
 
       <section class="panel-card">
         <div class="panel-header">
-          <span class="panel-title">AI Forecast</span>
-          <button class="ghost-btn" onclick="forceRefreshInsights()" aria-label="Refresh AI forecast"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"></use></svg></button>
+          <span class="panel-title">What to Expect</span>
+          <button class="ghost-btn" onclick="forceRefreshInsights()" aria-label="Update expected parking activity"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"></use></svg></button>
         </div>
         <div class="forecast-list">
           <div class="forecast-row">
-            <span class="forecast-label">Next hour occupancy</span>
+            <span class="forecast-label">Spaces expected to be in use next hour</span>
             <span class="forecast-value highlight" id="aiNextHour">--</span>
           </div>
           <div class="forecast-row">
-            <span class="forecast-label">Predicted peak time</span>
+            <span class="forecast-label">Expected busiest time</span>
             <span class="forecast-value" id="aiPeakTime">--</span>
           </div>
           <div class="forecast-row">
-            <span class="forecast-label">Trend</span>
+            <span class="forecast-label">What is changing</span>
             <span class="forecast-value" id="aiTrendText" style="font-family:inherit;font-size:12px;font-weight:600;max-width:60%">--</span>
           </div>
         </div>
-        <div class="insight-label" style="margin-top:14px">Recommended</div>
-        <div class="insight-text action-text" id="aiActionText">Waiting for insight data...</div>
+        <div class="insight-label" style="margin-top:14px">Suggested action</div>
+        <div class="insight-text action-text" id="aiActionText">Checking the latest parking activity...</div>
       </section>
     </div>
 
     <div class="overview-bottom-grid">
       <section class="panel-card">
         <div class="panel-header">
-          <span class="panel-title">Recent Detection Events</span>
+          <span class="panel-title">Recent Parking Updates</span>
           <div class="panel-actions">
             <span class="status-chip" id="activityCount">0 events</span>
             <button class="refresh-btn" onclick="fetchHistory()" aria-label="Refresh recent activity"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"></use></svg></button>
@@ -2420,8 +2420,8 @@
         </div>
         <div class="activity-list" id="activityList">
           <div class="empty-state">
-            <strong>Waiting for YOLO service data</strong>
-            Detection updates will show here.
+            <strong>Waiting for camera updates</strong>
+            Recent parking changes will appear here.
           </div>
         </div>
       </section>
@@ -2478,7 +2478,7 @@
       </article>
       <article class="stat-card">
         <div class="stat-top">
-          <div class="stat-label">Avg Transaction</div>
+          <div class="stat-label">Average Payment</div>
           <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-chart"></use></svg></div>
         </div>
         <div class="stat-value sz-md" id="avgTransactionValue">PHP --</div>
@@ -2486,7 +2486,7 @@
       </article>
       <article class="stat-card">
         <div class="stat-top">
-          <div class="stat-label">Transactions</div>
+          <div class="stat-label">Payments</div>
           <div class="stat-icon" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-activity"></use></svg></div>
         </div>
         <div class="stat-value sz-lg" id="revenueLogCount">--</div>
@@ -2601,7 +2601,7 @@
 
     <section class="panel-card">
       <div class="panel-header">
-        <span class="panel-title">Transaction Logs</span>
+        <span class="panel-title">Payment History</span>
         <span class="status-chip" id="txLogsRangeLabel">--</span>
       </div>
       <div class="report-table-wrap">
@@ -2627,12 +2627,12 @@
             <div class="stream-toolbar">
               <div class="stream-title">
                 <strong>Car Camera</strong>
-                <span id="carStreamEndpoint">Waiting for car camera</span>
+                <span id="carStreamEndpoint">Waiting for the car-area camera</span>
               </div>
               <div class="stream-actions">
                 <span class="status-chip warn" id="carStreamInlineStatus">Waiting</span>
                 <button class="ghost-btn" onclick="openCameraFullscreen('car')" aria-label="Open car camera fullscreen"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-maximize"></use></svg>Fullscreen</button>
-                <button class="retry-btn" onclick="retryCameraStream('car')" aria-label="Retry car camera stream"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"></use></svg>Retry</button>
+                <button class="retry-btn" onclick="retryCameraStream('car')" aria-label="Reconnect the car-area camera"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"></use></svg>Try again</button>
               </div>
             </div>
             <div class="stream-wrap" id="carStreamWrap">
@@ -2645,10 +2645,10 @@
               <div class="stream-badge" id="carStreamBadge" style="display:none"><div class="bdot"></div> LIVE</div>
             </div>
             <div class="camera-occupancy-strip">
-              <div class="camera-occupancy-item">Occupied<strong id="carOcc">--</strong></div>
-              <div class="camera-occupancy-item">Free<strong id="carFree">--</strong></div>
-              <div class="camera-occupancy-item">Capacity<strong id="carTotal">--</strong></div>
-              <div class="camera-occupancy-item">Rate<strong id="carPct">--</strong></div>
+              <div class="camera-occupancy-item">In use<strong id="carOcc">--</strong></div>
+              <div class="camera-occupancy-item">Available<strong id="carFree">--</strong></div>
+              <div class="camera-occupancy-item">Total spaces<strong id="carTotal">--</strong></div>
+              <div class="camera-occupancy-item">Used<strong id="carPct">--</strong></div>
             </div>
           </article>
 
@@ -2656,12 +2656,12 @@
             <div class="stream-toolbar">
               <div class="stream-title">
                 <strong>Motorcycle Camera</strong>
-                <span id="motorcycleStreamEndpoint">Waiting for motorcycle camera</span>
+                <span id="motorcycleStreamEndpoint">Waiting for the motorcycle-area camera</span>
               </div>
               <div class="stream-actions">
                 <span class="status-chip warn" id="motorcycleStreamInlineStatus">Waiting</span>
                 <button class="ghost-btn" onclick="openCameraFullscreen('motorcycle')" aria-label="Open motorcycle camera fullscreen"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-maximize"></use></svg>Fullscreen</button>
-                <button class="retry-btn" onclick="retryCameraStream('motorcycle')" aria-label="Retry motorcycle camera stream"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"></use></svg>Retry</button>
+                <button class="retry-btn" onclick="retryCameraStream('motorcycle')" aria-label="Reconnect the motorcycle-area camera"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"></use></svg>Try again</button>
               </div>
             </div>
             <div class="stream-wrap" id="motorcycleStreamWrap">
@@ -2674,24 +2674,24 @@
               <div class="stream-badge" id="motorcycleStreamBadge" style="display:none"><div class="bdot"></div> LIVE</div>
             </div>
             <div class="camera-occupancy-strip">
-              <div class="camera-occupancy-item">Occupied<strong id="motorcycleOcc">--</strong></div>
-              <div class="camera-occupancy-item">Free<strong id="motorcycleFree">--</strong></div>
-              <div class="camera-occupancy-item">Capacity<strong id="motorcycleTotal">--</strong></div>
-              <div class="camera-occupancy-item">Rate<strong id="motorcyclePct">--</strong></div>
+              <div class="camera-occupancy-item">In use<strong id="motorcycleOcc">--</strong></div>
+              <div class="camera-occupancy-item">Available<strong id="motorcycleFree">--</strong></div>
+              <div class="camera-occupancy-item">Total spaces<strong id="motorcycleTotal">--</strong></div>
+              <div class="camera-occupancy-item">Used<strong id="motorcyclePct">--</strong></div>
             </div>
           </article>
         </div>
 
         <section class="panel-card combined-camera-panel">
           <div class="panel-header">
-            <span class="panel-title">Combined Occupancy</span>
+            <span class="panel-title">All Parking Spaces</span>
             <span class="status-chip warn" id="combinedCameraStatus">Waiting</span>
           </div>
           <div class="combined-camera-summary">
             <div class="camera-metric"><span>Free Spaces</span><strong id="combinedFree">--</strong></div>
             <div class="camera-metric"><span>Occupied</span><strong id="combinedOcc">--</strong></div>
             <div class="camera-metric"><span>Total Capacity</span><strong id="combinedTotal">--</strong></div>
-            <div class="camera-metric"><span>Occupancy Rate</span><strong id="combinedPct">--</strong></div>
+            <div class="camera-metric"><span>Spaces In Use</span><strong id="combinedPct">--</strong></div>
           </div>
           <div class="panel-note" id="combinedCameraNote" style="margin-top:10px">Totals combine fresh data from active car and motorcycle cameras.</div>
         </section>
@@ -2703,7 +2703,7 @@
           </div>
           <div class="report-table-wrap">
             <table class="report-table">
-              <thead><tr><th>Timestamp</th><th>Occupied / Total</th><th>Occupancy</th></tr></thead>
+              <thead><tr><th>Time</th><th>In Use / Total</th><th>Spaces Used</th></tr></thead>
               <tbody id="feedDetectionLogBody">
                 <tr><td colspan="3" class="report-empty">Waiting for detector data.</td></tr>
               </tbody>
@@ -2821,50 +2821,50 @@
   <section class="content" id="content-insights">
     <div class="insight-tools">
       <div>
-        <div class="eyebrow">Model readout</div>
-        <div class="page-sub">Plain-English predictions from your trained models</div>
+        <div class="eyebrow">Parking guide</div>
+        <div class="page-sub">Simple guidance based on recent parking activity</div>
       </div>
       <div>
-        <button class="refresh-btn" onclick="forceRefreshInsights()" aria-label="Refresh AI insights"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"></use></svg>Refresh</button>
+        <button class="refresh-btn" onclick="forceRefreshInsights()" aria-label="Update parking guidance"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"></use></svg>Update</button>
         <div class="insight-ts" id="insightTs">--</div>
       </div>
     </div>
 
     <div class="insight-overview" aria-label="AI insight summary">
       <article class="insight-summary-card">
-        <span>Current load</span>
+        <span>Spaces in use now</span>
         <strong id="insSummaryLoad">--</strong>
-        <small id="insSummaryLoadSub">Waiting for detector state.</small>
+        <small id="insSummaryLoadSub">Waiting for both cameras.</small>
       </article>
       <article class="insight-summary-card">
-        <span>Forecast peak</span>
+        <span>Expected busiest time</span>
         <strong id="insSummaryPeak">--</strong>
-        <small id="insSummaryPeakSub">Next 6-hour prediction window.</small>
+        <small id="insSummaryPeakSub">Based on the next 6 hours.</small>
       </article>
       <article class="insight-summary-card">
-        <span>AI rate</span>
+        <span>Suggested price</span>
         <strong id="insSummaryPrice">--</strong>
-        <small id="insSummaryPriceSub">Compared with the configured flat rate.</small>
+        <small id="insSummaryPriceSub">Compared with the regular price.</small>
       </article>
     </div>
 
     <section class="panel-card" style="margin-bottom:16px">
       <div class="panel-header">
-        <span class="panel-title">Recommendation Cards</span>
+        <span class="panel-title">Suggested Actions</span>
       </div>
       <div class="insight-grid" id="insRecommendationCards" >
-        <div class="empty-state"><strong>Analyzing...</strong>Recommendations will appear once insights are computed.</div>
+        <div class="empty-state"><strong>Checking parking activity...</strong>Helpful suggestions will appear shortly.</div>
       </div>
     </section>
 
     <section class="panel-card" style="margin-bottom:16px">
       <div class="panel-header">
-        <span class="panel-title">Model Confidence</span>
-        <span class="panel-note">From your trained ML models</span>
+        <span class="panel-title">Estimate Reliability</span>
+        <span class="panel-note">How closely the system matched its training examples</span>
       </div>
       <div class="compare-bars">
-        <span>Vehicle count</span><div class="compare-track"><div class="compare-fill" id="confVehiclesBar"></div></div><span id="confVehiclesValue">--</span>
-        <span>Occupancy</span><div class="compare-track"><div class="compare-fill" id="confOccupancyBar"></div></div><span id="confOccupancyValue">--</span>
+        <span>Vehicle estimate</span><div class="compare-track"><div class="compare-fill" id="confVehiclesBar"></div></div><span id="confVehiclesValue">--</span>
+        <span>Space-use estimate</span><div class="compare-track"><div class="compare-fill" id="confOccupancyBar"></div></div><span id="confOccupancyValue">--</span>
       </div>
     </section>
 
@@ -2897,7 +2897,7 @@
       </article>
 
       <article class="insight-card">
-        <div class="insight-label">Vehicle Forecast</div>
+        <div class="insight-label">Expected Vehicles</div>
         <div class="insight-visual">
           <div class="mini-bars" id="insForecastBars"></div>
           <div class="mini-caption"><span>Next 6 hours</span><span id="insForecastPeak">--</span></div>
@@ -2908,10 +2908,10 @@
       </article>
 
       <article class="insight-card">
-        <div class="insight-label">Occupancy Forecast</div>
+        <div class="insight-label">Expected Space Use</div>
         <div class="insight-visual">
           <div class="mini-meter"><div class="mini-meter-fill" id="insOccMeter"></div></div>
-          <div class="mini-caption"><span id="insOccMeterLabel">Current load</span><span id="insOccMeterValue">0%</span></div>
+          <div class="mini-caption"><span id="insOccMeterLabel">Spaces in use now</span><span id="insOccMeterValue">0%</span></div>
         </div>
         <div class="insight-text" id="ins-occupancy">
           <span class="insight-loading">Loading...</span>
@@ -2919,10 +2919,10 @@
       </article>
 
       <article class="insight-card">
-        <div class="insight-label">Dynamic Pricing</div>
+        <div class="insight-label">Parking Price</div>
         <div class="compare-bars">
-          <span>Flat</span><div class="compare-track"><div class="compare-fill" id="insFlatBar"></div></div><span id="insFlatRateLabel">PHP 25</span>
-          <span>AI</span><div class="compare-track"><div class="compare-fill" id="insPriceBar"></div></div><span id="insPriceValue">--</span>
+          <span>Regular</span><div class="compare-track"><div class="compare-fill" id="insFlatBar"></div></div><span id="insFlatRateLabel">PHP 25</span>
+          <span>Suggested</span><div class="compare-track"><div class="compare-fill" id="insPriceBar"></div></div><span id="insPriceValue">--</span>
         </div>
         <div class="insight-text" id="ins-pricing">
           <span class="insight-loading">Loading...</span>
@@ -2945,11 +2945,11 @@
   <section class="content" id="content-predictions">
     <div class="insight-tools">
       <div>
-        <div class="eyebrow">Model readout</div>
-        <div class="page-sub">Forecast data from the parking history and training data</div>
+        <div class="eyebrow">Expected activity</div>
+        <div class="page-sub">Easy-to-read estimates based on past parking activity</div>
       </div>
       <div>
-        <button class="refresh-btn" onclick="fetchFullPredictions()" aria-label="Refresh predictions"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"></use></svg>Refresh</button>
+        <button class="refresh-btn" onclick="fetchFullPredictions()" aria-label="Update expected activity"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"></use></svg>Update</button>
         <div class="insight-ts" id="predFullTs">--</div>
         <div class="insight-ts" id="predFullSource">--</div>
       </div>
@@ -2957,54 +2957,54 @@
 
     <div class="insight-overview cols-5" aria-label="Prediction summary">
       <article class="insight-summary-card">
-        <span>Current occupancy</span>
+        <span>Spaces in use now</span>
         <strong id="predFullCurrentOcc">--</strong>
-        <small>Live reading from the detector.</small>
+        <small>Current reading from the parking cameras.</small>
       </article>
       <article class="insight-summary-card">
-        <span>Peak hour</span>
+        <span>Expected busiest time</span>
         <strong id="predFullPeak">--</strong>
-        <small id="predFullPeakSub">Highest expected occupancy hour.</small>
+        <small id="predFullPeakSub">Time when the parking area may be busiest.</small>
       </article>
       <article class="insight-summary-card">
-        <span>Forecast accuracy</span>
+        <span>Estimate reliability</span>
         <strong id="predFullAccuracy">--</strong>
-         <small>Reported training metric, not live accuracy.</small>
+         <small>Based on earlier examples, not a guarantee.</small>
       </article>
       <article class="insight-summary-card">
-        <span>Active capacity</span>
+        <span>Total spaces</span>
         <strong id="predFullCapacity">--</strong>
-        <small>Slots currently counted by the model.</small>
+        <small>Parking spaces covered by the cameras.</small>
       </article>
       <article class="insight-summary-card">
-        <span>Today's forecast</span>
+        <span>Expected income today</span>
         <strong id="predFullTodayRevenue">--</strong>
-        <small>Projected revenue for today.</small>
+        <small>Estimated parking payments for today.</small>
       </article>
     </div>
 
     <section class="panel-card">
       <div class="panel-header">
-        <span class="panel-title">24-hour occupancy forecast</span>
+        <span class="panel-title">Expected Parking Activity Today</span>
         <span class="panel-note" id="predFullHourNote">--</span>
       </div>
       <div class="forecast-chart-scroll">
         <div class="forecast-chart-wrap">
-          <canvas id="predFullForecastChart" role="img" aria-label="Hourly occupancy forecast from midnight through 11 PM" aria-describedby="predFullForecastSummary"></canvas>
+          <canvas id="predFullForecastChart" role="img" aria-label="Expected percentage of parking spaces in use for each hour" aria-describedby="predFullForecastSummary"></canvas>
         </div>
       </div>
-      <div class="empty-state" id="predFullForecastEmpty" hidden><strong>No forecast data</strong>Predictions will appear after enough parking activity is recorded.</div>
-      <p class="forecast-summary" id="predFullForecastSummary">Waiting for prediction data.</p>
+      <div class="empty-state" id="predFullForecastEmpty" hidden><strong>Not enough information yet</strong>Estimates will appear after more parking activity is recorded.</div>
+      <p class="forecast-summary" id="predFullForecastSummary">Waiting for enough parking activity.</p>
       <details class="forecast-data-table">
-        <summary>View exact hourly values</summary>
-        <div class="forecast-values-grid" id="predFullForecastValues" aria-label="Exact hourly occupancy forecast values"></div>
+        <summary>Show the numbers for each hour</summary>
+        <div class="forecast-values-grid" id="predFullForecastValues" aria-label="Expected parking use for each hour"></div>
       </details>
     </section>
 
     <section class="panel-card" style="margin-top:14px">
       <div class="panel-header">
-        <span class="panel-title">Weekly Occupancy Heatmap</span>
-        <span class="panel-note">Average occupancy by hour, last 30 days</span>
+        <span class="panel-title">Busy Times by Day</span>
+        <span class="panel-note">Average percentage of spaces used during the last 30 days</span>
       </div>
       <div class="heatmap-legend" aria-label="Heatmap occupancy scale from zero to one hundred percent">
         <span>0%</span>
@@ -3035,7 +3035,7 @@
     <section class="panel-card" style="margin-top:14px">
       <div class="revenue-panel" style="margin-top:0; padding-top:0; border-top:none">
         <div class="revenue-head">
-          <span class="revenue-title">Weekday revenue forecast</span>
+          <span class="revenue-title">Expected Income by Day</span>
         </div>
         <div class="weekday-grid" id="predFullWeekdayGrid"></div>
       </div>
@@ -3057,10 +3057,10 @@
     </div>
 
     <div class="report-kpi-row">
-      <div class="report-kpi"><span>Today</span><strong id="rKpiVal1">PHP --</strong><small id="rKpiSub1">-- transactions</small></div>
-      <div class="report-kpi"><span>This Week</span><strong id="rKpiVal2">PHP --</strong><small id="rKpiSub2">-- transactions</small></div>
-      <div class="report-kpi"><span>This Month</span><strong id="rKpiVal3">PHP --</strong><small id="rKpiSub3">-- transactions</small></div>
-      <div class="report-kpi"><span>This Year</span><strong id="rKpiVal4">PHP --</strong><small id="rKpiSub4">-- transactions</small></div>
+      <div class="report-kpi"><span>Today</span><strong id="rKpiVal1">PHP --</strong><small id="rKpiSub1">-- payments</small></div>
+      <div class="report-kpi"><span>This Week</span><strong id="rKpiVal2">PHP --</strong><small id="rKpiSub2">-- payments</small></div>
+      <div class="report-kpi"><span>This Month</span><strong id="rKpiVal3">PHP --</strong><small id="rKpiSub3">-- payments</small></div>
+      <div class="report-kpi"><span>This Year</span><strong id="rKpiVal4">PHP --</strong><small id="rKpiSub4">-- payments</small></div>
     </div>
 
     <div class="report-chart-wrap">
@@ -3069,10 +3069,10 @@
     </div>
 
     <div class="report-chart-wrap">
-      <div class="report-chart-title">&#128200; AI Predicted vs Actual Revenue <span style="font-size:11px;color:var(--muted);font-weight:400">(by day of week)</span></div>
+      <div class="report-chart-title">&#128200; Expected and Actual Income <span style="font-size:11px;color:var(--muted);font-weight:400">(by day of week)</span></div>
       <canvas id="predVsActualChart" height="80"></canvas>
       <div style="font-size:11px;color:var(--muted);margin-top:10px">
-        Green line = actual average revenue per day &nbsp;|&nbsp; Dashed line = AI predicted revenue per day
+        Green line = actual average income &nbsp;|&nbsp; Dashed line = expected income
       </div>
     </div>
 
@@ -3343,14 +3343,14 @@ function signOut() {
 
 const PANEL_META = {
   overview: {
-    eyebrow: 'Real-time dashboard',
+    eyebrow: 'Live parking status',
     title: 'Parking Overview',
-    sub: '105 Penafrancia Ave, Naga City - live occupancy and forecasts'
+    sub: 'See available spaces, parking activity, and expected busy times'
   },
   livefeed: {
-    eyebrow: 'Camera stream',
-    title: 'Live Feed',
-    sub: 'YOLO detection stream, camera health, and zone states'
+    eyebrow: 'Parking cameras',
+    title: 'Live Camera View',
+    sub: 'Check the car and motorcycle parking areas in real time'
   },
   revenue: {
     eyebrow: 'Parking money',
@@ -3358,14 +3358,14 @@ const PANEL_META = {
     sub: 'Actual paid parking records, discounts, and gross profit by day, week, and month'
   },
   insights: {
-    eyebrow: 'AI insights',
-    title: 'Prediction Center',
-    sub: 'Operational recommendations from occupancy, revenue, and pricing models'
+    eyebrow: 'Parking guide',
+    title: 'Helpful Suggestions',
+    sub: 'Simple guidance based on recent parking activity and payments'
   },
   predictions: {
-    eyebrow: 'Forecast data',
-    title: 'Predictions',
-    sub: 'Full 24-hour occupancy forecast, peak hour, busy/quiet days, and weekday revenue'
+    eyebrow: 'Expected activity',
+    title: 'Expected Parking Activity',
+    sub: 'See likely busy times, quieter days, and expected income'
   },
   reports: {
     eyebrow: 'Business reports',
@@ -3531,7 +3531,7 @@ function setPricingUi(settings, pending) {
   if (hint && !pending) {
     hint.textContent = pricingSettings.enabled
       ? `Manual daily rate active — Car ${formatPhp(pricingSettings.price_php_car)}/day, Motorcycle ${formatPhp(pricingSettings.price_php_motorcycle)}/day.`
-      : `Auto demand pricing is active. Base daily rate — Car ${formatPhp(pricingSettings.flat_rate_php_car)}/day, Motorcycle ${formatPhp(pricingSettings.flat_rate_php_motorcycle)}/day.`;
+      : `Prices adjust automatically when parking gets busier. Regular daily price — Car ${formatPhp(pricingSettings.flat_rate_php_car)}/day, Motorcycle ${formatPhp(pricingSettings.flat_rate_php_motorcycle)}/day.`;
   }
 
   const flatLabel = document.getElementById('insFlatRateLabel');
@@ -3942,7 +3942,7 @@ function liveStatusText(stats) {
   const total = Number(stats?.total ?? stats?.total_slots ?? 30);
   if (stats?.combined_complete !== true) {
     const reporting = Number(stats?.reporting_capacity ?? 0);
-    return `Combined occupancy is unavailable. ${reporting} of ${total} configured spaces are currently reporting.`;
+    return `Waiting for both cameras. One camera currently covers ${reporting} of ${total} parking spaces.`;
   }
   const occupied = Number(stats?.occupied ?? stats?.occupied_slots ?? 0);
   const free = Number(stats?.free ?? stats?.free_slots ?? Math.max(0, total - occupied));
@@ -4024,12 +4024,12 @@ function updateCameraCard(cardKey, cameras) {
       inline.className = blocked ? 'status-chip bad' : 'status-chip warn';
     }
     if (endpointLabel) endpointLabel.textContent = blocked
-      ? `${config.label} is not reporting`
-      : `Waiting for ${config.noun} camera`;
+      ? `${config.label} is not connected`
+      : `Waiting for the ${config.noun} camera`;
     if (statusMsg) {
       statusMsg.textContent = blocked
-        ? 'CAMERA BLOCKED'
-        : `Waiting for ${config.noun} camera data...`;
+        ? 'CAMERA NOT CONNECTED'
+        : `Waiting for the ${config.noun} camera...`;
       statusMsg.classList.toggle('blocked', blocked);
     }
     for (const suffix of ['Occ', 'Free', 'Pct']) setText(cardKey + suffix, '--');
@@ -4072,9 +4072,9 @@ function updateCameraCard(cardKey, cameras) {
       inline.className = 'status-chip warn';
     }
     if (endpointLabel) endpointLabel.textContent = needsCalibration
-      ? 'Saved layout needs recalibration'
-      : `${config.label} is offline`;
-    if (statusMsg) statusMsg.textContent = needsCalibration ? 'RECALIBRATION REQUIRED' : 'OFFLINE / UNKNOWN';
+      ? 'Set the parking-space positions again'
+      : `${config.label} is not connected`;
+    if (statusMsg) statusMsg.textContent = needsCalibration ? 'SET UP PARKING SPACES AGAIN' : 'CAMERA NOT CONNECTED';
     setText(cardKey + 'Occ', '--');
     setText(cardKey + 'Free', '--');
     setText(cardKey + 'Total', total);
@@ -4088,8 +4088,8 @@ function updateCameraCard(cardKey, cameras) {
   setText(cardKey + 'Free', total ? free : '--');
   setText(cardKey + 'Total', total || '--');
   setText(cardKey + 'Pct', total ? Math.round(pct) + '%' : '--');
-  if (endpointLabel) endpointLabel.textContent = endpoint;
-  if (statusMsg && !state.error) statusMsg.textContent = `Connecting to ${endpoint}...`;
+  if (endpointLabel) endpointLabel.textContent = `${config.label} is connecting`;
+  if (statusMsg && !state.error) statusMsg.textContent = `Connecting to the ${config.noun} camera...`;
   if (inline && !state.error) { inline.textContent = 'Connecting'; inline.className = 'status-chip warn'; }
 }
 
@@ -4108,10 +4108,10 @@ function updateDualCameraFeeds(cameras, aggregate) {
   setText('combinedTotal', total);
   setText('combinedPct', complete ? Math.round(pct) + '%' : '--');
   setText('combinedCameraNote', complete
-    ? 'Both cameras are fresh. Combined occupancy covers all 30 configured spaces.'
+    ? 'Both cameras are connected. All 30 parking spaces are included.'
     : activeCount
-      ? `${activeCount}/2 cameras reporting. Partial data is not shown as complete lot occupancy.`
-      : 'Both camera zones are Unknown. Official capacity remains 30.');
+      ? `${activeCount} of 2 cameras is connected. Parking totals will appear when both are ready.`
+      : 'Neither camera is connected. The parking area still has 30 total spaces.');
   const combinedStatus = document.getElementById('combinedCameraStatus');
   if (combinedStatus) {
     combinedStatus.textContent = complete ? 'Complete' : activeCount ? 'Partial' : 'Unavailable';
@@ -4145,14 +4145,14 @@ async function fetchStats() {
     document.getElementById('statOcc').textContent = complete ? occupied : '--';
     document.getElementById('statFree').textContent = complete ? free : '--';
     document.getElementById('statRate').textContent = complete ? Math.round(pct) + '%' : '--';
-    setText('statFreeSub', complete ? `${free} available, ${d.reserved_slots || 0} reserved` : 'Unavailable until both cameras are fresh');
+    setText('statFreeSub', complete ? `${free} available, ${d.reserved_slots || 0} reserved` : 'Waiting for both cameras');
     const carCount = d.car_count;
     const motoCount = d.motorcycle_count;
     setText('statOccSub', complete
       ? `${carCount ?? 0} car(s), ${motoCount ?? 0} motorcycle(s)`
-      : 'Combined occupancy is Unknown');
+      : 'Waiting for a complete parking count');
     setText('statTotalSub', '10 car + 20 motorcycle spaces');
-    setText('statRateSub', complete ? (pct >= 90 ? 'Lot is near full' : pct >= 70 ? 'Demand is rising' : 'Share of total capacity') : 'Partial data is not a complete lot rate');
+    setText('statRateSub', complete ? (pct >= 90 ? 'Parking is nearly full' : pct >= 70 ? 'Parking is getting busy' : 'Percentage of spaces currently used') : 'Waiting for both cameras');
 
     const freeMeter = document.getElementById('freeMeter');
     const occMeter = document.getElementById('occMeter');
@@ -4223,7 +4223,7 @@ function updateTrendChart(items) {
     data: {
       labels,
       datasets: [{
-        label: 'Occupancy %',
+        label: 'Spaces in use %',
         data: values,
         borderColor: chartLine,
         backgroundColor: chartFill,
@@ -4299,7 +4299,7 @@ function renderHistory(items) {
       <div class="activity-row">
         <span class="act-time">${escapeHtml(time)}</span>
         <span class="act-badge ${badge}">${label}</span>
-        <span class="act-desc">Occupancy at ${escapeHtml(Number(pct))}%</span>
+        <span class="act-desc">${escapeHtml(Number(pct))}% of spaces in use</span>
         <span class="act-occ">${escapeHtml(occ)}</span>
       </div>`;
   }).join('');
@@ -4331,7 +4331,7 @@ async function fetchPredictions() {
       <div class="pred-card">
         <div class="pred-time">${String(p.hour).padStart(2, '0')}:00</div>
         <div class="pred-val">${p.pct}%</div>
-        <div class="pred-label">avg occupancy</div>
+        <div class="pred-label">average spaces in use</div>
       </div>`).join('');
 
     const todayEl = document.getElementById('todayRevenueForecast');
@@ -4356,7 +4356,7 @@ async function fetchPredictions() {
           </div>`;
       }).join('');
     } else {
-      revenueGrid.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><strong>No revenue data yet</strong>Weekday forecast will appear here.</div>';
+      revenueGrid.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><strong>No payment information yet</strong>Expected income by day will appear here.</div>';
     }
   } catch (e) {
     console.error('fetchPredictions error:', e);
@@ -4424,7 +4424,7 @@ function renderFullOccupancyForecast(predictions) {
     fullOccupancyChartInstance = null;
   }
   if (!hasData) {
-    if (summary) summary.textContent = 'No reliable hourly forecast is available yet.';
+    if (summary) summary.textContent = 'There is not enough parking activity to estimate each hour yet.';
     if (values) values.innerHTML = '<div class="forecast-value-cell"><strong>--</strong><span>No data</span></div>';
     return;
   }
@@ -4445,7 +4445,7 @@ function renderFullOccupancyForecast(predictions) {
     data: {
       labels,
       datasets: [{
-        label: 'Forecast occupancy',
+        label: 'Expected spaces in use',
         data: hours,
         borderColor: line,
         backgroundColor: fill,
@@ -4471,7 +4471,7 @@ function renderFullOccupancyForecast(predictions) {
           bodyColor: text,
           borderColor: line,
           borderWidth: 1,
-          callbacks: { label: context => ` ${context.parsed.y}% occupancy` }
+          callbacks: { label: context => ` ${context.parsed.y}% of spaces expected to be used` }
         }
       },
       scales: {
@@ -4485,7 +4485,7 @@ function renderFullOccupancyForecast(predictions) {
           max: 100,
           ticks: { color: muted, stepSize: 25, callback: value => `${value}%`, font: { size: 12 } },
           grid: { color: grid },
-          title: { display: true, text: 'Occupancy', color: muted, font: { size: 13, weight: '600' } }
+          title: { display: true, text: 'Spaces in use', color: muted, font: { size: 13, weight: '600' } }
         }
       }
     }
@@ -4493,13 +4493,13 @@ function renderFullOccupancyForecast(predictions) {
 
   const peakTime = `${String(peakHour).padStart(2, '0')}:00`;
   if (summary) {
-    summary.textContent = `Peak forecast is ${peakValue}% at ${peakTime}. Use the chart tooltip or open the exact hourly values below for details.`;
+    summary.textContent = `The parking area may be busiest at ${peakTime}, with about ${peakValue}% of spaces in use. Tap the chart or open the hourly numbers for details.`;
   }
   if (values) {
     values.innerHTML = hours.map((value, hour) => `
       <div class="forecast-value-cell">
         <strong>${String(hour).padStart(2, '0')}:00</strong>
-        <span>${value}% occupancy${hour === peakHour ? ' · Peak' : ''}</span>
+        <span>${value}% of spaces in use${hour === peakHour ? ' · Busiest' : ''}</span>
       </div>`).join('');
   }
 }
@@ -4509,10 +4509,10 @@ function renderFullPredictions(payload) {
   const d = payload.predictions || {};
 
   setText('predFullPeak', d.peak_label ? cleanText(d.peak_label) : '--');
-  setText('predFullCapacity', d.active_slot_capacity != null ? `${d.active_slot_capacity} slots` : '--');
+  setText('predFullCapacity', d.active_slot_capacity != null ? `${d.active_slot_capacity} spaces` : '--');
   setText('predFullTodayRevenue', d.today_revenue_forecast != null
     ? formatPhp(d.today_revenue_forecast) : '--');
-  setText('predFullTs', d.generated_at_ph ? `Generated ${cleanText(d.generated_at_ph)}` : '--');
+  setText('predFullTs', d.generated_at_ph ? `Updated ${cleanText(d.generated_at_ph)}` : '--');
   const hourlySource = d.hourly_source === 'last_7_days'
     ? 'Recent parking logs'
     : d.hourly_source === 'training_data_fallback'
@@ -4523,7 +4523,7 @@ function renderFullPredictions(payload) {
     : d.revenue_source === 'training_data_fallback'
       ? 'Historical training data'
       : 'Unavailable';
-  setText('predFullSource', `Forecast: ${hourlySource} · Revenue: ${revenueSource}`);
+  setText('predFullSource', `Parking estimate: ${hourlySource} · Income estimate: ${revenueSource}`);
   if (payload.currentOccPct != null) {
     setText('predFullCurrentOcc', `${Math.round(payload.currentOccPct)}%`);
   } else {
@@ -4564,7 +4564,7 @@ function renderFullPredictions(payload) {
           </div>`;
       }).join('');
     } else {
-      revenueGrid.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><strong>No revenue data yet</strong>Weekday forecast will appear here.</div>';
+      revenueGrid.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><strong>No payment information yet</strong>Expected income by day will appear here.</div>';
     }
   }
 }
@@ -5266,7 +5266,7 @@ function renderStatusVisual(stats) {
     setText('insFreeKpi', '--');
     setText('insOccKpi', '--');
     setText('insSummaryLoad', '--');
-    setText('insSummaryLoadSub', 'Both cameras are required for combined occupancy.');
+    setText('insSummaryLoadSub', 'Both cameras must be connected to show the complete parking count.');
     return;
   }
   const occupied = Number(stats.occupied ?? stats.occupied_slots ?? 0);
@@ -5324,7 +5324,7 @@ function renderForecastVisual(predictions) {
   const label = document.getElementById('insForecastPeak');
   if (label) label.textContent = `${hourLabel24(peak.hour)} ${Math.round(peak.pct)}%`;
   setText('insSummaryPeak', `${hourLabel24(peak.hour)}`);
-  setText('insSummaryPeakSub', `${Math.round(peak.pct)}% expected occupancy in the next 6 hours.`);
+  setText('insSummaryPeakSub', `About ${Math.round(peak.pct)}% of spaces may be in use during the next 6 hours.`);
 }
 
 function extractRecommendedPrice(text) {
@@ -5465,7 +5465,7 @@ async function fetchHeatmap() {
         const hasData = entry && entry.occ_pct != null && Number.isFinite(Number(entry.occ_pct));
         const v = hasData ? Math.max(0, Math.min(100, Number(entry.occ_pct))) : null;
         const level = !hasData ? 'no-data' : v === 0 ? '' : v <= 25 ? 'level-1' : v <= 50 ? 'level-2' : v <= 75 ? 'level-3' : 'level-4';
-        const valueText = hasData ? `${v}% average occupancy` : 'No occupancy data';
+        const valueText = hasData ? `${v}% of spaces used on average` : 'No parking information';
         const description = `${label} ${String(h).padStart(2,'0')}:00 — ${valueText}`;
         return `<button type="button" class="heatmap-cell ${level}" aria-label="${escapeHtml(description)}" title="${escapeHtml(description)}"></button>`;
       }).join('');
@@ -5618,8 +5618,8 @@ function onCameraStreamError(img, cardKey) {
   const statusMsg = document.getElementById(cameraCardElementId(cardKey, 'StatusMsg'));
   if (placeholder) placeholder.style.display = 'flex';
   if (badge) badge.style.display = 'none';
-  if (inline) { inline.textContent = 'Stream offline'; inline.className = 'status-chip bad'; }
-  if (statusMsg) statusMsg.textContent = 'Camera data is available, but the video stream is offline.';
+  if (inline) { inline.textContent = 'Video unavailable'; inline.className = 'status-chip bad'; }
+  if (statusMsg) statusMsg.textContent = 'Parking counts are available, but the live video cannot connect right now.';
   state.retries += 1;
   if (!state.timer) {
     state.timer = setTimeout(() => {
@@ -5640,7 +5640,7 @@ function retryCameraStream(cardKey) {
   if (state.timer) { clearTimeout(state.timer); state.timer = null; }
   state.retries = 0;
   state.error = false;
-  if (inline) { inline.textContent = 'Retrying'; inline.className = 'status-chip warn'; }
+  if (inline) { inline.textContent = 'Trying again'; inline.className = 'status-chip warn'; }
   img.src = state.endpoint + '&t=' + Date.now();
 }
 
@@ -5685,12 +5685,12 @@ function setStreamCamera(cameraId) {
   const select = document.getElementById('streamCameraSelect');
   if (select) select.value = _selectedCameraId;
   const label = _selectedCameraId === 'main'
-    ? 'Primary detection camera'
-    : _selectedCameraId + ' detection camera';
+    ? 'Main parking camera'
+    : _selectedCameraId + ' parking camera';
   setText('streamTitle', label);
-  setText('streamEndpointLabel', endpoint);
-  setText('streamSourceLabel', endpoint);
-  setText('streamStatusMsg', 'Connecting to ' + endpoint + '...');
+  setText('streamEndpointLabel', 'Connecting to the selected camera');
+  setText('streamSourceLabel', 'Live parking video');
+  setText('streamStatusMsg', 'Connecting to the selected camera...');
 }
 
 function onStreamLoad(img) {
@@ -5809,15 +5809,15 @@ function phpFmt(val) {
 function updateReportKpis(data) {
   const setText = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
   setText('rKpiVal1', phpFmt(data.today_revenue_php));
-  setText('rKpiSub1', (data.today_transaction_count || 0) + ' transactions');
+  setText('rKpiSub1', (data.today_transaction_count || 0) + ' payments');
   setText('rKpiVal2', phpFmt(data.week_revenue_php));
-  setText('rKpiSub2', (data.week_transaction_count || 0) + ' transactions');
+  setText('rKpiSub2', (data.week_transaction_count || 0) + ' payments');
   setText('rKpiVal3', phpFmt(data.month_revenue_php));
-  setText('rKpiSub3', (data.month_transaction_count || 0) + ' transactions');
+  setText('rKpiSub3', (data.month_transaction_count || 0) + ' payments');
   const yearly = (data.monthly_revenue || []).reduce((s, r) => s + (r.revenue_php || 0), 0);
   const yearlyTx = (data.monthly_revenue || []).reduce((s, r) => s + (r.transaction_count || 0), 0);
   setText('rKpiVal4', phpFmt(yearly));
-  setText('rKpiSub4', yearlyTx + ' transactions');
+  setText('rKpiSub4', yearlyTx + ' payments');
 }
 
 function getReportTabRows(data) {
@@ -5865,14 +5865,14 @@ function getReportTabColumns() {
     { key: 'revenue_php', label: 'Revenue (PHP)', cls: 'col-money', fmt: v => phpFmt(v) },
     { key: 'discount_php', label: 'Discounts (PHP)', cls: 'col-discount', fmt: v => phpFmt(v) },
     { key: 'net', label: 'Net Revenue (PHP)', cls: 'col-money', fmt: (v, row) => phpFmt((row.revenue_php||0) - (row.discount_php||0)) },
-    { key: 'transaction_count', label: 'Transactions' },
+    { key: 'transaction_count', label: 'Payments' },
   ];
   if (reportTab === 'weekly') return [
     { key: 'week_start', label: 'Week Starting' },
     { key: 'revenue_php', label: 'Revenue (PHP)', cls: 'col-money', fmt: v => phpFmt(v) },
     { key: 'discount_php', label: 'Discounts (PHP)', cls: 'col-discount', fmt: v => phpFmt(v) },
     { key: 'net', label: 'Net Revenue (PHP)', cls: 'col-money', fmt: (v, row) => phpFmt((row.revenue_php||0) - (row.discount_php||0)) },
-    { key: 'transaction_count', label: 'Transactions' },
+    { key: 'transaction_count', label: 'Payments' },
   ];
   if (reportTab === 'monthly') return [
     { key: 'month', label: 'Month' },
@@ -5880,14 +5880,14 @@ function getReportTabColumns() {
     { key: 'revenue_php', label: 'Revenue (PHP)', cls: 'col-money', fmt: v => phpFmt(v) },
     { key: 'discount_php', label: 'Discounts (PHP)', cls: 'col-discount', fmt: v => phpFmt(v) },
     { key: 'net', label: 'Net Revenue (PHP)', cls: 'col-money', fmt: (v, row) => phpFmt((row.revenue_php||0) - (row.discount_php||0)) },
-    { key: 'transaction_count', label: 'Transactions' },
+    { key: 'transaction_count', label: 'Payments' },
   ];
   if (reportTab === 'yearly') return [
     { key: 'year', label: 'Year' },
     { key: 'revenue_php', label: 'Revenue (PHP)', cls: 'col-money', fmt: v => phpFmt(v) },
     { key: 'discount_php', label: 'Discounts (PHP)', cls: 'col-discount', fmt: v => phpFmt(v) },
     { key: 'net', label: 'Net Revenue (PHP)', cls: 'col-money', fmt: (v, row) => phpFmt((row.revenue_php||0) - (row.discount_php||0)) },
-    { key: 'transaction_count', label: 'Transactions' },
+    { key: 'transaction_count', label: 'Payments' },
   ];
   return [];
 }
@@ -5918,7 +5918,7 @@ function renderReports() {
   const totalTx = rows.reduce((s, r) => s + (r.transaction_count || 0), 0);
   const totalDis = rows.reduce((s, r) => s + (r.discount_php || 0), 0);
   const footer = document.getElementById('reportFooter');
-  if (footer) footer.textContent = 'Total: ' + phpFmt(totalRev) + ' revenue · ' + phpFmt(totalDis) + ' discounts · ' + totalTx + ' transactions · Generated: ' + (reportData.generated_at_ph || '--');
+  if (footer) footer.textContent = 'Total: ' + phpFmt(totalRev) + ' income · ' + phpFmt(totalDis) + ' discounts · ' + totalTx + ' payments · Created: ' + (reportData.generated_at_ph || '--');
 
   renderReportChart(rows);
 }
@@ -6033,7 +6033,7 @@ function downloadReportPDF() {
 
   const tableRows = rows.map(row => '<tr>' + cols.map(c => { const val = c.fmt ? c.fmt(row[c.key], row) : (row[c.key] ?? '--'); return '<td>' + escapeHtml(val) + '</td>'; }).join('') + '</tr>').join('');
   const chartSection = chartImg ? '<div class="section-title">Revenue Summary Chart</div><img src="' + chartImg + '" class="chart-img" /><div class="chart-note">Bar chart showing Revenue (green) vs Discounts (orange) for the selected period.</div>' : '';
-  const predSection = predImg ? '<div class="section-title">AI Predicted vs Actual Revenue</div><img src="' + predImg + '" class="chart-img" /><div class="chart-note">Green solid line = actual average revenue per day | Blue dashed line = AI predicted revenue per day</div>' : '';
+  const predSection = predImg ? '<div class="section-title">Expected and Actual Income</div><img src="' + predImg + '" class="chart-img" /><div class="chart-note">Green line = actual average income | Blue dashed line = expected income</div>' : '';
 
   const html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>OccupAI ' + escapeHtml(tabLabel) + ' Revenue Report</title><style>'
     + '* { box-sizing: border-box; } body { font-family: Arial, sans-serif; font-size: 12px; color: #111; margin: 28px; }'
@@ -6054,10 +6054,10 @@ function downloadReportPDF() {
     + '<div class="header"><div class="header-left"><h1>&#128200; OccupAI &mdash; ' + escapeHtml(tabLabel) + ' Revenue Report</h1><p class="sub">105 Penafrancia Ave, Naga City &nbsp;|&nbsp; Parking Operations Dashboard</p></div>'
     + '<div class="header-right"><div>Generated: <strong>' + escapeHtml(reportData.generated_at_ph || '--') + '</strong></div><div style="margin-top:4px"><span class="badge">' + escapeHtml(tabLabel) + ' Report</span></div></div></div>'
     + '<div class="kpi-row">'
-    + '<div class="kpi"><span>Today</span><strong>' + phpFmt(reportData.today_revenue_php) + '</strong><small>' + (reportData.today_transaction_count || 0) + ' transactions</small></div>'
-    + '<div class="kpi"><span>This Week</span><strong>' + phpFmt(reportData.week_revenue_php) + '</strong><small>' + (reportData.week_transaction_count || 0) + ' transactions</small></div>'
-    + '<div class="kpi"><span>This Month</span><strong>' + phpFmt(reportData.month_revenue_php) + '</strong><small>' + (reportData.month_transaction_count || 0) + ' transactions</small></div>'
-    + '<div class="kpi"><span>Period Total</span><strong>' + phpFmt(totalRev) + '</strong><small>' + totalTx + ' transactions</small></div>'
+    + '<div class="kpi"><span>Today</span><strong>' + phpFmt(reportData.today_revenue_php) + '</strong><small>' + (reportData.today_transaction_count || 0) + ' payments</small></div>'
+    + '<div class="kpi"><span>This Week</span><strong>' + phpFmt(reportData.week_revenue_php) + '</strong><small>' + (reportData.week_transaction_count || 0) + ' payments</small></div>'
+    + '<div class="kpi"><span>This Month</span><strong>' + phpFmt(reportData.month_revenue_php) + '</strong><small>' + (reportData.month_transaction_count || 0) + ' payments</small></div>'
+    + '<div class="kpi"><span>Period Total</span><strong>' + phpFmt(totalRev) + '</strong><small>' + totalTx + ' payments</small></div>'
     + '</div>'
     + chartSection + predSection
     + '<div class="section-title">Detailed Breakdown</div>'
@@ -6066,7 +6066,7 @@ function downloadReportPDF() {
     + '<div class="summary-item"><span>Total Revenue</span><strong>' + phpFmt(totalRev) + '</strong></div>'
     + '<div class="summary-item"><span>Total Discounts</span><strong style="color:#c07000">' + phpFmt(totalDis) + '</strong></div>'
     + '<div class="summary-item"><span>Net Revenue</span><strong>' + phpFmt(totalRev - totalDis) + '</strong></div>'
-    + '<div class="summary-item"><span>Total Transactions</span><strong>' + totalTx + '</strong></div>'
+    + '<div class="summary-item"><span>Total Payments</span><strong>' + totalTx + '</strong></div>'
     + '</div>'
     + '<div class="footer"><span>OccupAI Parking Management System &nbsp;|&nbsp; ' + escapeHtml(reportData.revenue_basis || 'Revenue Report') + '</span><span>Confidential &mdash; For Business Use Only</span></div>'
     + '</body></html>';
