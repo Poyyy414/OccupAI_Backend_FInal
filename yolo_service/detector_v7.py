@@ -135,27 +135,38 @@ CAMERA_LAYOUT_FILE = os.getenv("CAMERA_LAYOUT_FILE", "").strip() or None
 STREAM_FPS  = max(1, _ei("STREAM_FPS", 20))
 MODELS_DIR  = os.getenv("MODELS_DIR",
               os.path.join(os.path.dirname(__file__), '..', 'backend', 'models'))
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+_DEFAULT_YOLO_MODEL_PATH = os.path.join(
+    PROJECT_ROOT,
+    "yolo_service",
+    "models",
+    "toy_vehicle_v2_best.pt",
+)
+YOLO_MODEL_PATH = os.getenv("YOLO_MODEL_PATH", _DEFAULT_YOLO_MODEL_PATH).strip()
+if not os.path.isabs(YOLO_MODEL_PATH):
+    YOLO_MODEL_PATH = os.path.abspath(os.path.join(PROJECT_ROOT, YOLO_MODEL_PATH))
 
 FEED_W = 640
 FEED_H = 480
 CAMERA_FPS  = max(1, _ei("CAMERA_FPS", 30))
-IMGSZ       = _ei("IMGSZ",      224)
+IMGSZ       = _ei("IMGSZ",      640)
 YOLO_SKIP   = _ei("YOLO_SKIP",    8)
 YOLO_ASYNC  = _eb("YOLO_ASYNC", True)
 YOLO_INTERVAL = max(0.05, _ef("YOLO_INTERVAL", 0.35))
 JPEG_Q      = _ei("JPEG_Q",      42)
 PUSH_EVERY  = _ei("PUSH_EVERY",  60)
 PUSH_MIN_INTERVAL = max(0.2, _ef("PUSH_MIN_INTERVAL", 0.75))
-CONF_THRESH = _ef("CONF_THRESH", 0.15)
+CONF_THRESH = _ef("CONF_THRESH", 0.35)
 IOU_THRESH  = _ef("IOU_THRESH",  0.15)
 ASSIGN_MIN_OVERLAP = _ef("ASSIGN_MIN_OVERLAP", 0.18)
 DEDUPE_IOU_THRESH  = _ef("DEDUPE_IOU_THRESH",  0.35)
 DRAW_DETECTOR_BOXES = _eb("DRAW_DETECTOR_BOXES", False)
-TOY_ONLY_DETECTION = _eb("TOY_ONLY_DETECTION", True)
+TOY_ONLY_DETECTION = _eb("TOY_ONLY_DETECTION", False)
+USE_COLOR_TOY_FALLBACK = _eb("USE_COLOR_TOY_FALLBACK", False)
 USE_BG_OCCUPANCY = _eb("USE_BG_OCCUPANCY", False)
-YOLO_VEHICLE_CLASS_IDS = {
-    int(v.strip()) for v in os.getenv("YOLO_VEHICLE_CLASS_IDS", "2,3,5,7").split(",")
-    if v.strip().isdigit()
+YOLO_CLASS_TO_VEHICLE_TYPE = {
+    "toy_car": "car",
+    "toy_motorcycle": "motorcycle",
 }
 
 SLOT_CORNER_RADIUS = max(0, _ei("SLOT_CORNER_RADIUS", 14))
@@ -502,26 +513,62 @@ def find_toy_boxes(frame):
             types.append("motorcycle" if ca < fa*TOY_MOTO_MAX_AREA_FRAC else "car")
     return boxes, types
 
+def _normalized_model_names(model):
+    names = getattr(model, "names", {}) or {}
+    if isinstance(names, list):
+        names = dict(enumerate(names))
+    return {
+        int(class_id): str(class_name).strip().lower()
+        for class_id, class_name in names.items()
+    }
+
+
+def validate_toy_model(model):
+    """Fail fast unless the configured model is the trained two-class model."""
+    names = _normalized_model_names(model)
+    actual = set(names.values())
+    expected = set(YOLO_CLASS_TO_VEHICLE_TYPE)
+    if actual != expected:
+        raise RuntimeError(
+            "YOLO_MODEL_PATH must contain exactly the classes "
+            f"{sorted(expected)}; found {sorted(actual)}"
+        )
+    return names
+
+
 def yolo_boxes(model, frame):
-    """Returns (boxes, types) — two parallel lists, types[i] from the COCO
-    class id ("motorcycle" for class 3, "car" for everything else kept by
-    YOLO_VEHICLE_CLASS_IDS — i.e. bus/truck are bucketed with "car")."""
-    res=model(frame,imgsz=IMGSZ,verbose=False)[0]
+    """Return role-filtered boxes from the custom toy-vehicle model only."""
+    names = _normalized_model_names(model)
+    allowed_ids = [
+        class_id
+        for class_id, class_name in names.items()
+        if YOLO_CLASS_TO_VEHICLE_TYPE.get(class_name) == CAMERA_ROLE
+    ]
+    if not allowed_ids:
+        return [], []
+    res=model.predict(
+        frame,
+        imgsz=IMGSZ,
+        conf=CONF_THRESH,
+        classes=allowed_ids,
+        verbose=False,
+    )[0]
     out=[]; types=[]
     if res.boxes is not None:
         for r in res.boxes:
             if float(r.conf[0]) <= CONF_THRESH:
                 continue
-            cls_id = None
             try:
                 cls_id = int(r.cls[0])
-                if YOLO_VEHICLE_CLASS_IDS and cls_id not in YOLO_VEHICLE_CLASS_IDS:
-                    continue
             except Exception:
-                pass
+                continue
+            class_name = names.get(cls_id, "")
+            vehicle_type = YOLO_CLASS_TO_VEHICLE_TYPE.get(class_name)
+            if vehicle_type != CAMERA_ROLE:
+                continue
             x1,y1,x2,y2=map(int,r.xyxy[0])
             out.append([x1,y1,x2,y2])
-            types.append("motorcycle" if cls_id == 3 else "car")
+            types.append(vehicle_type)
     return out, types
 
 
@@ -690,7 +737,7 @@ def detector_worker(model, in_q, result, stop_event):
             continue
         try:
             yolo_b, yolo_t = ([], []) if TOY_ONLY_DETECTION else yolo_boxes(model, frame)
-            toy_b, toy_t = find_toy_boxes(frame)
+            toy_b, toy_t = find_toy_boxes(frame) if USE_COLOR_TOY_FALLBACK else ([], [])
             with result["lock"]:
                 result["yolo"] = yolo_b
                 result["yolo_types"] = yolo_t
@@ -799,12 +846,19 @@ def detection_loop():
 
     model=None
     if TOY_ONLY_DETECTION:
-        print("[detector] Toy-only mode enabled; YOLO object detection is skipped.")
+        print("[detector] Legacy color-only mode enabled; trained YOLO is skipped.")
     else:
-        print("[yolo] Loading YOLOv8n...")
-        model=YOLO("yolov8n.pt")
+        if not os.path.isfile(YOLO_MODEL_PATH):
+            raise FileNotFoundError(f"Toy YOLO model not found: {YOLO_MODEL_PATH}")
+        print(f"[yolo] Loading custom toy model: {YOLO_MODEL_PATH}")
+        model=YOLO(YOLO_MODEL_PATH)
+        model_names = validate_toy_model(model)
         model(np.zeros((FEED_H,FEED_W,3),dtype=np.uint8),imgsz=IMGSZ,verbose=False)
-        print(f"[yolo] Ready  imgsz={IMGSZ}  conf≥{CONF_THRESH}  async={YOLO_ASYNC}")
+        print(
+            f"[yolo] Ready classes={model_names} imgsz={IMGSZ} "
+            f"conf≥{CONF_THRESH} async={YOLO_ASYNC} "
+            f"color_fallback={USE_COLOR_TOY_FALLBACK}"
+        )
 
     cap=cv2.VideoCapture(WEBCAM_IDX,cv2.CAP_DSHOW)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, FEED_W)
@@ -976,7 +1030,7 @@ def detection_loop():
                     toy_t = list(det_result["toy_types"])
             elif frame_idx%YOLO_SKIP==0 and cam_ok and not rescanning and not rewarming:
                 yolo_b, yolo_t = ([], []) if TOY_ONLY_DETECTION else yolo_boxes(model,frame)
-                toy_b, toy_t = find_toy_boxes(frame)
+                toy_b, toy_t = find_toy_boxes(frame) if USE_COLOR_TOY_FALLBACK else ([], [])
 
             # ── Active slots (AI may have updated) ────────────────────────────────
             active=slot_state.active_slots

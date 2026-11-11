@@ -10,3 +10,10 @@ __pycache__/
 
 # Local detector/debug artifacts
 yolo_service/debug_*.jpg
+OccupAI_Toy_Vehicle_Model/
+OccuAI_Toy_Vehicle_Model_v2/
+OccuAI_Toy_Vehicle_v2_Colab/
+OccuAI_Toy_Vehicle_v2_Colab.zip
+training_runs/
+toy-training.*.log
+toy-v2-training.*.log
