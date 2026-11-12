@@ -664,6 +664,13 @@
 
     .camera-frame img { width: 100%; height: 100%; object-fit: contain; display: none; }
     .camera-frame img.visible { display: block; }
+    .camera-frame iframe {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      display: none;
+      background: #030706;
+    }
 
     .camera-placeholder {
       position: absolute;
@@ -954,6 +961,7 @@
             <button class="camera-retry" type="button" onclick="retryCamera('cars')">Try again</button>
           </div>
           <div class="camera-frame">
+            <iframe id="carsCameraHls" title="Live car parking camera" allow="autoplay; fullscreen" loading="lazy"></iframe>
             <img id="carsCameraImage" alt="Live car parking camera" onload="cameraLoaded('cars')" onerror="cameraFailed('cars')" />
             <div class="camera-placeholder" id="carsCameraPlaceholder">Waiting for the car camera...</div>
           </div>
@@ -965,6 +973,7 @@
             <button class="camera-retry" type="button" onclick="retryCamera('motorcycles')">Try again</button>
           </div>
           <div class="camera-frame">
+            <iframe id="motorcyclesCameraHls" title="Live motorcycle parking camera" allow="autoplay; fullscreen" loading="lazy"></iframe>
             <img id="motorcyclesCameraImage" alt="Live motorcycle parking camera" onload="cameraLoaded('motorcycles')" onerror="cameraFailed('motorcycles')" />
             <div class="camera-placeholder" id="motorcyclesCameraPlaceholder">Waiting for the motorcycle camera...</div>
           </div>
@@ -995,6 +1004,7 @@
     let discountVerificationTimer = null;
     let summaryRequestInFlight = false;
     let reservationRequestInFlight = false;
+    let mediaStreamBaseUrl = '';
     const cameraFeeds = {
       cars: { retryTimer: null, retries: 0 },
       motorcycles: { retryTimer: null, retries: 0 },
@@ -1005,7 +1015,7 @@
     } else {
       hydrateUser(user);
       renderSpaceMap(0, null, null);
-      startLiveCameras();
+      initializeLiveCameras();
       fetchSummary();
       fetchReservationSlots();
       fetchDiscountAvailability();
@@ -1022,6 +1032,21 @@
       return '/api/stream?camera_id=' + encodeURIComponent(cameraId) + '&v=' + Date.now();
     }
 
+    async function initializeLiveCameras() {
+      try {
+        const response = await fetch('/api/media-config');
+        if (response.ok) {
+          const config = await response.json();
+          if (config.enabled && String(config.base_url || '').startsWith('https://')) {
+            mediaStreamBaseUrl = String(config.base_url).replace(/\/$/, '');
+          }
+        }
+      } catch (_) {
+        mediaStreamBaseUrl = '';
+      }
+      startLiveCameras();
+    }
+
     function startLiveCameras() {
       retryCamera('cars');
       retryCamera('motorcycles');
@@ -1030,6 +1055,7 @@
     function retryCamera(cameraId) {
       const feed = cameraFeeds[cameraId];
       const img = cameraElement(cameraId, 'Image');
+      const hls = cameraElement(cameraId, 'Hls');
       const state = cameraElement(cameraId, 'State');
       const placeholder = cameraElement(cameraId, 'Placeholder');
       if (!feed || !img || !state || !placeholder) return;
@@ -1042,6 +1068,20 @@
       placeholder.textContent = 'Connecting to the secure online feed...';
       placeholder.classList.remove('hidden');
       img.classList.remove('visible');
+      if (hls) {
+        hls.style.display = 'none';
+        hls.removeAttribute('src');
+      }
+      if (mediaStreamBaseUrl && hls) {
+        img.removeAttribute('src');
+        hls.src = mediaStreamBaseUrl + '/' + encodeURIComponent(cameraId) + '/';
+        hls.style.display = 'block';
+        placeholder.classList.add('hidden');
+        state.textContent = 'Live';
+        state.className = 'camera-view-state online';
+        feed.retries = 0;
+        return;
+      }
       img.src = cameraStreamUrl(cameraId);
     }
 

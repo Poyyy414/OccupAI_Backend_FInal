@@ -1211,6 +1211,14 @@
       object-fit: contain;
     }
 
+    .stream-wrap iframe.media-stream-frame {
+      display: none;
+      width: 100%;
+      height: 100%;
+      border: 0;
+      background: #030507;
+    }
+
     .stream-placeholder {
       position: absolute;
       inset: 0;
@@ -2636,6 +2644,7 @@
               </div>
             </div>
             <div class="stream-wrap" id="carStreamWrap">
+              <iframe id="carStreamHls" class="media-stream-frame" title="Car parking live feed" allow="autoplay; fullscreen" loading="lazy"></iframe>
               <img id="carStreamImg" class="mjpeg" alt="Car parking live feed" onerror="onCameraStreamError(this, 'car')" onload="onCameraStreamLoad(this, 'car')" style="display:none" />
               <div class="stream-placeholder" id="carStreamPlaceholder">
                 <div class="camera-mark">CAR</div>
@@ -2665,6 +2674,7 @@
               </div>
             </div>
             <div class="stream-wrap" id="motorcycleStreamWrap">
+              <iframe id="motorcycleStreamHls" class="media-stream-frame" title="Motorcycle parking live feed" allow="autoplay; fullscreen" loading="lazy"></iframe>
               <img id="motorcycleStreamImg" class="mjpeg" alt="Motorcycle parking live feed" onerror="onCameraStreamError(this, 'motorcycle')" onload="onCameraStreamLoad(this, 'motorcycle')" style="display:none" />
               <div class="stream-placeholder" id="motorcycleStreamPlaceholder">
                 <div class="camera-mark">MOTO</div>
@@ -3967,6 +3977,22 @@ const CAMERA_CARD_CONFIG = {
   },
 };
 
+let mediaStreamBaseUrl = '';
+
+async function loadMediaStreamConfig() {
+  try {
+    const response = await fetch('/api/media-config');
+    if (!response.ok) return;
+    const config = await response.json();
+    if (config.enabled && String(config.base_url || '').startsWith('https://')) {
+      mediaStreamBaseUrl = String(config.base_url).replace(/\/$/, '');
+      fetchStats();
+    }
+  } catch (_) {
+    mediaStreamBaseUrl = '';
+  }
+}
+
 const _cameraStreamState = {
   car: { cameraId: '', endpoint: '', retries: 0, timer: null, error: false, missingSince: 0 },
   motorcycle: { cameraId: '', endpoint: '', retries: 0, timer: null, error: false, missingSince: 0 },
@@ -3995,6 +4021,7 @@ function updateCameraCard(cardKey, cameras) {
   const state = _cameraStreamState[cardKey];
   const config = CAMERA_CARD_CONFIG[cardKey];
   const img = document.getElementById(cameraCardElementId(cardKey, 'Img'));
+  const hls = document.getElementById(cameraCardElementId(cardKey, 'Hls'));
   const placeholder = document.getElementById(cameraCardElementId(cardKey, 'Placeholder'));
   const badge = document.getElementById(cameraCardElementId(cardKey, 'Badge'));
   const inline = document.getElementById(cameraCardElementId(cardKey, 'InlineStatus'));
@@ -4014,6 +4041,7 @@ function updateCameraCard(cardKey, cameras) {
       img.dataset.endpoint = '';
       img.style.display = 'none';
     }
+    if (hls) { hls.removeAttribute('src'); hls.style.display = 'none'; }
     if (placeholder) {
       placeholder.style.display = 'flex';
       placeholder.classList.toggle('blocked', blocked);
@@ -4041,7 +4069,9 @@ function updateCameraCard(cardKey, cameras) {
   if (placeholder) placeholder.classList.remove('blocked');
   if (statusMsg) statusMsg.classList.remove('blocked');
 
-  const endpoint = '/api/stream?camera_id=' + encodeURIComponent(match.id);
+  const endpoint = mediaStreamBaseUrl
+    ? mediaStreamBaseUrl + '/' + encodeURIComponent(match.id) + '/'
+    : '/api/stream?camera_id=' + encodeURIComponent(match.id);
   const cameraChanged = state.cameraId !== match.id || state.endpoint !== endpoint;
   if (cameraChanged) {
     state.cameraId = match.id;
@@ -4049,7 +4079,14 @@ function updateCameraCard(cardKey, cameras) {
     state.retries = 0;
     state.error = false;
     if (state.timer) { clearTimeout(state.timer); state.timer = null; }
-    if (img) {
+    if (mediaStreamBaseUrl && hls) {
+      if (img) { img.removeAttribute('src'); img.style.display = 'none'; }
+      hls.src = endpoint;
+      hls.style.display = 'block';
+      if (placeholder) placeholder.style.display = 'none';
+      if (badge) badge.style.display = 'flex';
+    } else if (img) {
+      if (hls) { hls.removeAttribute('src'); hls.style.display = 'none'; }
       img.dataset.endpoint = endpoint;
       img.src = endpoint;
       img.style.display = 'block';
@@ -4065,6 +4102,7 @@ function updateCameraCard(cardKey, cameras) {
     state.cameraId = '';
     state.endpoint = '';
     if (img) { img.removeAttribute('src'); img.style.display = 'none'; }
+    if (hls) { hls.removeAttribute('src'); hls.style.display = 'none'; }
     if (placeholder) { placeholder.style.display = 'flex'; placeholder.classList.add('blocked'); }
     if (badge) badge.style.display = 'none';
     if (inline) {
@@ -4088,9 +4126,16 @@ function updateCameraCard(cardKey, cameras) {
   setText(cardKey + 'Free', total ? free : '--');
   setText(cardKey + 'Total', total || '--');
   setText(cardKey + 'Pct', total ? Math.round(pct) + '%' : '--');
-  if (endpointLabel) endpointLabel.textContent = `${config.label} is connecting`;
-  if (statusMsg && !state.error) statusMsg.textContent = `Connecting to the ${config.noun} camera...`;
-  if (inline && !state.error) { inline.textContent = 'Connecting'; inline.className = 'status-chip warn'; }
+  if (endpointLabel) endpointLabel.textContent = mediaStreamBaseUrl
+    ? `${config.label} secure HLS feed`
+    : `${config.label} is connecting`;
+  if (statusMsg && !state.error) statusMsg.textContent = mediaStreamBaseUrl
+    ? `${config.label} is live.`
+    : `Connecting to the ${config.noun} camera...`;
+  if (inline && !state.error) {
+    inline.textContent = mediaStreamBaseUrl ? 'Live' : 'Connecting';
+    inline.className = mediaStreamBaseUrl ? 'status-chip good' : 'status-chip warn';
+  }
 }
 
 function updateDualCameraFeeds(cameras, aggregate) {
@@ -5635,12 +5680,20 @@ function onCameraStreamError(img, cardKey) {
 function retryCameraStream(cardKey) {
   const state = _cameraStreamState[cardKey];
   const img = document.getElementById(cameraCardElementId(cardKey, 'Img'));
+  const hls = document.getElementById(cameraCardElementId(cardKey, 'Hls'));
   const inline = document.getElementById(cameraCardElementId(cardKey, 'InlineStatus'));
-  if (!state || !state.endpoint || !img) return;
+  if (!state || !state.endpoint) return;
   if (state.timer) { clearTimeout(state.timer); state.timer = null; }
   state.retries = 0;
   state.error = false;
   if (inline) { inline.textContent = 'Trying again'; inline.className = 'status-chip warn'; }
+  if (mediaStreamBaseUrl && hls) {
+    hls.src = state.endpoint;
+    hls.style.display = 'block';
+    if (inline) { inline.textContent = 'Live'; inline.className = 'status-chip good'; }
+    return;
+  }
+  if (!img) return;
   img.src = state.endpoint + '&t=' + Date.now();
 }
 
@@ -5750,6 +5803,7 @@ function openFullscreen() {
 initTheme();
 initLargeText();
 if (isAuthorizedAdmin) {
+  loadMediaStreamConfig();
   // Spread the initial load out instead of firing ~12 requests in the same
   // instant — see the fetchWithRetry/staggerCalls comment above for why.
   _loadPanelData('overview', true);

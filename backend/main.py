@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 from zoneinfo import ZoneInfo
 
 
@@ -68,6 +68,16 @@ elif DEPLOY_MODE == "local":
 else:
     raise RuntimeError("CAM_TOKEN must be configured outside local development.")
 STREAM_PORT  = int(os.getenv("STREAM_PORT", "8001"))
+_raw_media_stream_base_url = os.getenv("MEDIA_STREAM_BASE_URL", "").strip().rstrip("/")
+if _raw_media_stream_base_url:
+    _media_stream_url = urlparse(_raw_media_stream_base_url)
+    if _media_stream_url.scheme != "https" or not _media_stream_url.netloc:
+        raise RuntimeError("MEDIA_STREAM_BASE_URL must be an absolute HTTPS URL.")
+    MEDIA_STREAM_BASE_URL = _raw_media_stream_base_url
+    MEDIA_STREAM_ORIGIN = f"https://{_media_stream_url.netloc}"
+else:
+    MEDIA_STREAM_BASE_URL = ""
+    MEDIA_STREAM_ORIGIN = ""
 OFFICIAL_CAR_CAPACITY = 10
 OFFICIAL_MOTORCYCLE_CAPACITY = 20
 OFFICIAL_LOT_CAPACITY = OFFICIAL_CAR_CAPACITY + OFFICIAL_MOTORCYCLE_CAPACITY
@@ -1843,7 +1853,8 @@ async def security_headers(request: Request, call_next):
         f"script-src 'self' 'nonce-{csp_nonce}' 'unsafe-hashes' https://cdn.jsdelivr.net "
         f"{inline_event_hashes}; "
         f"script-src-attr 'unsafe-hashes' {inline_event_hashes}; "
-        "connect-src 'self'; frame-src 'self' https://checkout.paymongo.com;",
+        "connect-src 'self'; frame-src 'self' https://checkout.paymongo.com "
+        f"{MEDIA_STREAM_ORIGIN};",
     )
     if DEPLOY_MODE != "local":
         response.headers.setdefault(
@@ -2268,6 +2279,57 @@ def stream_token(_auth=Depends(require_user)):
     }
 
 
+@app.get("/api/media-config")
+def media_config(_auth=Depends(require_user)):
+    """Return the optional public HLS service without exposing camera secrets."""
+    enabled = bool(MEDIA_STREAM_BASE_URL)
+    return {
+        "enabled": enabled,
+        "base_url": MEDIA_STREAM_BASE_URL if enabled else "",
+        "streams": {
+            camera_id: {
+                "page_url": f"{MEDIA_STREAM_BASE_URL}/{camera_id}/" if enabled else "",
+                "hls_url": (
+                    f"{MEDIA_STREAM_BASE_URL}/{camera_id}/index.m3u8"
+                    if enabled else ""
+                ),
+            }
+            for camera_id in CAMERA_ROLE_CONFIG
+        },
+    }
+
+
+@app.get("/api/camera-frame")
+def camera_frame(
+    camera_id: str = Query("main", min_length=1, max_length=40),
+    _auth=Depends(require_stream_access),
+):
+    """Return the latest JPEG for native clients that cannot consume MJPEG.
+
+    The Flutter app polls this small endpoint and supplies its normal bearer
+    token. This is deliberately separate from stats so a video refresh does
+    not run database or reservation work.
+    """
+    camera_id = _normalize_camera_id(camera_id)
+    if camera_id not in CAMERA_ROLE_CONFIG:
+        raise HTTPException(404, "This camera is not configured")
+    with state_lock:
+        item = camera_frames.get(camera_id)
+        if item:
+            item = dict(item)
+    if not item or time.monotonic() - item["received_at"] > CAMERA_STATE_TTL_SECONDS:
+        raise HTTPException(503, "The camera has not sent a recent image")
+    return Response(
+        content=item["jpeg"],
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "X-Camera-Frame-Version": str(item["version"]),
+        },
+    )
+
+
 # ══════════════════════════════════════════════════════════════════
 #  YOLO endpoints
 # ══════════════════════════════════════════════════════════════════
@@ -2381,7 +2443,18 @@ def yolo_update(data: YoloUpdate, x_cam_token: str = Header(...)):
 @app.post("/yolo/push-frame")
 def push_frame(data: PushFrame, x_cam_token: str = Header(...)):
     _check_cam_token(x_cam_token)
-    return {"ok": True}
+    camera_id = _normalize_camera_id(data.camera_id)
+    if camera_id not in CAMERA_ROLE_CONFIG:
+        raise HTTPException(422, "Camera identity must be cars or motorcycles")
+    snapshot_jpeg = _decode_camera_snapshot(data.frame)
+    with state_lock:
+        previous_version = int(camera_frames.get(camera_id, {}).get("version", 0))
+        camera_frames[camera_id] = {
+            "jpeg": snapshot_jpeg,
+            "received_at": time.monotonic(),
+            "version": previous_version + 1,
+        }
+    return {"ok": True, "camera_id": camera_id, "version": previous_version + 1}
 
 
 # ══════════════════════════════════════════════════════════════════

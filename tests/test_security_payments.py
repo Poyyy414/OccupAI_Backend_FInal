@@ -168,6 +168,8 @@ def test_admin_payment_email_links_registered_driver(monkeypatch):
 
 def test_operational_routes_have_auth_dependencies():
     protected = {
+        "/api/camera-frame",
+        "/api/media-config",
         "/api/stream",
         "/api/stats",
         "/api/occupancy",
@@ -180,6 +182,22 @@ def test_operational_routes_have_auth_dependencies():
     for route in routes.values():
         dependency_calls = {dependency.call for dependency in route.dependant.dependencies}
         assert m.require_user in dependency_calls or m.require_stream_access in dependency_calls
+
+
+def test_media_config_builds_both_public_hls_streams(monkeypatch):
+    base_url = "https://camera.example.test"
+    monkeypatch.setattr(m, "MEDIA_STREAM_BASE_URL", base_url)
+
+    result = m.media_config()
+
+    assert result["enabled"] is True
+    assert result["base_url"] == base_url
+    assert result["streams"]["cars"]["hls_url"] == (
+        f"{base_url}/cars/index.m3u8"
+    )
+    assert result["streams"]["motorcycles"]["page_url"] == (
+        f"{base_url}/motorcycles/"
+    )
 
 
 def test_html_response_gets_nonce_csp_and_security_headers():

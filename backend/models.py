@@ -56,6 +56,7 @@ class YoloUpdate(BaseModel):
 
 class PushFrame(BaseModel):
     frame: str = Field(min_length=1, max_length=5_000_000)  # base64 JPEG
+    camera_id: str = Field(default="main", min_length=1, max_length=40)
 
 class StatsResponse(BaseModel):
     occupied:      int

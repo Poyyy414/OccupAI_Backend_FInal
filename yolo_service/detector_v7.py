@@ -156,6 +156,10 @@ YOLO_INTERVAL = max(0.05, _ef("YOLO_INTERVAL", 0.35))
 JPEG_Q      = _ei("JPEG_Q",      42)
 PUSH_EVERY  = _ei("PUSH_EVERY",  60)
 PUSH_MIN_INTERVAL = max(0.2, _ef("PUSH_MIN_INTERVAL", 0.75))
+# Video frames are sent independently from occupancy updates. The old setup
+# only included a frame every PUSH_EVERY detector frames, which made an online
+# 16 FPS camera look like a 0.2-0.3 FPS slideshow.
+FRAME_PUSH_INTERVAL = max(0.25, _ef("FRAME_PUSH_INTERVAL", 0.5))
 CONF_THRESH = _ef("CONF_THRESH", 0.35)
 IOU_THRESH  = _ef("IOU_THRESH",  0.15)
 ASSIGN_MIN_OVERLAP = _ef("ASSIGN_MIN_OVERLAP", 0.18)
@@ -234,6 +238,8 @@ _stream_frame = None
 _stream_lock  = threading.Lock()
 _pushing      = False
 _push_lock    = threading.Lock()
+_frame_pushing = False
+_frame_push_lock = threading.Lock()
 _push_health  = {}
 _cam_q: queue.Queue = queue.Queue(maxsize=1)
 _cam_ok      = True
@@ -791,6 +797,38 @@ def encode_frame(frame):
     _,buf=cv2.imencode('.jpg',frame,[cv2.IMWRITE_JPEG_QUALITY,JPEG_Q])
     return base64.b64encode(buf.tobytes()).decode()
 
+def push_frame_to_backend(snapshot_frame, camera_id=CAMERA_ID):
+    """Publish only the latest video frame without rerunning state/DB work."""
+    global _frame_pushing
+    with _frame_push_lock:
+        if _frame_pushing:
+            return
+        _frame_pushing=True
+    try:
+        payload={"camera_id":camera_id,"frame":encode_frame(snapshot_frame)}
+        for target in _backend_targets():
+            health_key=f"{target}/frame"
+            try:
+                r=requests.post(f"{target}/yolo/push-frame",json=payload,
+                                headers=HEADERS,timeout=3)
+                if r.status_code >= 400:
+                    if _push_health.get(health_key) != r.status_code:
+                        print(f"[frame] {target}: HTTP {r.status_code} {r.text[:120]}")
+                    _push_health[health_key]=r.status_code
+                else:
+                    if _push_health.get(health_key) is not True:
+                        print(f"[frame] {target}: connected (HTTP {r.status_code})")
+                    _push_health[health_key]=True
+            except Exception as e:
+                if _push_health.get(health_key) != "error":
+                    print(f"[frame] {target}: {e}")
+                _push_health[health_key]="error"
+    except Exception as e:
+        print(f"[frame] {e}")
+    finally:
+        with _frame_push_lock:
+            _frame_pushing=False
+
 def push_to_backend(occupied,free,total,pct,fps,zone_status,snapshot_frame,
                     car_count=0,moto_count=0, camera_id=CAMERA_ID,
                     camera_role=CAMERA_ROLE, reporting=True,
@@ -932,6 +970,7 @@ def detection_loop():
     calibration_required=False
     last_check_t=time.time(); last_n_slots=len(slot_state.active_slots)
     last_push_t=0.0
+    last_frame_push_t=0.0
     last_sent_total=None
     last_sent_zones={}
     last_zone_seen = {}
@@ -1107,6 +1146,15 @@ def detection_loop():
                      rewarming=rewarming,demand=demand)
 
             with _stream_lock: _stream_frame=ann
+
+            if (now-last_frame_push_t)>=FRAME_PUSH_INTERVAL and not _frame_pushing:
+                last_frame_push_t=now
+                threading.Thread(
+                    target=push_frame_to_backend,
+                    args=(ann.copy(),CAMERA_ID),
+                    daemon=True,
+                    name=f"{CAMERA_ID}-frame-push",
+                ).start()
 
             zones_changed = (
                 n_slots != last_sent_total or
