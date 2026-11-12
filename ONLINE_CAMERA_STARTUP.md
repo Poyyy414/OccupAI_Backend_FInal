@@ -24,6 +24,18 @@ cd "$env:USERPROFILE\Downloads\mediamtx_v1.21.3_windows_amd64"
 Keep this terminal open. A successful startup should show listeners including
 RTSP on port `8554` and HLS on port `8888`.
 
+The active `mediamtx.yml` should contain:
+
+```yaml
+hlsVariant: lowLatency
+hlsAlwaysRemux: true
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+```
+
+Keeping the HLS muxer warm prevents a new viewer from seeing a black frame while
+MediaMTX waits to create the first playlist and segment.
+
 ## 2. Start the computer-vision workers
 
 Open a second PowerShell terminal and run:
@@ -42,28 +54,12 @@ Open both addresses in the laptop browser before continuing. Confirm that both
 feeds show the correct camera, parking boxes, status colors, and detection
 information.
 
-## 3. Publish the processed car video
+The launcher now starts an internal FFmpeg publisher for each detector. It
+publishes the latest annotated frame at a steady 10 FPS and controlled bitrate.
+Do not run the old manual FFmpeg commands because two publishers cannot use the
+same `cars` or `motorcycles` MediaMTX path.
 
-Open a third PowerShell terminal and run:
-
-```powershell
-ffmpeg -fflags nobuffer -flags low_delay -i http://127.0.0.1:8001/stream -an -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r 15 -g 15 -keyint_min 15 -sc_threshold 0 -bf 0 -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/cars
-```
-
-Keep the terminal open. This publishes the YOLO-annotated car feed, rather
-than opening the USB camera a second time.
-
-## 4. Publish the processed motorcycle video
-
-Open a fourth PowerShell terminal and run:
-
-```powershell
-ffmpeg -fflags nobuffer -flags low_delay -i http://127.0.0.1:8002/stream -an -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -r 15 -g 15 -keyint_min 15 -sc_threshold 0 -bf 0 -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/motorcycles
-```
-
-Keep the terminal open.
-
-## 5. Check MediaMTX locally
+## 3. Check MediaMTX locally
 
 Open these addresses in the laptop browser:
 
@@ -73,9 +69,9 @@ Open these addresses in the laptop browser:
 Both videos should contain the computer-vision overlays. A short delay is
 normal because the feeds use Low-Latency HLS.
 
-## 6. Start the HTTPS tunnel
+## 4. Start the HTTPS tunnel
 
-Open a fifth PowerShell terminal and run:
+Open a third PowerShell terminal and run:
 
 ```powershell
 cloudflared tunnel --url http://127.0.0.1:8888
@@ -94,7 +90,7 @@ https://random-words.trycloudflare.com/cars/
 https://random-words.trycloudflare.com/motorcycles/
 ```
 
-## 7. Update Render
+## 5. Update Render
 
 In the Render dashboard:
 
@@ -119,8 +115,7 @@ same addresses from the backend automatically.
 - [ ] Both USB cameras are connected.
 - [ ] MediaMTX is running.
 - [ ] Both YOLO workers are running.
-- [ ] Car FFmpeg publisher is running.
-- [ ] Motorcycle FFmpeg publisher is running.
+- [ ] Each YOLO terminal reports its MediaMTX publisher is connected.
 - [ ] Both local MediaMTX pages work.
 - [ ] Cloudflare Tunnel is running.
 - [ ] Both public HTTPS camera pages work.
@@ -132,21 +127,18 @@ same addresses from the backend automatically.
 Press `Ctrl+C` once in each terminal:
 
 1. Cloudflare Tunnel
-2. Car FFmpeg
-3. Motorcycle FFmpeg
-4. Two-camera YOLO launcher
-5. MediaMTX
+2. Two-camera YOLO launcher
+3. MediaMTX
 
 Do not force-close the computer while model files or configuration files are
 being edited.
 
 ## After a camera is disconnected
 
-1. Stop both FFmpeg publishers with `Ctrl+C`.
-2. Stop the YOLO launcher with `Ctrl+C`.
-3. Reconnect both cameras.
-4. Wait a few seconds for Windows to recognize them.
-5. Start again from step 2.
+1. Stop the YOLO launcher with `Ctrl+C`.
+2. Reconnect both cameras.
+3. Wait a few seconds for Windows to recognize them.
+4. Start again from step 2.
 
 MediaMTX can normally remain running. If the streams do not return, restart
 MediaMTX too and follow the complete guide from step 1.
@@ -155,14 +147,14 @@ MediaMTX too and follow the complete guide from step 1.
 
 ### Camera is busy or cannot be opened
 
-Close Camera, OBS, Zoom, browser camera tests, and old detector or FFmpeg
-processes. In this setup only the YOLO worker opens each USB camera. FFmpeg
-reads the processed HTTP feed.
+Close Camera, OBS, Zoom, browser camera tests, and old manual FFmpeg processes.
+In this setup only the YOLO worker opens each USB camera and manages its own
+background FFmpeg publisher.
 
-### FFmpeg says connection refused on port 8001 or 8002
+### Detector repeatedly says the media publisher disconnected
 
-The YOLO workers are not ready. Verify the local annotated feed in a browser,
-then rerun the corresponding FFmpeg command.
+Start MediaMTX before the YOLO launcher. Confirm RTSP port `8554` is available,
+then restart the YOLO launcher. Also confirm `ffmpeg` works from PowerShell.
 
 ### MediaMTX says port 8000 or another port is already in use
 
@@ -178,13 +170,15 @@ update `MEDIA_STREAM_BASE_URL` in Render.
 
 ### Video works but has several seconds of delay
 
-Confirm the FFmpeg commands use `-preset ultrafast`, `-tune zerolatency`,
-`-g 15`, `-keyint_min 15`, and `-bf 0`. Approximately one to three seconds on
-the website and two to four seconds in the Flutter app can still be normal for
-HLS. Sub-second internet playback generally requires WebRTC plus publicly
-reachable ICE/TURN networking.
+Confirm there are no old manual FFmpeg processes publishing to the same paths.
+The integrated publisher uses a steady 10 FPS, one-second keyframes, no B-frames,
+and a controlled 850 kbps stream. Approximately one to three seconds on the
+website and two to four seconds in the Flutter app can still be normal for HLS.
+Sub-second internet playback generally requires WebRTC plus publicly reachable
+ICE/TURN networking.
 
 ### Video has no parking boxes or detection labels
 
-FFmpeg is probably reading the USB camera directly. Stop it and use the commands
-in steps 3 and 4, which read the annotated YOLO feeds on ports 8001 and 8002.
+Pull the latest detector code and restart `start_two_cameras.ps1`. The integrated
+publisher sends the annotated detector frame, including green available, yellow
+reserved, and red occupied parking boxes.

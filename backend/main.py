@@ -2333,6 +2333,27 @@ def camera_frame(
 # ══════════════════════════════════════════════════════════════════
 #  YOLO endpoints
 # ══════════════════════════════════════════════════════════════════
+@app.get("/yolo/reservations")
+def yolo_reservations(
+    camera_id: str = Query(..., min_length=1, max_length=40),
+    x_cam_token: str = Header(...),
+):
+    """Return paid active claims for the detector's visual slot overlay."""
+    _check_cam_token(x_cam_token)
+    camera_id = _normalize_camera_id(camera_id)
+    if camera_id not in CAMERA_ROLE_CONFIG:
+        raise HTTPException(422, "Camera identity must be cars or motorcycles")
+    prefix = camera_id + ":"
+    reserved_slots = sorted(
+        row["slot_id"].split(":", 1)[1]
+        for row in _active_reservation_claims()
+        if str(row.get("slot_id") or "").startswith(prefix)
+        and row.get("payment_status") == "paid"
+        and row.get("status") in {"reserved", "occupied"}
+    )
+    return {"camera_id": camera_id, "reserved_slots": reserved_slots}
+
+
 @app.post("/yolo/update")
 def yolo_update(data: YoloUpdate, x_cam_token: str = Header(...)):
     _check_cam_token(x_cam_token)

@@ -36,6 +36,19 @@ def test_only_configured_slots_can_be_reserved():
         assert error.value.status_code == 400
 
 
+def test_detector_reservation_feed_returns_only_paid_active_camera_claims(monkeypatch):
+    monkeypatch.setattr(m, "_active_reservation_claims", lambda: [
+        {"slot_id": "cars:C01", "status": "reserved", "payment_status": "paid"},
+        {"slot_id": "cars:C02", "status": "occupied", "payment_status": "paid"},
+        {"slot_id": "cars:C03", "status": "reserved", "payment_status": "unpaid"},
+        {"slot_id": "motorcycles:M01", "status": "reserved", "payment_status": "paid"},
+    ])
+
+    result = m.yolo_reservations("cars", x_cam_token=m.CAM_TOKEN)
+
+    assert result == {"camera_id": "cars", "reserved_slots": ["C01", "C02"]}
+
+
 def test_slot_colors_prioritize_physical_occupancy_and_fail_closed(monkeypatch):
     old = dict(m.camera_states)
     try:

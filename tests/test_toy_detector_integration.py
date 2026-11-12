@@ -72,3 +72,27 @@ def test_detector_uses_stable_trained_model_path():
         os.path.join("yolo_service", "models", "toy_vehicle_v2_best.pt")
     )
     assert os.path.isfile(detector.YOLO_MODEL_PATH)
+
+
+def test_video_overlay_draws_reserved_yellow_but_occupied_red(monkeypatch):
+    frame = np.zeros((120, 180, 3), dtype=np.uint8)
+    zones = {
+        "C01": (10, 10, 80, 100),
+        "C02": (90, 10, 160, 100),
+    }
+    calls = []
+
+    monkeypatch.setattr(detector, "_reserved_slots_snapshot", lambda: {"C01", "C02"})
+    monkeypatch.setattr(
+        detector,
+        "_draw_rounded_rect",
+        lambda _frame, _x1, _y1, _x2, _y2, color, thickness=1, fill=False:
+            calls.append((color, fill)),
+    )
+
+    detector.draw_zones(frame, zones, {"C01": False, "C02": True})
+
+    assert calls[0] == (detector._RESERVED_COLOR, True)
+    assert calls[1] == (detector._OCC_COLOR, True)
+    assert calls[2] == (detector._RESERVED_COLOR, False)
+    assert calls[3] == (detector._OCC_COLOR, False)

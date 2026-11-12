@@ -13,6 +13,8 @@ import time
 import base64
 import os
 import re
+import shutil
+import subprocess
 import sys
 import queue
 import requests
@@ -160,6 +162,13 @@ PUSH_MIN_INTERVAL = max(0.2, _ef("PUSH_MIN_INTERVAL", 0.75))
 # only included a frame every PUSH_EVERY detector frames, which made an online
 # 16 FPS camera look like a 0.2-0.3 FPS slideshow.
 FRAME_PUSH_INTERVAL = max(0.25, _ef("FRAME_PUSH_INTERVAL", 0.5))
+RESERVATION_SYNC_INTERVAL = max(1.0, _ef("RESERVATION_SYNC_INTERVAL", 2.0))
+MEDIAMTX_PUBLISH_ENABLED = _eb("MEDIAMTX_PUBLISH_ENABLED", False)
+MEDIAMTX_RTSP_BASE_URL = os.getenv(
+    "MEDIAMTX_RTSP_BASE_URL", "rtsp://127.0.0.1:8554"
+).strip().rstrip("/")
+MEDIAMTX_PUBLISH_FPS = max(5, min(20, _ei("MEDIAMTX_PUBLISH_FPS", 10)))
+MEDIAMTX_VIDEO_BITRATE = max(250, _ei("MEDIAMTX_VIDEO_BITRATE_KBPS", 850))
 CONF_THRESH = _ef("CONF_THRESH", 0.35)
 IOU_THRESH  = _ef("IOU_THRESH",  0.15)
 ASSIGN_MIN_OVERLAP = _ef("ASSIGN_MIN_OVERLAP", 0.18)
@@ -247,6 +256,9 @@ _cam_ok_lock = threading.Lock()
 _cam_last_frame_at = 0.0
 _cam_frame_lock = threading.Lock()
 _cam_reader_failed = threading.Event()
+_reserved_slots = set()
+_reserved_slots_lock = threading.Lock()
+_media_publish_q: queue.Queue = queue.Queue(maxsize=1)
 
 slot_state = SlotState()
 
@@ -277,6 +289,60 @@ def _backend_targets():
 # ══════════════════════════════════════════════════════════════════════════════
 #   DB CALLBACK
 # ══════════════════════════════════════════════════════════════════════════════
+
+def _reservation_targets():
+    """Prefer the deployed database when both local and remote targets exist."""
+    remote = _norm_url(REMOTE_BACKEND_URL.strip() or BACKEND_URL)
+    targets = []
+    for target in (remote, *_backend_targets()):
+        target = _norm_url(target)
+        if target and target not in targets:
+            targets.append(target)
+    return targets
+
+
+def _refresh_reserved_slots():
+    """Refresh the paid slot claims used only by the video overlay."""
+    for target in _reservation_targets():
+        try:
+            response = requests.get(
+                f"{target}/yolo/reservations",
+                params={"camera_id": CAMERA_ID},
+                headers=HEADERS,
+                timeout=3,
+            )
+            if response.status_code != 200:
+                continue
+            payload = response.json()
+            slots = {
+                str(slot).strip().upper()
+                for slot in payload.get("reserved_slots", [])
+                if str(slot).strip()
+            }
+            with _reserved_slots_lock:
+                changed = slots != _reserved_slots
+                _reserved_slots.clear()
+                _reserved_slots.update(slots)
+            if changed:
+                print(
+                    f"[reservation] {CAMERA_ID}: "
+                    f"{', '.join(sorted(slots)) if slots else 'no reserved slots'}"
+                )
+            return
+        except Exception:
+            continue
+
+
+def _reservation_sync_loop():
+    while True:
+        _refresh_reserved_slots()
+        time.sleep(RESERVATION_SYNC_INTERVAL)
+
+
+def _reserved_slots_snapshot():
+    with _reserved_slots_lock:
+        return set(_reserved_slots)
+
 
 def _fetch_db_history():
     for target in _backend_targets():
@@ -584,6 +650,7 @@ def yolo_boxes(model, frame):
 
 _FREE_COLOR = (0,210,80)
 _OCC_COLOR = (30,30,220)
+_RESERVED_COLOR = (0,215,255)
 _DEMAND_COLORS = {
     DemandLevel.LOW:    (0,200,100),
     DemandLevel.NORMAL: (0,229,160),
@@ -613,28 +680,35 @@ def _draw_rounded_rect(img, x1, y1, x2, y2, color, thickness=1, fill=False):
     cv2.ellipse(img,(x1+r,y2-r),(r,r), 90,0,90,color,thickness)
 
 
-def _slot_color(name, occ):
-    return _OCC_COLOR if occ else _FREE_COLOR
+def _slot_color(status):
+    if status == "occupied":
+        return _OCC_COLOR
+    if status == "reserved":
+        return _RESERVED_COLOR
+    return _FREE_COLOR
 
 
 def draw_zones(frame, zones, zone_status):
     overlay = frame.copy()
     drawn = []
+    reserved_slots = _reserved_slots_snapshot()
     for name,(x1,y1,x2,y2) in zones.items():
         occ = zone_status.get(name, False)
-        col = _slot_color(name, occ)
+        status = "occupied" if occ else "reserved" if name in reserved_slots else "free"
+        col = _slot_color(status)
         _draw_rounded_rect(overlay,x1,y1,x2,y2,col,fill=True)
-        drawn.append((name,x1,y1,x2,y2,occ,col))
+        drawn.append((name,x1,y1,x2,y2,status,col))
 
     if drawn:
         cv2.addWeighted(overlay,0.14,frame,0.86,0,frame)
 
-    for name,x1,y1,x2,y2,occ,col in drawn:
+    for name,x1,y1,x2,y2,status,col in drawn:
         zw,zh = x2-x1, y2-y1
-        _draw_rounded_rect(frame,x1,y1,x2,y2,col,3 if occ else 2)
+        _draw_rounded_rect(frame,x1,y1,x2,y2,col,3 if status != "free" else 2)
         fs = max(0.22, min(0.42, zw/130))
         cx,cy = x1+zw//2, y1+zh//2
-        for txt,dy in [(name,-7),("OCC" if occ else "FREE",+9)]:
+        label = {"occupied": "OCC", "reserved": "RESERVED"}.get(status, "FREE")
+        for txt,dy in [(name,-7),(label,+9)]:
             (tw,_),_=cv2.getTextSize(txt,cv2.FONT_HERSHEY_SIMPLEX,fs,1)
             tx=cx-tw//2
             cv2.putText(frame,txt,(tx,cy+dy),cv2.FONT_HERSHEY_SIMPLEX,fs,(0,0,0),2)
@@ -649,7 +723,7 @@ def draw_boxes(frame, boxes, col):
     return frame
 
 
-def draw_hud(frame, free, occ, total, fps,
+def draw_hud(frame, free, occ, total, fps, reserved=0,
              cam_ok=True, rescanning=False, rewarming=False,
              demand=DemandLevel.NORMAL):
     w = frame.shape[1]
@@ -661,7 +735,8 @@ def draw_hud(frame, free, occ, total, fps,
     elif not cam_ok:
         txt="OccupAI | CAMERA BLOCKED"; col=(0,60,255)
     else:
-        txt=(f"OccupAI | Free:{free}  Occ:{occ}  Tot:{total}"
+        available=max(0, free-reserved)
+        txt=(f"OccupAI | Free:{available}  Res:{reserved}  Occ:{occ}  Tot:{total}"
              f"  FPS:{fps:.1f}  [{demand}]")
         col=_DEMAND_COLORS.get(demand,(0,229,160))
     cv2.putText(frame,txt,(6,21),cv2.FONT_HERSHEY_SIMPLEX,0.42,col,1)
@@ -792,6 +867,130 @@ def start_mjpeg_server():
 # ══════════════════════════════════════════════════════════════════════════════
 #   BACKEND PUSH
 # ══════════════════════════════════════════════════════════════════════════════
+
+def _queue_media_frame(frame):
+    if not MEDIAMTX_PUBLISH_ENABLED:
+        return
+    try:
+        _media_publish_q.put_nowait(frame)
+    except queue.Full:
+        try:
+            _media_publish_q.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            _media_publish_q.put_nowait(frame)
+        except queue.Full:
+            pass
+
+
+def _start_media_publisher(ffmpeg_path, frame):
+    height, width = frame.shape[:2]
+    publish_url = f"{MEDIAMTX_RTSP_BASE_URL}/{CAMERA_ID}"
+    bitrate = f"{MEDIAMTX_VIDEO_BITRATE}k"
+    maxrate = f"{int(MEDIAMTX_VIDEO_BITRATE * 1.2)}k"
+    bufsize = f"{MEDIAMTX_VIDEO_BITRATE * 2}k"
+    command = [
+        ffmpeg_path,
+        "-hide_banner", "-loglevel", "warning",
+        "-f", "rawvideo", "-pix_fmt", "bgr24",
+        "-video_size", f"{width}x{height}",
+        "-framerate", str(MEDIAMTX_PUBLISH_FPS),
+        "-i", "pipe:0", "-an",
+        "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
+        "-pix_fmt", "yuv420p",
+        "-b:v", bitrate, "-maxrate", maxrate, "-bufsize", bufsize,
+        "-g", str(MEDIAMTX_PUBLISH_FPS),
+        "-keyint_min", str(MEDIAMTX_PUBLISH_FPS),
+        "-sc_threshold", "0", "-bf", "0",
+        "-flush_packets", "1", "-f", "rtsp", "-rtsp_transport", "tcp",
+        publish_url,
+    ]
+    creation_flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        bufsize=0,
+        creationflags=creation_flags,
+    )
+    print(
+        f"[media] Publishing {CAMERA_ID} at {MEDIAMTX_PUBLISH_FPS} FPS, "
+        f"{MEDIAMTX_VIDEO_BITRATE} kbps -> {publish_url}"
+    )
+    return process, (width, height)
+
+
+def _stop_media_publisher(process):
+    if process is None:
+        return
+    try:
+        if process.stdin:
+            process.stdin.close()
+    except Exception:
+        pass
+    try:
+        process.terminate()
+        process.wait(timeout=2)
+    except Exception:
+        try:
+            process.kill()
+        except Exception:
+            pass
+
+
+def _media_publisher_loop():
+    """Send the latest annotation at a steady rate without blocking detection."""
+    ffmpeg_path = shutil.which("ffmpeg")
+    if not ffmpeg_path:
+        print("[media] FFmpeg was not found in PATH; online HLS publishing is disabled.")
+        return
+
+    process = None
+    process_size = None
+    latest = None
+    frame_period = 1.0 / MEDIAMTX_PUBLISH_FPS
+    next_frame_at = time.monotonic()
+    try:
+        while True:
+            try:
+                latest = _media_publish_q.get(timeout=0.25) if latest is None else latest
+                while True:
+                    latest = _media_publish_q.get_nowait()
+            except queue.Empty:
+                pass
+            if latest is None:
+                continue
+
+            now = time.monotonic()
+            if now < next_frame_at:
+                time.sleep(min(next_frame_at - now, frame_period))
+                continue
+            next_frame_at = max(next_frame_at + frame_period, now + frame_period * 0.25)
+
+            size = (latest.shape[1], latest.shape[0])
+            if process is None or process.poll() is not None or process_size != size:
+                _stop_media_publisher(process)
+                try:
+                    process, process_size = _start_media_publisher(ffmpeg_path, latest)
+                except Exception as exc:
+                    process = None
+                    process_size = None
+                    print(f"[media] Could not start publisher: {exc}")
+                    time.sleep(2)
+                    continue
+
+            try:
+                process.stdin.write(latest.tobytes())
+            except (BrokenPipeError, OSError, AttributeError) as exc:
+                print(f"[media] Publisher disconnected; retrying: {exc}")
+                _stop_media_publisher(process)
+                process = None
+                process_size = None
+                time.sleep(1)
+    finally:
+        _stop_media_publisher(process)
+
 
 def encode_frame(frame):
     _,buf=cv2.imencode('.jpg',frame,[cv2.IMWRITE_JPEG_QUALITY,JPEG_Q])
@@ -1141,11 +1340,16 @@ def detection_loop():
                 if DRAW_DETECTOR_BOXES:
                     draw_boxes(ann,assigned_boxes,(0,230,255))
 
-            draw_hud(ann,free,occupied,n_slots,fps_val,
+            reserved_visible = sum(
+                name in _reserved_slots_snapshot() and not zone_status.get(name, False)
+                for name in active
+            ) if cam_ok else 0
+            draw_hud(ann,free,occupied,n_slots,fps_val,reserved_visible,
                      cam_ok=cam_ok,rescanning=rescanning,
                      rewarming=rewarming,demand=demand)
 
             with _stream_lock: _stream_frame=ann
+            _queue_media_frame(ann)
 
             if (now-last_frame_push_t)>=FRAME_PUSH_INTERVAL and not _frame_pushing:
                 last_frame_push_t=now
@@ -1215,4 +1419,15 @@ if __name__=='__main__':
            and not target.startswith("http://localhost") for target in targets):
         if CAM_TOKEN == _CAM_TOKEN_LOCAL_DEFAULT:
             print("[push] WARNING: remote target needs the same unique CAM_TOKEN configured in Render.")
+    threading.Thread(
+        target=_reservation_sync_loop,
+        daemon=True,
+        name=f"{CAMERA_ID}-reservation-sync",
+    ).start()
+    if MEDIAMTX_PUBLISH_ENABLED:
+        threading.Thread(
+            target=_media_publisher_loop,
+            daemon=True,
+            name=f"{CAMERA_ID}-media-publisher",
+        ).start()
     detection_loop()
