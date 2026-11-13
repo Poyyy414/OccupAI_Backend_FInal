@@ -1195,6 +1195,37 @@
       justify-content: flex-end;
     }
 
+    .camera-mode-panel {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 12px;
+      padding: 12px 14px;
+      border: 1px solid var(--border-soft);
+      border-radius: 12px;
+      background: var(--surface);
+    }
+
+    .camera-mode-copy strong,
+    .camera-mode-copy span { display: block; }
+    .camera-mode-copy strong { color: var(--text); font-size: 13px; }
+    .camera-mode-copy span { margin-top: 3px; color: var(--muted); font-size: 12px; }
+    .camera-mode-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .camera-mode-btn.active {
+      border-color: var(--green);
+      background: color-mix(in srgb, var(--green) 14%, var(--surface));
+      color: var(--green);
+    }
+
+    .local-camera-open { margin-top: 4px; }
+
+    @media (max-width: 700px) {
+      .camera-mode-panel { align-items: stretch; flex-direction: column; }
+      .camera-mode-actions { justify-content: stretch; }
+      .camera-mode-actions button { flex: 1; }
+    }
+
     .stream-wrap {
       position: relative;
       overflow: hidden;
@@ -2630,6 +2661,16 @@
   <section class="content" id="content-livefeed">
     <div class="feed-grid">
       <div>
+        <div class="camera-mode-panel" aria-label="Admin camera source">
+          <div class="camera-mode-copy">
+            <strong id="adminCameraModeTitle">Local CV mode</strong>
+            <span id="adminCameraModeHelp">No-delay video opens directly from this camera computer. Occupancy data still updates online.</span>
+          </div>
+          <div class="camera-mode-actions">
+            <button class="ghost-btn camera-mode-btn" id="adminCameraLocalMode" type="button" aria-pressed="true">Local CV</button>
+            <button class="ghost-btn camera-mode-btn" id="adminCameraCloudMode" type="button" aria-pressed="false">Cloud preview</button>
+          </div>
+        </div>
         <div class="dual-feed-grid">
           <article class="stream-shell camera-feed-card" data-camera-card="car">
             <div class="stream-toolbar">
@@ -2650,6 +2691,7 @@
                 <div class="camera-mark">CAR</div>
                 <div id="carStreamStatusMsg" class="camera-status-message">Waiting for car camera data...</div>
                 <div class="mono" style="font-size:11px;color:var(--muted)">Start the car detector to show this feed.</div>
+                <button class="ghost-btn local-camera-open" id="carLocalCameraButton" type="button" style="display:none">Open local car CV</button>
               </div>
               <div class="stream-badge" id="carStreamBadge" style="display:none"><div class="bdot"></div> LIVE</div>
             </div>
@@ -2680,6 +2722,7 @@
                 <div class="camera-mark">MOTO</div>
                 <div id="motorcycleStreamStatusMsg" class="camera-status-message">Waiting for motorcycle camera data...</div>
                 <div class="mono" style="font-size:11px;color:var(--muted)">Start the motorcycle detector to show this feed.</div>
+                <button class="ghost-btn local-camera-open" id="motorcycleLocalCameraButton" type="button" style="display:none">Open local motorcycle CV</button>
               </div>
               <div class="stream-badge" id="motorcycleStreamBadge" style="display:none"><div class="bdot"></div> LIVE</div>
             </div>
@@ -3968,16 +4011,77 @@ const CAMERA_CARD_CONFIG = {
     label: 'Car Camera',
     noun: 'car',
     capacity: 10,
+    localUrl: 'http://127.0.0.1:8001/stream',
   },
   motorcycle: {
     ids: ['motorcycles', 'motorcycle', 'moto'],
     label: 'Motorcycle Camera',
     noun: 'motorcycle',
     capacity: 20,
+    localUrl: 'http://127.0.0.1:8002/stream',
   },
 };
 
 let mediaStreamBaseUrl = '';
+let adminCameraMode = localStorage.getItem('occupai_admin_camera_mode') === 'cloud'
+  ? 'cloud'
+  : 'local';
+
+function localCameraUrl(cardKey) {
+  return CAMERA_CARD_CONFIG[cardKey]?.localUrl || '';
+}
+
+function openLocalCamera(cardKey) {
+  const url = localCameraUrl(cardKey);
+  if (!url) return;
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+function renderAdminCameraMode() {
+  const local = adminCameraMode === 'local';
+  const localButton = document.getElementById('adminCameraLocalMode');
+  const cloudButton = document.getElementById('adminCameraCloudMode');
+  const title = document.getElementById('adminCameraModeTitle');
+  const help = document.getElementById('adminCameraModeHelp');
+  if (localButton) {
+    localButton.classList.toggle('active', local);
+    localButton.setAttribute('aria-pressed', String(local));
+  }
+  if (cloudButton) {
+    cloudButton.classList.toggle('active', !local);
+    cloudButton.setAttribute('aria-pressed', String(!local));
+  }
+  if (title) title.textContent = local ? 'Local CV mode' : 'Cloud preview mode';
+  if (help) help.textContent = local
+    ? 'No-delay video opens directly from this camera computer. Occupancy data still updates online.'
+    : 'Use this when the admin is away from the camera computer. Internet delay is expected.';
+}
+
+function setAdminCameraMode(mode) {
+  adminCameraMode = mode === 'cloud' ? 'cloud' : 'local';
+  localStorage.setItem('occupai_admin_camera_mode', adminCameraMode);
+  for (const state of Object.values(_cameraStreamState)) {
+    state.cameraId = '';
+    state.endpoint = '';
+    state.error = false;
+    if (state.timer) clearTimeout(state.timer);
+    state.timer = null;
+  }
+  renderAdminCameraMode();
+  fetchStats();
+}
+
+function bindAdminCameraModeControls() {
+  document.getElementById('adminCameraLocalMode')
+    ?.addEventListener('click', () => setAdminCameraMode('local'));
+  document.getElementById('adminCameraCloudMode')
+    ?.addEventListener('click', () => setAdminCameraMode('cloud'));
+  document.getElementById('carLocalCameraButton')
+    ?.addEventListener('click', () => openLocalCamera('car'));
+  document.getElementById('motorcycleLocalCameraButton')
+    ?.addEventListener('click', () => openLocalCamera('motorcycle'));
+  renderAdminCameraMode();
+}
 
 async function loadMediaStreamConfig() {
   try {
@@ -4027,6 +4131,8 @@ function updateCameraCard(cardKey, cameras) {
   const inline = document.getElementById(cameraCardElementId(cardKey, 'InlineStatus'));
   const endpointLabel = document.getElementById(cameraCardElementId(cardKey, 'Endpoint'));
   const statusMsg = document.getElementById(cameraCardElementId(cardKey, 'StatusMsg'));
+  const localButton = document.getElementById(cardKey + 'LocalCameraButton');
+  const localMode = adminCameraMode === 'local';
 
   if (!match) {
     if (!state.missingSince) state.missingSince = Date.now();
@@ -4042,6 +4148,7 @@ function updateCameraCard(cardKey, cameras) {
       img.style.display = 'none';
     }
     if (hls) { hls.removeAttribute('src'); hls.style.display = 'none'; }
+    if (localButton) localButton.style.display = localMode ? 'inline-flex' : 'none';
     if (placeholder) {
       placeholder.style.display = 'flex';
       placeholder.classList.toggle('blocked', blocked);
@@ -4069,9 +4176,11 @@ function updateCameraCard(cardKey, cameras) {
   if (placeholder) placeholder.classList.remove('blocked');
   if (statusMsg) statusMsg.classList.remove('blocked');
 
-  const endpoint = mediaStreamBaseUrl
-    ? mediaStreamBaseUrl + '/' + encodeURIComponent(match.id) + '/'
-    : '/api/stream?camera_id=' + encodeURIComponent(match.id);
+  const endpoint = localMode
+    ? localCameraUrl(cardKey)
+    : mediaStreamBaseUrl
+      ? mediaStreamBaseUrl + '/' + encodeURIComponent(match.id) + '/'
+      : '/api/stream?camera_id=' + encodeURIComponent(match.id);
   const cameraChanged = state.cameraId !== match.id || state.endpoint !== endpoint;
   if (cameraChanged) {
     state.cameraId = match.id;
@@ -4079,12 +4188,19 @@ function updateCameraCard(cardKey, cameras) {
     state.retries = 0;
     state.error = false;
     if (state.timer) { clearTimeout(state.timer); state.timer = null; }
-    if (mediaStreamBaseUrl && hls) {
+    if (localMode) {
+      if (img) { img.removeAttribute('src'); img.dataset.endpoint = ''; img.style.display = 'none'; }
+      if (hls) { hls.removeAttribute('src'); hls.style.display = 'none'; }
+      if (placeholder) placeholder.style.display = 'flex';
+      if (badge) badge.style.display = 'none';
+      if (localButton) localButton.style.display = 'inline-flex';
+    } else if (mediaStreamBaseUrl && hls) {
       if (img) { img.removeAttribute('src'); img.style.display = 'none'; }
       hls.src = endpoint;
       hls.style.display = 'block';
       if (placeholder) placeholder.style.display = 'none';
       if (badge) badge.style.display = 'flex';
+      if (localButton) localButton.style.display = 'none';
     } else if (img) {
       if (hls) { hls.removeAttribute('src'); hls.style.display = 'none'; }
       img.dataset.endpoint = endpoint;
@@ -4092,6 +4208,7 @@ function updateCameraCard(cardKey, cameras) {
       img.style.display = 'block';
       if (placeholder) placeholder.style.display = 'flex';
       if (badge) badge.style.display = 'none';
+      if (localButton) localButton.style.display = 'none';
     }
   }
 
@@ -4103,6 +4220,7 @@ function updateCameraCard(cardKey, cameras) {
     state.endpoint = '';
     if (img) { img.removeAttribute('src'); img.style.display = 'none'; }
     if (hls) { hls.removeAttribute('src'); hls.style.display = 'none'; }
+    if (localButton) localButton.style.display = localMode ? 'inline-flex' : 'none';
     if (placeholder) { placeholder.style.display = 'flex'; placeholder.classList.add('blocked'); }
     if (badge) badge.style.display = 'none';
     if (inline) {
@@ -4126,6 +4244,16 @@ function updateCameraCard(cardKey, cameras) {
   setText(cardKey + 'Free', total ? free : '--');
   setText(cardKey + 'Total', total || '--');
   setText(cardKey + 'Pct', total ? Math.round(pct) + '%' : '--');
+  if (localMode) {
+    if (endpointLabel) endpointLabel.textContent = `${config.label} direct localhost CV`;
+    if (statusMsg) statusMsg.textContent = 'Open the direct local feed for the lowest delay.';
+    if (inline) {
+      inline.textContent = 'Local ready';
+      inline.className = 'status-chip good';
+    }
+    if (localButton) localButton.style.display = 'inline-flex';
+    return;
+  }
   if (endpointLabel) endpointLabel.textContent = mediaStreamBaseUrl
     ? `${config.label} secure HLS feed`
     : `${config.label} is connecting`;
@@ -5678,6 +5806,10 @@ function onCameraStreamError(img, cardKey) {
 }
 
 function retryCameraStream(cardKey) {
+  if (adminCameraMode === 'local') {
+    openLocalCamera(cardKey);
+    return;
+  }
   const state = _cameraStreamState[cardKey];
   const img = document.getElementById(cameraCardElementId(cardKey, 'Img'));
   const hls = document.getElementById(cameraCardElementId(cardKey, 'Hls'));
@@ -5698,6 +5830,10 @@ function retryCameraStream(cardKey) {
 }
 
 function openCameraFullscreen(cardKey) {
+  if (adminCameraMode === 'local') {
+    openLocalCamera(cardKey);
+    return;
+  }
   const wrap = document.getElementById(cardKey + 'StreamWrap');
   if (wrap && wrap.requestFullscreen) wrap.requestFullscreen().catch(() => {});
 }
@@ -5803,6 +5939,7 @@ function openFullscreen() {
 initTheme();
 initLargeText();
 if (isAuthorizedAdmin) {
+  bindAdminCameraModeControls();
   loadMediaStreamConfig();
   // Spread the initial load out instead of firing ~12 requests in the same
   // instant — see the fetchWithRetry/staggerCalls comment above for why.

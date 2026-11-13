@@ -30,6 +30,24 @@ def test_driver_template_contains_both_secure_live_feeds():
     assert "Secure online feed" in html
 
 
+def test_admin_template_defaults_to_local_cv_with_cloud_fallback():
+    html = (m.TEMPLATE_DIR / "dashboard.html").read_text(encoding="utf-8")
+
+    assert "occupai_admin_camera_mode" in html
+    assert "adminCameraLocalMode" in html
+    assert "adminCameraCloudMode" in html
+    assert "http://127.0.0.1:8001/stream" in html
+    assert "http://127.0.0.1:8002/stream" in html
+    assert "Open local car CV" in html
+    assert "Open local motorcycle CV" in html
+    assert "let adminCameraMode" in html
+    assert ": 'local';" in html
+
+    driver_html = (m.TEMPLATE_DIR / "driver.html").read_text(encoding="utf-8")
+    assert "127.0.0.1:8001" not in driver_html
+    assert "127.0.0.1:8002" not in driver_html
+
+
 def test_online_relay_emits_the_latest_camera_frame():
     jpeg = b"\xff\xd8\xffrelay-frame\xff\xd9"
     previous = dict(m.camera_frames)

@@ -18,11 +18,15 @@ CAMERA_STATE_TTL_SECONDS=15
 CAMERA_STREAM_URLS=cars=http://127.0.0.1:8001/stream,motorcycles=http://127.0.0.1:8002/stream
 ```
 
-The configured URLs provide the smoother direct feed when the workers and
-dashboard are on the same computer. On a hosted backend, leave these local-only
-stream URLs unset. It will automatically relay the annotated JPEG snapshots
-already included in authenticated detector updates, so the driver and admin
-pages can show both cameras online without opening laptop ports.
+The configured URLs provide the smoother direct feed when the workers and a
+local backend are on the same computer. On the hosted Render backend, leave
+these local-only stream URLs unset.
+
+The hosted admin dashboard defaults to **Local CV**: it opens ports 8001/8002
+directly in local browser tabs while occupancy data continues to come from
+Render. Its **Cloud preview** is an optional remote fallback. Driver web and
+Flutter views always use the public MediaMTX/Cloudflare feed because drivers
+must be able to monitor the parking area away from the camera laptop.
 
 ## Start both camera workers
 
