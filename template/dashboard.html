@@ -2691,7 +2691,7 @@
                 <div class="camera-mark">CAR</div>
                 <div id="carStreamStatusMsg" class="camera-status-message">Waiting for car camera data...</div>
                 <div class="mono" style="font-size:11px;color:var(--muted)">Start the car detector to show this feed.</div>
-                <button class="ghost-btn local-camera-open" id="carLocalCameraButton" type="button" style="display:none">Open local car CV</button>
+                <button class="ghost-btn local-camera-open" id="carLocalCameraButton" type="button" style="display:none">Open separate tab</button>
               </div>
               <div class="stream-badge" id="carStreamBadge" style="display:none"><div class="bdot"></div> LIVE</div>
             </div>
@@ -2722,7 +2722,7 @@
                 <div class="camera-mark">MOTO</div>
                 <div id="motorcycleStreamStatusMsg" class="camera-status-message">Waiting for motorcycle camera data...</div>
                 <div class="mono" style="font-size:11px;color:var(--muted)">Start the motorcycle detector to show this feed.</div>
-                <button class="ghost-btn local-camera-open" id="motorcycleLocalCameraButton" type="button" style="display:none">Open local motorcycle CV</button>
+                <button class="ghost-btn local-camera-open" id="motorcycleLocalCameraButton" type="button" style="display:none">Open separate tab</button>
               </div>
               <div class="stream-badge" id="motorcycleStreamBadge" style="display:none"><div class="bdot"></div> LIVE</div>
             </div>
@@ -4031,6 +4031,10 @@ function localCameraUrl(cardKey) {
   return CAMERA_CARD_CONFIG[cardKey]?.localUrl || '';
 }
 
+function cacheBustUrl(url) {
+  return url + (url.includes('?') ? '&' : '?') + 't=' + Date.now();
+}
+
 function openLocalCamera(cardKey) {
   const url = localCameraUrl(cardKey);
   if (!url) return;
@@ -4189,11 +4193,15 @@ function updateCameraCard(cardKey, cameras) {
     state.error = false;
     if (state.timer) { clearTimeout(state.timer); state.timer = null; }
     if (localMode) {
-      if (img) { img.removeAttribute('src'); img.dataset.endpoint = ''; img.style.display = 'none'; }
+      if (img) {
+        img.dataset.endpoint = endpoint;
+        img.src = cacheBustUrl(endpoint);
+        img.style.display = 'block';
+      }
       if (hls) { hls.removeAttribute('src'); hls.style.display = 'none'; }
       if (placeholder) placeholder.style.display = 'flex';
       if (badge) badge.style.display = 'none';
-      if (localButton) localButton.style.display = 'inline-flex';
+      if (localButton) localButton.style.display = 'none';
     } else if (mediaStreamBaseUrl && hls) {
       if (img) { img.removeAttribute('src'); img.style.display = 'none'; }
       hls.src = endpoint;
@@ -4248,10 +4256,10 @@ function updateCameraCard(cardKey, cameras) {
     if (endpointLabel) endpointLabel.textContent = `${config.label} direct localhost CV`;
     if (statusMsg) statusMsg.textContent = 'Open the direct local feed for the lowest delay.';
     if (inline) {
-      inline.textContent = 'Local ready';
+      inline.textContent = 'Local live';
       inline.className = 'status-chip good';
     }
-    if (localButton) localButton.style.display = 'inline-flex';
+    if (localButton) localButton.style.display = 'none';
     return;
   }
   if (endpointLabel) endpointLabel.textContent = mediaStreamBaseUrl
@@ -5776,8 +5784,10 @@ function onCameraStreamLoad(img, cardKey) {
   const placeholder = document.getElementById(cameraCardElementId(cardKey, 'Placeholder'));
   const badge = document.getElementById(cameraCardElementId(cardKey, 'Badge'));
   const inline = document.getElementById(cameraCardElementId(cardKey, 'InlineStatus'));
+  const localButton = document.getElementById(cardKey + 'LocalCameraButton');
   if (placeholder) placeholder.style.display = 'none';
   if (badge) badge.style.display = 'flex';
+  if (localButton) localButton.style.display = 'none';
   if (inline) { inline.textContent = 'Live'; inline.className = 'status-chip good'; }
 }
 
@@ -5792,14 +5802,18 @@ function onCameraStreamError(img, cardKey) {
   if (placeholder) placeholder.style.display = 'flex';
   if (badge) badge.style.display = 'none';
   if (inline) { inline.textContent = 'Video unavailable'; inline.className = 'status-chip bad'; }
-  if (statusMsg) statusMsg.textContent = 'Parking counts are available, but the live video cannot connect right now.';
+  if (statusMsg) statusMsg.textContent = adminCameraMode === 'local'
+    ? 'The embedded local feed could not connect. Check that the camera worker is running.'
+    : 'Parking counts are available, but the live video cannot connect right now.';
+  const localButton = document.getElementById(cardKey + 'LocalCameraButton');
+  if (localButton) localButton.style.display = adminCameraMode === 'local' ? 'inline-flex' : 'none';
   state.retries += 1;
   if (!state.timer) {
     state.timer = setTimeout(() => {
       state.timer = null;
       const endpoint = state.endpoint;
       if (endpoint && img.dataset.endpoint === endpoint) {
-        img.src = endpoint + '&t=' + Date.now();
+        img.src = cacheBustUrl(endpoint);
       }
     }, Math.min(state.retries * 3, 15) * 1000);
   }
@@ -5807,7 +5821,13 @@ function onCameraStreamError(img, cardKey) {
 
 function retryCameraStream(cardKey) {
   if (adminCameraMode === 'local') {
-    openLocalCamera(cardKey);
+    const state = _cameraStreamState[cardKey];
+    const img = document.getElementById(cameraCardElementId(cardKey, 'Img'));
+    if (state?.endpoint && img) {
+      img.dataset.endpoint = state.endpoint;
+      img.src = cacheBustUrl(state.endpoint);
+      img.style.display = 'block';
+    }
     return;
   }
   const state = _cameraStreamState[cardKey];
@@ -5830,10 +5850,6 @@ function retryCameraStream(cardKey) {
 }
 
 function openCameraFullscreen(cardKey) {
-  if (adminCameraMode === 'local') {
-    openLocalCamera(cardKey);
-    return;
-  }
   const wrap = document.getElementById(cardKey + 'StreamWrap');
   if (wrap && wrap.requestFullscreen) wrap.requestFullscreen().catch(() => {});
 }

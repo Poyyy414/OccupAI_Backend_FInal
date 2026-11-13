@@ -1844,10 +1844,16 @@ async def security_headers(request: Request, call_next):
     # origins; moving those inline blocks to nonce-bearing external bundles is
     # tracked as the final CSP tightening step.
     inline_event_hashes = trusted_inline_event_hashes()
+    local_camera_images = (
+        " http://127.0.0.1:8001 http://127.0.0.1:8002"
+        if request.url.path in {"/dashboard", "/analytics"}
+        else ""
+    )
     response.headers.setdefault(
         "Content-Security-Policy",
         "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; "
-        "form-action 'self'; img-src 'self' data: blob:; media-src 'self' blob:; "
+        f"form-action 'self'; img-src 'self' data: blob:{local_camera_images}; "
+        "media-src 'self' blob:; "
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
         "font-src 'self' data: https://fonts.gstatic.com; "
         f"script-src 'self' 'nonce-{csp_nonce}' 'unsafe-hashes' https://cdn.jsdelivr.net "

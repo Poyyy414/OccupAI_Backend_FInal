@@ -110,16 +110,20 @@ MEDIA_STREAM_BASE_URL=https://random-words.trycloudflare.com
 
 After Render finishes deploying:
 
-- The admin dashboard defaults to **Local CV**. Use **Open local car CV** and
-  **Open local motorcycle CV** on the camera laptop for the lowest-delay view.
-  Occupancy, reservations, and payments still update through Render.
+- The admin dashboard defaults to **Local CV**. Both direct localhost streams
+  appear inside their normal dashboard camera cards on the camera laptop for
+  the lowest-delay view. Occupancy, reservations, and payments still update
+  through Render.
 - Use **Cloud preview** only when the admin is away from the camera laptop.
 - The driver dashboard and Flutter app always use the public cloud feeds. They
   receive the addresses from the backend automatically.
 
-The local feed opens in its own browser tab because an HTTPS Render page cannot
-safely embed an HTTP localhost stream. `127.0.0.1` refers to the device opening
-the page, so Local CV must be used on the laptop running the two camera workers.
+Modern browsers treat the `127.0.0.1` loopback origin as potentially
+trustworthy, and the dashboard security policy permits only ports 8001 and 8002
+as local image sources. If a browser still blocks an embedded feed, the camera
+card exposes **Open separate tab** as a fallback. `127.0.0.1` refers to the
+device opening the page, so Local CV must be used on the laptop running the two
+camera workers.
 
 ## Normal startup checklist
 
@@ -131,7 +135,7 @@ the page, so Local CV must be used on the laptop running the two camera workers.
 - [ ] Cloudflare Tunnel is running.
 - [ ] Both public HTTPS camera pages work.
 - [ ] Render has the current `MEDIA_STREAM_BASE_URL`.
-- [ ] Admin Local CV buttons open both direct localhost feeds.
+- [ ] Admin Local CV embeds both direct localhost feeds in the dashboard.
 - [ ] Admin Cloud preview works as a fallback.
 - [ ] Driver web and Flutter cloud feeds work.
 

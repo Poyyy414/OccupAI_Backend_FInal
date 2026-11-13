@@ -22,11 +22,12 @@ The configured URLs provide the smoother direct feed when the workers and a
 local backend are on the same computer. On the hosted Render backend, leave
 these local-only stream URLs unset.
 
-The hosted admin dashboard defaults to **Local CV**: it opens ports 8001/8002
-directly in local browser tabs while occupancy data continues to come from
-Render. Its **Cloud preview** is an optional remote fallback. Driver web and
-Flutter views always use the public MediaMTX/Cloudflare feed because drivers
-must be able to monitor the parking area away from the camera laptop.
+The hosted admin dashboard defaults to **Local CV**: it embeds ports 8001/8002
+inside the dashboard camera cards while occupancy data continues to come from
+Render. A separate-tab button appears only as a browser-error fallback. Its
+**Cloud preview** is an optional remote fallback. Driver web and Flutter views
+always use the public MediaMTX/Cloudflare feed because drivers must be able to
+monitor the parking area away from the camera laptop.
 
 ## Start both camera workers
 
