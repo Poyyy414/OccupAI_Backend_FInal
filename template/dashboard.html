@@ -4078,12 +4078,15 @@ async function connectLocalCamera(cardKey) {
     }
     const healthRequest = new Request(cacheBustUrl(localCameraHealthUrl(cardKey)), {
       method: 'GET',
-      mode: 'cors',
+      mode: 'no-cors',
+      credentials: 'omit',
       cache: 'no-store',
       targetAddressSpace: 'loopback',
     });
-    const response = await fetch(healthRequest);
-    if (!response.ok) throw new Error(`Local camera returned ${response.status}`);
+    // This request only obtains/verifies Chrome's loopback permission. Reading
+    // the cross-origin response is unnecessary and can fail on Chrome builds
+    // that enforce different CORS generations for local network access.
+    await fetch(healthRequest);
     startEmbeddedLocalCamera(cardKey);
   } catch (_) {
     state.localPermissionGranted = false;

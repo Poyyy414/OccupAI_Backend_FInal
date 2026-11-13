@@ -42,6 +42,8 @@ def test_admin_template_defaults_to_local_cv_with_cloud_fallback():
     assert "motorcycleLocalCameraButton" in html
     assert "Connect local camera" in html
     assert "targetAddressSpace: 'loopback'" in html
+    assert "mode: 'no-cors'" in html
+    assert "credentials: 'omit'" in html
     assert "fetch(healthRequest)" in html
     assert "img.src = cacheBustUrl(state.endpoint)" in html
     assert "inline.textContent = 'Local live'" in html
@@ -80,6 +82,8 @@ def test_local_camera_worker_exposes_permission_health_check():
     assert "def do_OPTIONS(self):" in detector_source
     assert "Access-Control-Allow-Private-Network" in detector_source
     assert "Access-Control-Allow-Origin" in detector_source
+    assert "Private-Network-Access-Name" in detector_source
+    assert "Private-Network-Access-ID" in detector_source
 
 
 def test_online_relay_emits_the_latest_camera_frame():

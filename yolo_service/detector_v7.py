@@ -920,6 +920,10 @@ class MJPEGHandler(BaseHTTPRequestHandler):
         # Compatibility with Chrome versions that still send the older PNA
         # preflight before allowing a public HTTPS page to reach loopback.
         self.send_header('Access-Control-Allow-Private-Network', 'true')
+        camera_name = 'occupai_motorcycle_camera' if STREAM_PORT == 8002 else 'occupai_car_camera'
+        camera_id = '02:00:00:00:1f:42' if STREAM_PORT == 8002 else '02:00:00:00:1f:41'
+        self.send_header('Private-Network-Access-Name', camera_name)
+        self.send_header('Private-Network-Access-ID', camera_id)
 
     def do_OPTIONS(self):
         self.send_response(204)
