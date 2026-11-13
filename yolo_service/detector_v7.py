@@ -167,8 +167,8 @@ MEDIAMTX_PUBLISH_ENABLED = _eb("MEDIAMTX_PUBLISH_ENABLED", False)
 MEDIAMTX_RTSP_BASE_URL = os.getenv(
     "MEDIAMTX_RTSP_BASE_URL", "rtsp://127.0.0.1:8554"
 ).strip().rstrip("/")
-MEDIAMTX_PUBLISH_FPS = max(5, min(20, _ei("MEDIAMTX_PUBLISH_FPS", 10)))
-MEDIAMTX_VIDEO_BITRATE = max(250, _ei("MEDIAMTX_VIDEO_BITRATE_KBPS", 850))
+MEDIAMTX_PUBLISH_FPS = max(5, min(24, _ei("MEDIAMTX_PUBLISH_FPS", 20)))
+MEDIAMTX_VIDEO_BITRATE = max(250, _ei("MEDIAMTX_VIDEO_BITRATE_KBPS", 700))
 CONF_THRESH = _ef("CONF_THRESH", 0.35)
 IOU_THRESH  = _ef("IOU_THRESH",  0.15)
 ASSIGN_MIN_OVERLAP = _ef("ASSIGN_MIN_OVERLAP", 0.18)
@@ -259,6 +259,9 @@ _cam_reader_failed = threading.Event()
 _reserved_slots = set()
 _reserved_slots_lock = threading.Lock()
 _media_publish_q: queue.Queue = queue.Queue(maxsize=1)
+_video_render_q: queue.Queue = queue.Queue(maxsize=1)
+_overlay_state = None
+_overlay_state_lock = threading.Lock()
 
 slot_state = SlotState()
 
@@ -773,6 +776,75 @@ def draw_scanning(frame, msg="LOADING LAYOUT..."):
     return frame
 
 
+def _set_overlay_state(**state):
+    """Publish a small snapshot for the camera-rate video renderer."""
+    global _overlay_state
+    with _overlay_state_lock:
+        _overlay_state = state
+
+
+def _render_latest_overlay(frame):
+    """Draw the newest CV result on a fresh frame without running inference."""
+    with _overlay_state_lock:
+        state = _overlay_state
+    if not state:
+        return frame.copy()
+
+    ann = frame.copy()
+    cam_ok = state["cam_ok"]
+    rescanning = state["rescanning"]
+    rewarming = state["rewarming"]
+    calibration_required = state["calibration_required"]
+    zones = state["zones"]
+    zone_status = state["zone_status"]
+
+    if not cam_ok:
+        draw_blocked(ann)
+    elif calibration_required:
+        draw_scanning(ann, "RECALIBRATION REQUIRED")
+    elif rescanning or rewarming:
+        draw_scanning(ann, "CALIBRATING..." if rewarming else "RE-SCANNING...")
+    else:
+        draw_zones(ann, zones, zone_status)
+        if DRAW_DETECTOR_BOXES:
+            draw_boxes(ann, state["assigned_boxes"], (0, 230, 255))
+
+    reserved_visible = (
+        sum(
+            name in _reserved_slots_snapshot() and not zone_status.get(name, False)
+            for name in zones
+        )
+        if cam_ok else 0
+    )
+    draw_hud(
+        ann,
+        state["free"],
+        state["occupied"],
+        state["total"],
+        state["fps"],
+        reserved_visible,
+        cam_ok=cam_ok,
+        rescanning=rescanning,
+        rewarming=rewarming,
+        demand=state["demand"],
+    )
+    return ann
+
+
+def video_renderer_loop():
+    """Render cached CV results onto fresh frames at camera speed."""
+    global _stream_frame
+    while True:
+        frame = _video_render_q.get()
+        try:
+            ann = _render_latest_overlay(frame)
+            with _stream_lock:
+                _stream_frame = ann
+            _queue_media_frame(ann)
+        except Exception as exc:
+            print(f"[video-renderer] {exc}")
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #   CAMERA READER
 # ══════════════════════════════════════════════════════════════════════════════
@@ -808,6 +880,11 @@ def camera_reader(cap, tw, th):
             try: _cam_q.get_nowait()
             except queue.Empty: pass
         _cam_q.put(f)
+        if _video_render_q.full():
+            try: _video_render_q.get_nowait()
+            except queue.Empty: pass
+        try: _video_render_q.put_nowait(f)
+        except queue.Full: pass
 
 
 def detector_worker(model, in_q, result, stop_event):
@@ -940,7 +1017,7 @@ def _stop_media_publisher(process):
 
 
 def _media_publisher_loop():
-    """Send the latest annotation at a steady rate without blocking detection."""
+    """Send camera-rate annotated video without blocking capture or detection."""
     ffmpeg_path = shutil.which("ffmpeg")
     if not ffmpeg_path:
         print("[media] FFmpeg was not found in PATH; online HLS publishing is disabled.")
@@ -1328,28 +1405,26 @@ def detection_loop():
             demand=slot_state.demand
 
             # ── Annotate ──────────────────────────────────────────────────────────
-            ann=frame.copy()
+            # Detection publishes state only. A separate renderer applies that
+            # state to every fresh camera frame, so inference cannot freeze the
+            # online video.
             if not cam_ok:
-                draw_blocked(ann); zone_status={}; occupied=free=0
-            elif calibration_required:
-                draw_scanning(ann, "RECALIBRATION REQUIRED")
-            elif rescanning or rewarming:
-                draw_scanning(ann, "CALIBRATING..." if rewarming else "RE-SCANNING...")
-            else:
-                draw_zones(ann,active,zone_status)
-                if DRAW_DETECTOR_BOXES:
-                    draw_boxes(ann,assigned_boxes,(0,230,255))
-
-            reserved_visible = sum(
-                name in _reserved_slots_snapshot() and not zone_status.get(name, False)
-                for name in active
-            ) if cam_ok else 0
-            draw_hud(ann,free,occupied,n_slots,fps_val,reserved_visible,
-                     cam_ok=cam_ok,rescanning=rescanning,
-                     rewarming=rewarming,demand=demand)
-
-            with _stream_lock: _stream_frame=ann
-            _queue_media_frame(ann)
+                zone_status={}; occupied=free=0
+            _set_overlay_state(
+                cam_ok=cam_ok,
+                calibration_required=calibration_required,
+                rescanning=rescanning,
+                rewarming=rewarming,
+                zones=dict(active),
+                zone_status=dict(zone_status),
+                assigned_boxes=list(assigned_boxes),
+                occupied=occupied,
+                free=free,
+                total=n_slots,
+                fps=fps_val,
+                demand=demand,
+            )
+            ann = _render_latest_overlay(frame)
 
             if (now-last_frame_push_t)>=FRAME_PUSH_INTERVAL and not _frame_pushing:
                 last_frame_push_t=now
@@ -1413,6 +1488,8 @@ if __name__=='__main__':
     threading.Thread(target=start_mjpeg_server,daemon=True,
                      name="mjpeg-server").start()
     print(f"[mjpeg] Streaming on :{STREAM_PORT}\n")
+    threading.Thread(target=video_renderer_loop,daemon=True,
+                     name=f"{CAMERA_ID}-video-renderer").start()
     targets = _backend_targets()
     print(f"[push] Targets: {', '.join(targets) if targets else 'none'}")
     if any(target.startswith("http") and not target.startswith("http://127.0.0.1")

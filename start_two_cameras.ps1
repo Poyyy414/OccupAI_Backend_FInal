@@ -34,13 +34,12 @@ function Start-CameraWorker($Worker) {
     $start.EnvironmentVariables['WEBCAM_INDEX'] = [string]$Worker.WebcamIndex
     $start.EnvironmentVariables['STREAM_PORT'] = [string]$Worker.Port
     $start.EnvironmentVariables['AUTO_CAMERA_RECALIBRATE'] = 'true'
-    # Publish the latest annotated frame directly to MediaMTX at a steady rate.
-    # This avoids the older MJPEG -> external FFmpeg relay that could blink or
-    # starve the Low-Latency HLS player.
+    # Publish camera-rate video with the latest CV overlay. Detection updates
+    # independently, so a slow inference cannot freeze the live camera feed.
     $start.EnvironmentVariables['MEDIAMTX_PUBLISH_ENABLED'] = 'true'
     $start.EnvironmentVariables['MEDIAMTX_RTSP_BASE_URL'] = 'rtsp://127.0.0.1:8554'
-    $start.EnvironmentVariables['MEDIAMTX_PUBLISH_FPS'] = '10'
-    $start.EnvironmentVariables['MEDIAMTX_VIDEO_BITRATE_KBPS'] = '850'
+    $start.EnvironmentVariables['MEDIAMTX_PUBLISH_FPS'] = '20'
+    $start.EnvironmentVariables['MEDIAMTX_VIDEO_BITRATE_KBPS'] = '700'
     # HLS is now the primary video path. Keep the authenticated JPEG relay as a
     # lower-frequency fallback instead of competing for upload bandwidth.
     $start.EnvironmentVariables['FRAME_PUSH_INTERVAL'] = '2.0'

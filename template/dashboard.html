@@ -4090,9 +4090,9 @@ function updateCameraCard(cardKey, cameras) {
       img.dataset.endpoint = endpoint;
       img.src = endpoint;
       img.style.display = 'block';
+      if (placeholder) placeholder.style.display = 'flex';
+      if (badge) badge.style.display = 'none';
     }
-    if (placeholder) placeholder.style.display = 'flex';
-    if (badge) badge.style.display = 'none';
   }
 
   const data = match.data || {};

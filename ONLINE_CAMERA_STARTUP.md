@@ -55,7 +55,9 @@ feeds show the correct camera, parking boxes, status colors, and detection
 information.
 
 The launcher now starts an internal FFmpeg publisher for each detector. It
-publishes the latest annotated frame at a steady 10 FPS and controlled bitrate.
+publishes fresh camera frames at 20 FPS with the latest CV overlay and a
+controlled bitrate. YOLO updates the overlay independently, so inference does
+not pause the video.
 Do not run the old manual FFmpeg commands because two publishers cannot use the
 same `cars` or `motorcycles` MediaMTX path.
 
@@ -171,8 +173,8 @@ update `MEDIA_STREAM_BASE_URL` in Render.
 ### Video works but has several seconds of delay
 
 Confirm there are no old manual FFmpeg processes publishing to the same paths.
-The integrated publisher uses a steady 10 FPS, one-second keyframes, no B-frames,
-and a controlled 850 kbps stream. Approximately one to three seconds on the
+The integrated publisher uses a steady 20 FPS, one-second keyframes, no B-frames,
+and a controlled 700 kbps stream. Approximately one to three seconds on the
 website and two to four seconds in the Flutter app can still be normal for HLS.
 Sub-second internet playback generally requires WebRTC plus publicly reachable
 ICE/TURN networking.
