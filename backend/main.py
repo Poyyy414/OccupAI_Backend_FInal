@@ -1836,15 +1836,16 @@ async def security_headers(request: Request, call_next):
     response.headers.setdefault("X-Request-ID", request_id)
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-    response.headers.setdefault(
-        "Permissions-Policy", "camera=(), microphone=(), geolocation=()"
-    )
+    permissions_policy = "camera=(), microphone=(), geolocation=()"
+    if request.url.path in {"/dashboard", "/analytics"}:
+        permissions_policy += ", loopback-network=(self)"
+    response.headers.setdefault("Permissions-Policy", permissions_policy)
     # The existing dashboards contain inline application scripts/styles. The
     # policy still blocks object/plugin injection, framing, and unexpected
     # origins; moving those inline blocks to nonce-bearing external bundles is
     # tracked as the final CSP tightening step.
     inline_event_hashes = trusted_inline_event_hashes()
-    local_camera_images = (
+    local_camera_origins = (
         " http://127.0.0.1:8001 http://127.0.0.1:8002"
         if request.url.path in {"/dashboard", "/analytics"}
         else ""
@@ -1852,14 +1853,15 @@ async def security_headers(request: Request, call_next):
     response.headers.setdefault(
         "Content-Security-Policy",
         "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; "
-        f"form-action 'self'; img-src 'self' data: blob:{local_camera_images}; "
+        f"form-action 'self'; img-src 'self' data: blob:{local_camera_origins}; "
         "media-src 'self' blob:; "
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
         "font-src 'self' data: https://fonts.gstatic.com; "
         f"script-src 'self' 'nonce-{csp_nonce}' 'unsafe-hashes' https://cdn.jsdelivr.net "
         f"{inline_event_hashes}; "
         f"script-src-attr 'unsafe-hashes' {inline_event_hashes}; "
-        "connect-src 'self'; frame-src 'self' https://checkout.paymongo.com "
+        f"connect-src 'self'{local_camera_origins}; "
+        "frame-src 'self' https://checkout.paymongo.com "
         f"{MEDIA_STREAM_ORIGIN};",
     )
     if DEPLOY_MODE != "local":

@@ -912,13 +912,40 @@ def detector_worker(model, in_q, result, stop_event):
 
 class MJPEGHandler(BaseHTTPRequestHandler):
     def log_message(self,*a): pass
+
+    def _send_cors_headers(self):
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        # Compatibility with Chrome versions that still send the older PNA
+        # preflight before allowing a public HTTPS page to reach loopback.
+        self.send_header('Access-Control-Allow-Private-Network', 'true')
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self._send_cors_headers()
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
+
     def do_GET(self):
-        if self.path!='/stream':
+        path = self.path.split('?', 1)[0]
+        if path == '/health':
+            body = b'{"ok":true}'
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Cache-Control', 'no-store')
+            self._send_cors_headers()
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if path != '/stream':
             self.send_response(404); self.end_headers(); return
         self.send_response(200)
         self.send_header('Content-Type',
             'multipart/x-mixed-replace; boundary=--occupaiframe')
-        self.send_header('Access-Control-Allow-Origin','*')
+        self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate')
+        self._send_cors_headers()
         self.end_headers()
         while True:
             try:

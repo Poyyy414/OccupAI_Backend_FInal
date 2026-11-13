@@ -114,16 +114,20 @@ After Render finishes deploying:
   appear inside their normal dashboard camera cards on the camera laptop for
   the lowest-delay view. Occupancy, reservations, and payments still update
   through Render.
+- Click **Connect local camera** in each card and choose **Allow** when Chrome
+  requests Loopback network access. Chrome requires this user action before a
+  public HTTPS page can connect to a service on `127.0.0.1`.
 - Use **Cloud preview** only when the admin is away from the camera laptop.
 - The driver dashboard and Flutter app always use the public cloud feeds. They
   receive the addresses from the backend automatically.
 
 Modern browsers treat the `127.0.0.1` loopback origin as potentially
 trustworthy, and the dashboard security policy permits only ports 8001 and 8002
-as local image sources. If a browser still blocks an embedded feed, the camera
-card exposes **Open separate tab** as a fallback. `127.0.0.1` refers to the
-device opening the page, so Local CV must be used on the laptop running the two
-camera workers.
+as local image sources. Chrome still asks the signed-in admin for Loopback
+network permission. If it was previously denied, open the Render site's Chrome
+settings, change **Loopback network** to **Allow**, and try again. `127.0.0.1`
+refers to the device opening the page, so Local CV must be used on the laptop
+running the two camera workers.
 
 ## Normal startup checklist
 
@@ -135,6 +139,7 @@ camera workers.
 - [ ] Cloudflare Tunnel is running.
 - [ ] Both public HTTPS camera pages work.
 - [ ] Render has the current `MEDIA_STREAM_BASE_URL`.
+- [ ] Admin clicks **Connect local camera** and allows Loopback network access.
 - [ ] Admin Local CV embeds both direct localhost feeds in the dashboard.
 - [ ] Admin Cloud preview works as a fallback.
 - [ ] Driver web and Flutter cloud feeds work.

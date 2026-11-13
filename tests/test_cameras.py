@@ -40,7 +40,10 @@ def test_admin_template_defaults_to_local_cv_with_cloud_fallback():
     assert "http://127.0.0.1:8002/stream" in html
     assert "carLocalCameraButton" in html
     assert "motorcycleLocalCameraButton" in html
-    assert "img.src = cacheBustUrl(endpoint)" in html
+    assert "Connect local camera" in html
+    assert "targetAddressSpace: 'loopback'" in html
+    assert "fetch(healthRequest)" in html
+    assert "img.src = cacheBustUrl(state.endpoint)" in html
     assert "inline.textContent = 'Local live'" in html
     assert "let adminCameraMode" in html
     assert ": 'local';" in html
@@ -61,8 +64,22 @@ def test_dashboard_csp_allows_only_admin_loopback_camera_images():
     driver_csp = driver.headers["content-security-policy"]
     assert "http://127.0.0.1:8001" in dashboard_csp
     assert "http://127.0.0.1:8002" in dashboard_csp
+    assert "connect-src 'self' http://127.0.0.1:8001 http://127.0.0.1:8002" in dashboard_csp
     assert "http://127.0.0.1:8001" not in driver_csp
     assert "http://127.0.0.1:8002" not in driver_csp
+    assert "loopback-network=(self)" in dashboard.headers["permissions-policy"]
+    assert "loopback-network" not in driver.headers["permissions-policy"]
+
+
+def test_local_camera_worker_exposes_permission_health_check():
+    detector_source = (
+        m.BASE_DIR / "yolo_service" / "detector_v7.py"
+    ).read_text(encoding="utf-8")
+
+    assert "path == '/health'" in detector_source
+    assert "def do_OPTIONS(self):" in detector_source
+    assert "Access-Control-Allow-Private-Network" in detector_source
+    assert "Access-Control-Allow-Origin" in detector_source
 
 
 def test_online_relay_emits_the_latest_camera_frame():
