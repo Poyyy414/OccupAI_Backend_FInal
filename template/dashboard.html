@@ -1926,17 +1926,28 @@
 
     .heatmap-grid {
       display: grid;
-      grid-template-columns: 46px repeat(24, minmax(22px, 1fr));
+      grid-template-columns: 52px repeat(7, minmax(68px, 1fr));
       gap: 3px;
       min-width: 640px;
       font-family: "Space Mono", monospace;
       font-size: 12px;
     }
-    .heatmap-row-label { display: flex; align-items: center; color: var(--muted); }
-    .heatmap-hour-label { text-align: center; color: var(--muted-2); padding-bottom: 3px; }
+    .heatmap-day-label {
+      text-align: center;
+      color: var(--muted);
+      font-weight: 700;
+      padding-bottom: 5px;
+    }
+    .heatmap-hour-label {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      color: var(--muted-2);
+      padding-right: 7px;
+    }
     .heatmap-cell {
-      aspect-ratio: 1;
-      min-width: 22px;
+      min-width: 68px;
+      min-height: 24px;
       padding: 0;
       border: 1px solid var(--border-soft);
       border-radius: 3px;
@@ -3104,6 +3115,8 @@
         <button class="report-tab" onclick="switchReportTab('yearly', this)">Yearly</button>
       </div>
       <div class="reports-actions">
+        <button class="report-dl-btn" onclick="downloadOfficeReport('xlsx', this)">&#8595; XLSX</button>
+        <button class="report-dl-btn" onclick="downloadOfficeReport('docx', this)">&#8595; DOCX</button>
         <button class="report-dl-btn report-dl-pdf" onclick="downloadReportPDF()">&#8595; PDF</button>
         <button class="refresh-btn" onclick="fetchReports()">&#8635; Refresh</button>
       </div>
@@ -4401,8 +4414,9 @@ async function fetchStats() {
     setText('statFreeSub', complete ? `${free} available, ${d.reserved_slots || 0} reserved` : 'Waiting for both cameras');
     const carCount = d.car_count;
     const motoCount = d.motorcycle_count;
+    const bicycleCount = d.bicycle_count;
     setText('statOccSub', complete
-      ? `${carCount ?? 0} car(s), ${motoCount ?? 0} motorcycle(s)`
+      ? `${carCount ?? 0} car(s), ${motoCount ?? 0} motorcycle(s), ${bicycleCount ?? 0} bicycle(s)`
       : 'Waiting for a complete parking count');
     setText('statTotalSub', '10 car + 20 motorcycle spaces');
     setText('statRateSub', complete ? (pct >= 90 ? 'Parking is nearly full' : pct >= 70 ? 'Parking is getting busy' : 'Percentage of spaces currently used') : 'Waiting for both cameras');
@@ -5707,13 +5721,15 @@ async function fetchHeatmap() {
     const dayLabels = d.day_labels || ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
     const byDow = d.hourly_by_dow || {};
 
-    const hourHeader = ['<div></div>'].concat(
-      Array.from({ length: 24 }, (_, h) => `<div class="heatmap-hour-label">${h % 3 === 0 ? h : ''}</div>`)
+    // Panel requirement: weekdays are column labels across the top, while
+    // the 24 hours run downward so the day names are immediately visible.
+    const dayHeader = ['<div></div>'].concat(
+      dayLabels.map(label => `<div class="heatmap-day-label">${escapeHtml(label)}</div>`)
     ).join('');
 
-    const rows = dayLabels.map((label, dow) => {
-      const hours = byDow[dow] || byDow[String(dow)] || {};
-      const cells = Array.from({ length: 24 }, (_, h) => {
+    const rows = Array.from({ length: 24 }, (_, h) => {
+      const cells = dayLabels.map((label, dow) => {
+        const hours = byDow[dow] || byDow[String(dow)] || {};
         const entry = hours[h] || hours[String(h)];
         const hasData = entry && entry.occ_pct != null && Number.isFinite(Number(entry.occ_pct));
         const v = hasData ? Math.max(0, Math.min(100, Number(entry.occ_pct))) : null;
@@ -5722,10 +5738,10 @@ async function fetchHeatmap() {
         const description = `${label} ${String(h).padStart(2,'0')}:00 — ${valueText}`;
         return `<button type="button" class="heatmap-cell ${level}" aria-label="${escapeHtml(description)}" title="${escapeHtml(description)}"></button>`;
       }).join('');
-      return `<div class="heatmap-row-label">${escapeHtml(label)}</div>${cells}`;
+      return `<div class="heatmap-hour-label">${String(h).padStart(2,'0')}:00</div>${cells}`;
     }).join('');
 
-    wrap.innerHTML = `<div class="heatmap-grid">${hourHeader}${rows}</div>`;
+    wrap.innerHTML = `<div class="heatmap-grid">${dayHeader}${rows}</div>`;
   } catch (e) {
     wrap.innerHTML = '<div class="empty-state"><strong>Heatmap unavailable</strong>Could not load hourly pattern data.</div>';
   }
@@ -6372,6 +6388,42 @@ function downloadReportPDF() {
       img.addEventListener('error', imageReady, { once: true });
     });
     setTimeout(startPrint, 2000);
+  }
+}
+
+async function downloadOfficeReport(format, button) {
+  if (!['xlsx', 'docx'].includes(format)) return;
+  const original = button ? button.textContent : '';
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Preparing...';
+  }
+  try {
+    const response = await fetch(`/api/revenue/export?period=${encodeURIComponent(reportTab)}&format=${format}`, {
+      headers: authHeaders(),
+      credentials: 'same-origin',
+    });
+    if (!response.ok) throw new Error(`Download failed (${response.status})`);
+    const blob = await response.blob();
+    const disposition = response.headers.get('content-disposition') || '';
+    const match = disposition.match(/filename="?([^";]+)"?/i);
+    const filename = match ? match[1] : `occupai-${reportTab}-revenue.${format}`;
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    console.error('Office report download failed:', error);
+    alert('The report could not be downloaded. Please try again.');
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = original;
+    }
   }
 }
 

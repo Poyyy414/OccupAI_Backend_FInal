@@ -10,3 +10,5 @@ ultralytics
 numpy
 flask
 flask-cors
+openpyxl
+python-docx

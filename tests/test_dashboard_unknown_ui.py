@@ -51,3 +51,16 @@ def test_prediction_heatmap_has_theme_safe_levels_and_accessible_cells():
     assert 'type="button" class="heatmap-cell ${level}"' in html
     assert 'aria-label="${escapeHtml(description)}"' in html
     assert "rgba(50,230,173,${alpha.toFixed(2)})" not in html
+    assert "const dayHeader" in html
+    assert 'class="heatmap-day-label"' in html
+    assert "Array.from({ length: 24 }, (_, h)" in html
+
+
+def test_reports_offer_real_office_downloads():
+    html = (Path(__file__).parents[1] / "template" / "dashboard.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "downloadOfficeReport('xlsx'" in html
+    assert "downloadOfficeReport('docx'" in html
+    assert "/api/revenue/export?period=" in html

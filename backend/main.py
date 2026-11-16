@@ -8,6 +8,7 @@ CHANGES in v2.2:
   - Revenue forecast added to predictions endpoint
 """
 import os, re, math, bcrypt, uvicorn, joblib, threading, warnings, time, json, base64, secrets, hmac, hashlib, html, smtplib, asyncio, binascii
+from io import BytesIO
 from email.message import EmailMessage
 import psycopg2
 import numpy as np
@@ -1906,7 +1907,7 @@ state = {
     "combined_complete": False, "combined_status": "unavailable",
     "lot_full": None, "fps": 0.0, "timestamp": "",
     "yolo_count": 0, "yolo_boxes": [], "slots": [], "zones": {},
-    "car_count": 0, "motorcycle_count": 0,
+    "car_count": 0, "motorcycle_count": 0, "bicycle_count": 0,
     "cameras": {},
 }
 camera_states = {}
@@ -2021,6 +2022,7 @@ def _aggregate_camera_states_locked(now=None):
             "occupancy_pct": float(item["occupancy_pct"]) if is_fresh else None,
             "car_count": int(item["car_count"]) if is_fresh else None,
             "motorcycle_count": int(item["motorcycle_count"]) if is_fresh else None,
+            "bicycle_count": int(item.get("bicycle_count") or 0) if is_fresh else None,
             "fps": float(item["fps"]) if is_fresh else None,
             "timestamp": item["timestamp"] if item else "",
             "online": is_fresh,
@@ -2068,6 +2070,10 @@ def _aggregate_camera_states_locked(now=None):
         ),
         "motorcycle_count": (
             int(active["motorcycles"]["motorcycle_count"])
+            if "motorcycles" in active else None
+        ),
+        "bicycle_count": (
+            int(active["motorcycles"].get("bicycle_count") or 0)
             if "motorcycles" in active else None
         ),
         "cameras": public_cameras,
@@ -2391,6 +2397,7 @@ def yolo_update(data: YoloUpdate, x_cam_token: str = Header(...)):
             "yolo_count": int(data.yolo_count),
             "car_count": int(data.car_count),
             "motorcycle_count": int(data.motorcycle_count),
+            "bicycle_count": int(data.bicycle_count),
             "fps": float(data.fps),
             "timestamp": ts,
             "zones": dict(data.zones or {}),
@@ -4257,6 +4264,169 @@ def api_revenue_dashboard(_admin=Depends(require_admin)):
     except Exception as e:
         print(f"[revenue dashboard] {e}")
         return _empty_payment_dashboard()
+
+
+def _revenue_export_rows(data, period):
+    """Return the same report rows displayed by the admin dashboard."""
+    period = str(period or "daily").lower()
+    if period == "daily":
+        rows = data.get("daily_revenue") or []
+        columns = [("date", "Date"), ("label", "Day")]
+    elif period == "weekly":
+        grouped = {}
+        for row in data.get("daily_revenue") or []:
+            try:
+                current = datetime.fromisoformat(str(row.get("date"))).date()
+            except (TypeError, ValueError):
+                continue
+            week_start = current - timedelta(days=current.weekday())
+            key = week_start.isoformat()
+            summary = grouped.setdefault(key, {
+                "week_start": key, "revenue_php": 0.0,
+                "discount_php": 0.0, "transaction_count": 0,
+            })
+            summary["revenue_php"] += float(row.get("revenue_php") or 0)
+            summary["discount_php"] += float(row.get("discount_php") or 0)
+            summary["transaction_count"] += int(row.get("transaction_count") or 0)
+        rows = [grouped[key] for key in sorted(grouped)]
+        columns = [("week_start", "Week Starting")]
+    elif period == "monthly":
+        rows = data.get("monthly_revenue") or []
+        columns = [("month", "Month"), ("label", "Name")]
+    elif period == "yearly":
+        grouped = {}
+        for row in data.get("monthly_revenue") or []:
+            year = str(row.get("month") or "")[:4]
+            if not year:
+                continue
+            summary = grouped.setdefault(year, {
+                "year": year, "revenue_php": 0.0,
+                "discount_php": 0.0, "transaction_count": 0,
+            })
+            summary["revenue_php"] += float(row.get("revenue_php") or 0)
+            summary["discount_php"] += float(row.get("discount_php") or 0)
+            summary["transaction_count"] += int(row.get("transaction_count") or 0)
+        rows = [grouped[key] for key in sorted(grouped)]
+        columns = [("year", "Year")]
+    else:
+        raise HTTPException(422, "Report period must be daily, weekly, monthly, or yearly")
+
+    normalized = []
+    for source in rows:
+        row = dict(source)
+        revenue = float(row.get("revenue_php") or 0)
+        discount = float(row.get("discount_php") or 0)
+        row["revenue_php"] = revenue
+        row["discount_php"] = discount
+        row["net_revenue_php"] = revenue - discount
+        row["transaction_count"] = int(row.get("transaction_count") or 0)
+        normalized.append(row)
+    columns += [
+        ("revenue_php", "Revenue (PHP)"),
+        ("discount_php", "Discounts (PHP)"),
+        ("net_revenue_php", "Net Revenue (PHP)"),
+        ("transaction_count", "Payments"),
+    ]
+    return normalized, columns
+
+
+def _build_revenue_xlsx(data, period):
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    rows, columns = _revenue_export_rows(data, period)
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = f"{period.title()} Revenue"
+    sheet.append([label for _, label in columns])
+    for row in rows:
+        sheet.append([row.get(key, "") for key, _ in columns])
+
+    green = "167A4A"
+    for cell in sheet[1]:
+        cell.fill = PatternFill("solid", fgColor=green)
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.alignment = Alignment(horizontal="center")
+    money_columns = {index + 1 for index, (key, _) in enumerate(columns) if key.endswith("_php")}
+    for row in sheet.iter_rows(min_row=2):
+        for index, cell in enumerate(row, start=1):
+            if index in money_columns:
+                cell.number_format = 'PHP #,##0.00'
+    for index, (_, label) in enumerate(columns, start=1):
+        values = [str(label)] + [str(row.get(columns[index - 1][0], "")) for row in rows]
+        sheet.column_dimensions[chr(64 + index)].width = min(36, max(12, max(map(len, values)) + 2))
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = sheet.dimensions
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return output
+
+
+def _build_revenue_docx(data, period):
+    from docx import Document
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import RGBColor
+
+    rows, columns = _revenue_export_rows(data, period)
+    document = Document()
+    title = document.add_heading(f"OccupAI {period.title()} Revenue Report", level=1)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    document.add_paragraph(
+        f"Generated: {data.get('generated_at_ph') or datetime.now(PH_TZ).strftime('%Y-%m-%d %H:%M:%S PHT')}"
+    ).alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    table = document.add_table(rows=1, cols=len(columns))
+    table.style = "Table Grid"
+    for index, (_, label) in enumerate(columns):
+        cell = table.rows[0].cells[index]
+        cell.text = label
+        for run in cell.paragraphs[0].runs:
+            run.bold = True
+            run.font.color.rgb = RGBColor(22, 122, 74)
+    for row in rows:
+        cells = table.add_row().cells
+        for index, (key, _) in enumerate(columns):
+            value = row.get(key, "")
+            cells[index].text = f"PHP {value:,.2f}" if key.endswith("_php") else str(value)
+
+    total_revenue = sum(row["revenue_php"] for row in rows)
+    total_discount = sum(row["discount_php"] for row in rows)
+    total_payments = sum(row["transaction_count"] for row in rows)
+    document.add_heading("Summary", level=2)
+    document.add_paragraph(
+        f"Total revenue: PHP {total_revenue:,.2f}\n"
+        f"Total discounts: PHP {total_discount:,.2f}\n"
+        f"Net revenue: PHP {total_revenue - total_discount:,.2f}\n"
+        f"Total payments: {total_payments}"
+    )
+
+    output = BytesIO()
+    document.save(output)
+    output.seek(0)
+    return output
+
+
+@app.get("/api/revenue/export")
+def api_revenue_export(
+    period: str = Query(default="daily", pattern="^(daily|weekly|monthly|yearly)$"),
+    export_format: str = Query(alias="format", pattern="^(xlsx|docx)$"),
+    _admin=Depends(require_admin),
+):
+    data = _cached_payment_revenue_dashboard()
+    if export_format == "xlsx":
+        output = _build_revenue_xlsx(data, period)
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    else:
+        output = _build_revenue_docx(data, period)
+        media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    filename = f"occupai-{period}-revenue-{datetime.now(PH_TZ):%Y%m%d}.{export_format}"
+    return StreamingResponse(
+        output,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/api/payments/recent")

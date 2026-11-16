@@ -46,8 +46,17 @@ def test_custom_model_contract_rejects_coco_classes():
     }
 
     coco_model = type("CocoModel", (), {"names": {2: "car", 3: "motorcycle"}})()
-    with pytest.raises(RuntimeError, match="exactly the classes"):
+    with pytest.raises(RuntimeError, match="cannot contain other classes"):
         detector.validate_toy_model(coco_model)
+
+
+def test_custom_model_contract_accepts_optional_bicycle_class():
+    model = type(
+        "BicycleModel",
+        (),
+        {"names": {0: "toy_car", 1: "toy_motorcycle", 2: "toy_bicycle"}},
+    )()
+    assert detector.validate_toy_model(model)[2] == "toy_bicycle"
 
 
 def test_yolo_boxes_filters_detections_to_camera_role(monkeypatch):
@@ -65,6 +74,32 @@ def test_yolo_boxes_filters_detections_to_camera_role(monkeypatch):
     assert boxes == [[30, 40, 80, 140]]
     assert types == ["motorcycle"]
     assert model.last_classes == [1]
+
+
+def test_motorcycle_camera_accepts_motorcycles_and_bicycles(monkeypatch):
+    class BicycleResult:
+        boxes = [
+            _FakeBox(0, [10, 20, 110, 120]),
+            _FakeBox(1, [30, 40, 80, 140]),
+            _FakeBox(2, [100, 50, 150, 150]),
+        ]
+
+    class BicycleModel(_FakeModel):
+        names = {0: "toy_car", 1: "toy_motorcycle", 2: "toy_bicycle"}
+
+        def predict(self, _frame, **kwargs):
+            self.last_classes = kwargs["classes"]
+            return [BicycleResult()]
+
+    model = BicycleModel()
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    monkeypatch.setattr(detector, "CAMERA_ROLE", "motorcycle")
+
+    boxes, types = detector.yolo_boxes(model, frame)
+
+    assert boxes == [[30, 40, 80, 140], [100, 50, 150, 150]]
+    assert types == ["motorcycle", "bicycle"]
+    assert model.last_classes == [1, 2]
 
 
 def test_detector_uses_stable_trained_model_path():

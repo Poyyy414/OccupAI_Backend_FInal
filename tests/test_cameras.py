@@ -113,6 +113,7 @@ def test_online_relay_emits_the_latest_camera_frame():
 
 
 def _camera(*, role, occupied, free, total, car_count=0, motorcycle_count=0,
+            bicycle_count=0,
             zones=None, received_at=None):
     return {
         "camera_role": role,
@@ -120,9 +121,10 @@ def _camera(*, role, occupied, free, total, car_count=0, motorcycle_count=0,
         "free": free,
         "total": total,
         "occupancy_pct": round(occupied / total * 100, 1) if total else 0.0,
-        "yolo_count": car_count + motorcycle_count,
+        "yolo_count": car_count + motorcycle_count + bicycle_count,
         "car_count": car_count,
         "motorcycle_count": motorcycle_count,
+        "bicycle_count": bicycle_count,
         "fps": 10.0,
         "timestamp": "2026-09-03 12:00:00",
         "zones": zones or {},
@@ -143,7 +145,7 @@ def test_camera_states_are_aggregated_and_zones_are_namespaced():
             ),
             "motorcycles": _camera(
                 role="motorcycle", occupied=1, free=19, total=20,
-                motorcycle_count=1, zones={"B1": True},
+                motorcycle_count=1, bicycle_count=1, zones={"B1": True},
                 received_at=now,
             ),
         })
@@ -158,6 +160,7 @@ def test_camera_states_are_aggregated_and_zones_are_namespaced():
         assert result["combined_complete"] is True
         assert result["car_count"] == 2
         assert result["motorcycle_count"] == 1
+        assert result["bicycle_count"] == 1
         assert result["zones"] == {
             "cars:A1": True,
             "cars:A2": False,

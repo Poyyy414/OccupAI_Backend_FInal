@@ -180,6 +180,15 @@ USE_BG_OCCUPANCY = _eb("USE_BG_OCCUPANCY", False)
 YOLO_CLASS_TO_VEHICLE_TYPE = {
     "toy_car": "car",
     "toy_motorcycle": "motorcycle",
+    "toy_bicycle": "bicycle",
+}
+REQUIRED_TOY_MODEL_CLASSES = {"toy_car", "toy_motorcycle"}
+ROLE_ALLOWED_VEHICLE_TYPES = {
+    "car": {"car"},
+    # Bicycles share the two-wheel camera/parking area, but remain a distinct
+    # detector class for reporting and panel compliance.
+    "motorcycle": {"motorcycle", "bicycle"},
+    "mixed": {"car", "motorcycle", "bicycle"},
 }
 
 SLOT_CORNER_RADIUS = max(0, _ei("SLOT_CORNER_RADIUS", 14))
@@ -599,14 +608,17 @@ def _normalized_model_names(model):
 
 
 def validate_toy_model(model):
-    """Fail fast unless the configured model is the trained two-class model."""
+    """Accept the required toy classes plus the optional bicycle class."""
     names = _normalized_model_names(model)
     actual = set(names.values())
-    expected = set(YOLO_CLASS_TO_VEHICLE_TYPE)
-    if actual != expected:
+    allowed = set(YOLO_CLASS_TO_VEHICLE_TYPE)
+    missing = REQUIRED_TOY_MODEL_CLASSES - actual
+    unexpected = actual - allowed
+    if missing or unexpected:
         raise RuntimeError(
-            "YOLO_MODEL_PATH must contain exactly the classes "
-            f"{sorted(expected)}; found {sorted(actual)}"
+            "YOLO_MODEL_PATH must contain toy_car and toy_motorcycle, may "
+            "optionally contain toy_bicycle, and cannot contain other classes; "
+            f"found {sorted(actual)}"
         )
     return names
 
@@ -617,7 +629,8 @@ def yolo_boxes(model, frame):
     allowed_ids = [
         class_id
         for class_id, class_name in names.items()
-        if YOLO_CLASS_TO_VEHICLE_TYPE.get(class_name) == CAMERA_ROLE
+        if YOLO_CLASS_TO_VEHICLE_TYPE.get(class_name)
+        in ROLE_ALLOWED_VEHICLE_TYPES.get(CAMERA_ROLE, set())
     ]
     if not allowed_ids:
         return [], []
@@ -639,7 +652,7 @@ def yolo_boxes(model, frame):
                 continue
             class_name = names.get(cls_id, "")
             vehicle_type = YOLO_CLASS_TO_VEHICLE_TYPE.get(class_name)
-            if vehicle_type != CAMERA_ROLE:
+            if vehicle_type not in ROLE_ALLOWED_VEHICLE_TYPES.get(CAMERA_ROLE, set()):
                 continue
             x1,y1,x2,y2=map(int,r.xyxy[0])
             out.append([x1,y1,x2,y2])
@@ -1137,7 +1150,7 @@ def push_frame_to_backend(snapshot_frame, camera_id=CAMERA_ID):
             _frame_pushing=False
 
 def push_to_backend(occupied,free,total,pct,fps,zone_status,snapshot_frame,
-                    car_count=0,moto_count=0, camera_id=CAMERA_ID,
+                    car_count=0,moto_count=0,bicycle_count=0, camera_id=CAMERA_ID,
                     camera_role=CAMERA_ROLE, reporting=True,
                     camera_status="online", calibration_required=False):
     global _pushing
@@ -1152,6 +1165,7 @@ def push_to_backend(occupied,free,total,pct,fps,zone_status,snapshot_frame,
             "occupancy_pct":pct,"lot_full":total>0 and free==0,
             "fps":fps,"yolo_count":occupied,
             "car_count":car_count,"motorcycle_count":moto_count,
+            "bicycle_count":bicycle_count,
             "camera_id":camera_id,"camera_role":camera_role,
             "reporting":reporting,"camera_status":camera_status,
             "calibration_required":calibration_required,
@@ -1397,14 +1411,21 @@ def detection_loop():
             if reporting:
                 all_b = toy_b if TOY_ONLY_DETECTION else (yolo_b + toy_b)
                 all_t = toy_t if TOY_ONLY_DETECTION else (yolo_t + toy_t)
-                if CAMERA_ROLE != "mixed":
+                if CAMERA_ROLE == "car":
                     # A dedicated camera already defines the vehicle type.
                     # Do not discard a small toy car that the blob-size
-                    # heuristic classified as a motorcycle (or the reverse).
-                    # Every valid detection in the car feed belongs to cars;
-                    # every valid detection in the motorcycle feed belongs to
-                    # motorcycles.
-                    all_t = [CAMERA_ROLE for _ in all_b]
+                    # heuristic classified as a motorcycle. Every valid
+                    # fallback detection in the car feed belongs to cars.
+                    all_t = ["car" for _ in all_b]
+                elif CAMERA_ROLE == "motorcycle":
+                    # Preserve bicycle predictions from the custom YOLO model.
+                    # Color/blob fallback detections cannot reliably separate
+                    # bicycles from motorcycles, so those stay motorcycles.
+                    all_t = [
+                        vehicle_type if vehicle_type in {"motorcycle", "bicycle"}
+                        else "motorcycle"
+                        for vehicle_type in all_t
+                    ]
                 zone_status, assigned_boxes = assign_occupancy(
                     active, fg, all_b, use_bg=USE_BG_OCCUPANCY
                 )
@@ -1429,6 +1450,7 @@ def detection_loop():
 
             car_count = all_t.count("car")
             moto_count = all_t.count("motorcycle")
+            bicycle_count = all_t.count("bicycle")
 
             occupied=sum(1 for v in zone_status.values() if v)
             free=n_slots-occupied
@@ -1478,7 +1500,7 @@ def detection_loop():
                 last_sent_zones=dict(zone_status)
                 threading.Thread(target=push_to_backend,
                     args=(occupied,free,n_slots,pct,round(fps_val,1),zone_status,
-                          ann.copy(),car_count,moto_count,CAMERA_ID,CAMERA_ROLE,
+                          ann.copy(),car_count,moto_count,bicycle_count,CAMERA_ID,CAMERA_ROLE,
                           reporting,
                           "calibration_required" if calibration_required else (
                               "online" if reporting else "offline"

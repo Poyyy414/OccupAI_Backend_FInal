@@ -12,3 +12,5 @@ tensorflow-cpu==2.21.0
 keras==3.15.0
 httpx==0.28.1
 requests==2.34.2
+openpyxl==3.1.5
+python-docx==1.2.0

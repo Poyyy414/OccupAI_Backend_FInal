@@ -33,6 +33,7 @@ class YoloUpdate(BaseModel):
     yolo_count:    int      = Field(default=0, ge=0)
     car_count:        int  = Field(default=0, ge=0)
     motorcycle_count: int  = Field(default=0, ge=0)
+    bicycle_count:    int  = Field(default=0, ge=0)
     timestamp:     str      = Field(default="", max_length=64)
     camera_id:     str      = Field(default="main", min_length=1, max_length=40)
     camera_role:   str      = Field(default="mixed", min_length=1, max_length=20)
