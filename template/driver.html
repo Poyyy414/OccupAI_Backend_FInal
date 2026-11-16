@@ -301,37 +301,58 @@
 
     .space-map {
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 8px;
+      gap: 12px;
       padding: 14px;
       border: 1px solid rgba(150, 165, 185, .42);
       border-radius: var(--radius);
-      background:
-        linear-gradient(180deg, rgba(255,255,255,.7), rgba(255,255,255,.28)),
-        rgba(255,255,255,.42);
+      background: #0a1511;
+    }
+    .space-plan-section { overflow: hidden; border: 1px solid rgba(150,165,185,.28); border-radius: 12px; background: #0d1b16; }
+    .space-plan-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 10px; color: #f0faf6; font-size: 11px; font-weight: 850; }
+    .space-plan-head small { color: #9eb2aa; font-family: "Space Mono", monospace; font-size: 8px; }
+    .space-plan-body { padding: 9px; border-top: 1px solid rgba(150,165,185,.2); background: #08100d; }
+    .space-bank { display: grid; grid-template-columns: repeat(5, minmax(32px, 1fr)); gap: 5px; }
+    .space-drive-lane { position: relative; height: 24px; margin: 7px -9px; border-block: 1px solid rgba(255,255,255,.1); background: #111b18; }
+    .space-drive-lane::after { content: 'DRIVE LANE'; position: absolute; inset: 0; display: grid; place-items: center; color: rgba(255,255,255,.38); font: 7px "Space Mono", monospace; letter-spacing: .16em; }
+    .space-cell-copy { position: relative; z-index: 2; display: grid; gap: 2px; place-items: center; }
+    .space-cell-copy small { font-size: 6px; letter-spacing: .08em; text-transform: uppercase; }
+    .space-vehicle {
+      position: absolute;
+      z-index: 1;
+      width: 24px;
+      height: 40px;
+      border: 2px solid currentColor;
+      border-radius: 9px 9px 6px 6px;
+      opacity: .78;
+      background: currentColor;
+      box-shadow: inset 0 9px 0 rgba(4,12,9,.65), inset 0 -9px 0 rgba(4,12,9,.65);
     }
 
     .space-cell {
+      position: relative;
       display: grid;
       place-items: center;
-      aspect-ratio: 1.55 / 1;
+      min-height: 62px;
+      overflow: hidden;
       border: 1px solid rgba(34, 201, 150, .48);
       border-radius: 6px;
-      color: var(--green-dark);
+      color: #5be0ad;
       background: rgba(34, 201, 150, .13);
       font-family: "Space Mono", monospace;
-      font-size: 10px;
+      font-size: 9px;
       font-weight: 800;
     }
 
     .space-cell.busy {
       border-color: rgba(255, 92, 122, .55);
-      color: #c63350;
+      color: #ff6f8b;
       background: rgba(255, 92, 122, .12);
     }
 
-    .space-cell.reserved { border-color: #d8a700; color: #765a00; background: #fff0a6; }
-    .space-cell.unknown { border-color: var(--line); color: var(--muted); background: #dfe3e8; }
+    .space-cell.reserved { border-color: #e9bd18; color: #f2c94c; background: repeating-linear-gradient(135deg, rgba(242,201,76,.2) 0 6px, rgba(242,201,76,.08) 6px 12px); }
+    .space-cell.unknown { border-color: rgba(150,165,185,.3); color: #82958d; background: #121c18; }
+    .space-cell.motorcycle { min-height: 50px; }
+    .space-cell.motorcycle .space-vehicle { width: 11px; height: 35px; border-radius: 7px; }
     button.space-cell { width: 100%; cursor: pointer; }
     button.space-cell:disabled { cursor: not-allowed; }
     .space-cell.selected { outline: 3px solid #14202c; outline-offset: 2px; }
@@ -725,7 +746,6 @@
       .hero { grid-template-columns: 1fr; }
       .availability { min-height: 330px; }
       .availability-main { grid-template-columns: 1fr; }
-      .space-map { grid-template-columns: repeat(4, minmax(0, 1fr)); }
       .meters { grid-template-columns: 1fr; }
       .reservation-controls { grid-template-columns: 1fr; }
       .camera-grid { grid-template-columns: 1fr; }
@@ -737,7 +757,9 @@
       .price-value { font-size: 54px; }
       .chip, .btn { width: 100%; justify-content: center; }
       .actions { gap: 8px; }
-      .space-map { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .space-map { padding: 9px; }
+      .space-bank { grid-template-columns: repeat(5, minmax(27px, 1fr)); gap: 4px; }
+      .space-cell { min-height: 55px; }
     }
   </style>
 </head>
@@ -1217,6 +1239,63 @@
       }
     }
 
+    function readImageAsDataUrl(image) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error('Could not read the selected image.'));
+        reader.readAsDataURL(image);
+      });
+    }
+
+    async function prepareDiscountIdImage(file) {
+      const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+      if (!allowedTypes.has(file.type)) {
+        throw new Error('Use a JPEG, PNG, or WebP image of the ID card.');
+      }
+      // Large phone photos make base64 JSON uploads unnecessarily slow. Keep
+      // enough detail to read an ID while reducing the usual upload by several
+      // times before it leaves the device.
+      if (file.size <= 700 * 1024) return readImageAsDataUrl(file);
+      if (file.size > 12 * 1024 * 1024) {
+        throw new Error('The selected image is too large. Capture the ID again at a lower resolution.');
+      }
+
+      const objectUrl = URL.createObjectURL(file);
+      try {
+        const image = await new Promise((resolve, reject) => {
+          const element = new Image();
+          element.onload = () => resolve(element);
+          element.onerror = () => reject(new Error('The selected image could not be opened.'));
+          element.src = objectUrl;
+        });
+        const maxSide = 1440;
+        const scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+        const context = canvas.getContext('2d', { alpha: false });
+        if (!context) throw new Error('This browser could not prepare the ID image.');
+        context.fillStyle = '#fff';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        const compressed = await new Promise((resolve, reject) => {
+          canvas.toBlob(
+            blob => blob ? resolve(blob) : reject(new Error('Could not prepare the ID image.')),
+            'image/jpeg',
+            0.78,
+          );
+        });
+        const upload = compressed.size < file.size ? compressed : file;
+        if (upload.size > 3 * 1024 * 1024) {
+          throw new Error('The ID image is still larger than 3 MB. Capture it again closer to the card.');
+        }
+        return readImageAsDataUrl(upload);
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
+    }
+
     async function submitDiscountVerification() {
       const type = document.getElementById('gcashDiscount')?.value || 'none';
       const idNumber = document.getElementById('gcashDiscountId')?.value.trim() || '';
@@ -1225,16 +1304,10 @@
       const statusEl = document.getElementById('discountVerificationStatus');
       if (type === 'none' || !idNumber) return statusEl.textContent = 'Select PWD/Senior and enter the ID number.';
       if (!file) return statusEl.textContent = 'Capture or choose an ID image first.';
-      if (file.size > 3 * 1024 * 1024) return statusEl.textContent = 'The ID image must be 3 MB or smaller.';
       button.disabled = true;
-      statusEl.textContent = 'Uploading ID securely...';
+      statusEl.textContent = 'Preparing and uploading ID securely...';
       try {
-        const imageDataUrl = await new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result);
-          reader.onerror = () => reject(new Error('Could not read the selected image.'));
-          reader.readAsDataURL(file);
-        });
+        const imageDataUrl = await prepareDiscountIdImage(file);
         const r = await fetch('/api/discount-verifications', {
           method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
           body: JSON.stringify({ discount_type: type, id_number: idNumber, image_data_url: imageDataUrl })
@@ -1429,14 +1502,34 @@
         map.innerHTML = '<div class="space-cell unknown">Waiting for slots</div>';
         return;
       }
-      map.innerHTML = latestSlots.map(slot => {
-        const label = slot.slot_id.split(':')[1];
-        const cls = slot.status === 'occupied' ? 'busy' : slot.status;
-        const selected = slot.slot_id === selectedSlotId ? ' selected' : '';
-        const disabled = slot.status !== 'available' ? 'disabled' : '';
-        const title = `${slot.slot_id}: ${slot.status}${slot.mine ? ' (yours)' : ''}`;
-        return `<button type="button" class="space-cell ${cls}${selected}" title="${title}" onclick="selectReservationSlot('${slot.slot_id}')" ${disabled}>${label}</button>`;
-      }).join('');
+      const numberOf = slot => Number((slot.slot_id.match(/\d+/) || ['999'])[0]);
+      const section = (type, title) => {
+        const slots = latestSlots.filter(slot => slot.vehicle_type === type).sort((a, b) => numberOf(a) - numberOf(b));
+        if (!slots.length) return '';
+        const free = slots.filter(slot => slot.status === 'available').length;
+        const midpoint = Math.ceil(slots.length / 10) * 5;
+        const top = slots.slice(0, Math.min(midpoint, slots.length));
+        const bottom = slots.slice(Math.min(midpoint, slots.length));
+        const bay = slot => {
+          const label = slot.slot_id.split(':').pop();
+          const cls = slot.status === 'occupied' ? 'busy' : slot.status;
+          const selected = slot.slot_id === selectedSlotId ? ' selected' : '';
+          const disabled = slot.status !== 'available' ? 'disabled' : '';
+          const status = slot.status === 'available' ? 'Free' : slot.status === 'occupied' ? 'In use' : slot.status === 'reserved' ? (slot.mine ? 'Yours' : 'Reserved') : 'Waiting';
+          const vehicle = slot.status === 'occupied' ? '<span class="space-vehicle" aria-hidden="true"></span>' : '';
+          return `<button type="button" class="space-cell ${cls} ${type}${selected}" title="${label}: ${status}" aria-label="${label}, ${status}" onclick="selectReservationSlot('${slot.slot_id}')" ${disabled}>
+            ${vehicle}<span class="space-cell-copy"><strong>${label}</strong><small>${status}</small></span>
+          </button>`;
+        };
+        return `<section class="space-plan-section">
+          <div class="space-plan-head"><span>${type === 'motorcycle' ? 'Motorcycle' : 'Car'} parking</span><small>${free} free / ${slots.length}</small></div>
+          <div class="space-plan-body">
+            <div class="space-bank">${top.map(bay).join('')}</div>
+            ${bottom.length ? `<div class="space-drive-lane" aria-hidden="true"></div><div class="space-bank">${bottom.map(bay).join('')}</div>` : ''}
+          </div>
+        </section>`;
+      };
+      map.innerHTML = section('car', 'Car parking') + section('motorcycle', 'Motorcycle parking');
     }
 
     async function fetchReservationSlots() {
@@ -1538,6 +1631,7 @@
       document.getElementById('rateCardMoto').classList.toggle('active', selectedVehicleType === 'motorcycle');
       document.getElementById('gcashVehicleLabel').textContent = selectedVehicleType === 'motorcycle' ? 'Motorcycle' : 'Car';
       if (latestSummary) updateSummary(latestSummary);
+      renderSpaceMap();
     }
 
     function formatPrice(value) {

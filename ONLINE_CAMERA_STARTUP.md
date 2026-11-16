@@ -165,6 +165,13 @@ being edited.
 MediaMTX can normally remain running. If the streams do not return, restart
 MediaMTX too and follow the complete guide from step 1.
 
+If PowerShell says `An OccupAI two-camera launcher is already running`, do not
+start a second copy. The existing launcher is still supervising ports 8001 and
+8002 and will restart a crashed worker automatically. Refresh the Live Feed page
+or click **Try again**. To perform a full restart, press `Ctrl+C` in the original
+launcher window, wait for both workers to stop, and run
+`.\start_two_cameras.ps1` once.
+
 ## Common problems
 
 ### Camera is busy or cannot be opened
@@ -196,6 +203,14 @@ Confirm there are no old manual FFmpeg processes publishing to the same paths.
 The integrated publisher uses a steady 20 FPS, one-second keyframes, no B-frames,
 and a controlled 700 kbps stream. Approximately one to three seconds on the
 website and two to four seconds in the Flutter app can still be normal for HLS.
+The current Flutter player automatically seeks closer to the live edge when it
+drifts more than 2.5 seconds behind. Install a newly built APK after changing
+this behavior; an older installed APK will not contain the correction.
+
+Keep MediaMTX at `hlsSegmentDuration: 1s` and `hlsPartDuration: 200ms` when using
+a Quick Tunnel. Testing 500 ms segments and 100 ms parts caused inconsistent
+startup times because it doubled the number of HTTPS object requests through
+the tunnel. Use a stable named tunnel before repeating lower-segment tests.
 Sub-second internet playback generally requires WebRTC plus publicly reachable
 ICE/TURN networking.
 

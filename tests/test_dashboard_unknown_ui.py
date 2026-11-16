@@ -64,3 +64,30 @@ def test_reports_offer_real_office_downloads():
     assert "downloadOfficeReport('xlsx'" in html
     assert "downloadOfficeReport('docx'" in html
     assert "/api/revenue/export?period=" in html
+
+
+def test_web_parking_status_uses_labeled_car_and_motorcycle_plan_views():
+    root = Path(__file__).parents[1]
+    dashboard = (root / "template" / "dashboard.html").read_text(encoding="utf-8")
+    driver = (root / "template" / "driver.html").read_text(encoding="utf-8")
+
+    assert "function parkingPlanMarkup" in dashboard
+    assert "Car parking" in dashboard
+    assert "Motorcycle parking" in dashboard
+    assert "DRIVE LANE" in dashboard
+    assert "lot-vehicle" in dashboard
+    assert "space-plan-section" in driver
+    assert "space-drive-lane" in driver
+    assert "space-vehicle" in driver
+
+
+def test_desktop_dashboard_uses_compact_labeled_navigation_rail():
+    html = (Path(__file__).parents[1] / "template" / "dashboard.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Desktop navigation rail" in html
+    assert 'class="logo-icon" aria-hidden="true">P</div>' in html
+    assert 'title="Live Feed"' in html
+    assert 'title="Settings"' in html
+    assert 'id="i-logout"' in html

@@ -108,6 +108,17 @@ def test_discount_verification_controls_exist_in_driver_and_admin_ui():
     assert "reviewDiscountVerification" in admin
 
 
+def test_driver_compresses_large_id_images_before_upload():
+    driver = (Path(__file__).parents[1] / "template" / "driver.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "prepareDiscountIdImage(file)" in driver
+    assert "const maxSide = 1440" in driver
+    assert "canvas.toBlob(" in driver
+    assert "0.78" in driver
+
+
 def test_discount_verification_routes_have_expected_auth():
     paths = {
         "/api/discount-verifications": m.require_user,

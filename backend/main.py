@@ -1660,6 +1660,10 @@ def _ensure_discount_verification_table():
             "CREATE INDEX IF NOT EXISTS idx_discount_verifications_user_latest "
             "ON discount_verifications (user_id, submitted_at DESC)"
         )
+        execute(
+            "CREATE INDEX IF NOT EXISTS idx_discount_verifications_user_card_latest "
+            "ON discount_verifications (user_id, discount_type, id_number, submitted_at DESC)"
+        )
     except Exception as e:
         print(f"[DB] discount verification table setup warning: {e}")
 

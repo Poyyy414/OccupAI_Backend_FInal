@@ -57,7 +57,11 @@ function Start-CameraWorker($Worker) {
 try {
     $ownsMutex = $mutex.WaitOne(0)
     if (-not $ownsMutex) {
-        throw 'An OccupAI two-camera launcher is already running.'
+        Write-Host 'An OccupAI two-camera launcher is already running.' -ForegroundColor Yellow
+        Write-Host 'Use the existing launcher window; it automatically restarts a camera worker if it exits.'
+        Write-Host 'Local feeds: http://127.0.0.1:8001/stream and http://127.0.0.1:8002/stream'
+        Write-Host 'To restart everything, press Ctrl+C in the existing launcher window, then run this command again.'
+        return
     }
 
     foreach ($worker in $workers) {

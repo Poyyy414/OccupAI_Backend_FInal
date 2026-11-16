@@ -17,3 +17,10 @@ def test_launcher_restarts_workers_without_changing_camera_mapping():
     assert "CameraId = 'motorcycles'; WebcamIndex = 1; Port = 8002" in source
     assert "Restarting in $delay second(s)" in source
     assert "AUTO_CAMERA_RECALIBRATE'] = 'true'" in source
+
+
+def test_occupancy_heartbeat_does_not_duplicate_video_frames():
+    source = (ROOT / "yolo_service" / "detector_v7.py").read_text(encoding="utf-8")
+
+    assert '"snapshot_b64":""' in source
+    assert 'requests.post(f"{target}/yolo/push-frame"' in source

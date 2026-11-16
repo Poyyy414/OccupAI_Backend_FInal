@@ -169,6 +169,13 @@ MEDIAMTX_RTSP_BASE_URL = os.getenv(
 ).strip().rstrip("/")
 MEDIAMTX_PUBLISH_FPS = max(5, min(24, _ei("MEDIAMTX_PUBLISH_FPS", 20)))
 MEDIAMTX_VIDEO_BITRATE = max(250, _ei("MEDIAMTX_VIDEO_BITRATE_KBPS", 700))
+MEDIAMTX_GOP_FRAMES = max(
+    1,
+    min(
+        MEDIAMTX_PUBLISH_FPS,
+        _ei("MEDIAMTX_GOP_FRAMES", MEDIAMTX_PUBLISH_FPS),
+    ),
+)
 CONF_THRESH = _ef("CONF_THRESH", 0.35)
 IOU_THRESH  = _ef("IOU_THRESH",  0.15)
 ASSIGN_MIN_OVERLAP = _ef("ASSIGN_MIN_OVERLAP", 0.18)
@@ -1021,8 +1028,8 @@ def _start_media_publisher(ffmpeg_path, frame):
         "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
         "-pix_fmt", "yuv420p",
         "-b:v", bitrate, "-maxrate", maxrate, "-bufsize", bufsize,
-        "-g", str(MEDIAMTX_PUBLISH_FPS),
-        "-keyint_min", str(MEDIAMTX_PUBLISH_FPS),
+        "-g", str(MEDIAMTX_GOP_FRAMES),
+        "-keyint_min", str(MEDIAMTX_GOP_FRAMES),
         "-sc_threshold", "0", "-bf", "0",
         "-flush_packets", "1", "-f", "rtsp", "-rtsp_transport", "tcp",
         publish_url,
@@ -1037,7 +1044,8 @@ def _start_media_publisher(ffmpeg_path, frame):
     )
     print(
         f"[media] Publishing {CAMERA_ID} at {MEDIAMTX_PUBLISH_FPS} FPS, "
-        f"{MEDIAMTX_VIDEO_BITRATE} kbps -> {publish_url}"
+        f"GOP {MEDIAMTX_GOP_FRAMES}, {MEDIAMTX_VIDEO_BITRATE} kbps -> "
+        f"{publish_url}"
     )
     return process, (width, height)
 
@@ -1103,7 +1111,7 @@ def _media_publisher_loop():
 
             try:
                 process.stdin.write(latest.tobytes())
-            except (BrokenPipeError, OSError, AttributeError) as exc:
+            except (BrokenPipeError, OSError, AttributeError, ValueError) as exc:
                 print(f"[media] Publisher disconnected; retrying: {exc}")
                 _stop_media_publisher(process)
                 process = None
@@ -1149,7 +1157,7 @@ def push_frame_to_backend(snapshot_frame, camera_id=CAMERA_ID):
         with _frame_push_lock:
             _frame_pushing=False
 
-def push_to_backend(occupied,free,total,pct,fps,zone_status,snapshot_frame,
+def push_to_backend(occupied,free,total,pct,fps,zone_status,
                     car_count=0,moto_count=0,bicycle_count=0, camera_id=CAMERA_ID,
                     camera_role=CAMERA_ROLE, reporting=True,
                     camera_status="online", calibration_required=False):
@@ -1158,7 +1166,6 @@ def push_to_backend(occupied,free,total,pct,fps,zone_status,snapshot_frame,
         if _pushing: return
         _pushing=True
     try:
-        fb64 = encode_frame(snapshot_frame)
         adj=slot_state.summary()
         payload={
             "occupied":occupied,"free":free,"total":total,
@@ -1170,7 +1177,10 @@ def push_to_backend(occupied,free,total,pct,fps,zone_status,snapshot_frame,
             "reporting":reporting,"camera_status":camera_status,
             "calibration_required":calibration_required,
             "timestamp":time.strftime("%Y-%m-%d %H:%M:%S"),
-            "snapshot_b64":fb64,"yolo_boxes":[],"slots":[],"zones":zone_status,
+            # Video frames use /yolo/push-frame and MediaMTX. Keeping this
+            # occupancy heartbeat free of base64 images prevents slow uploads
+            # from making an otherwise healthy camera appear offline.
+            "snapshot_b64":"","yolo_boxes":[],"slots":[],"zones":zone_status,
             "demand_level":adj.get("demand","NORMAL"),
             "forecast_veh":adj.get("forecast_veh",0),
             "adjustment_reason":adj.get("reason",""),
@@ -1500,7 +1510,7 @@ def detection_loop():
                 last_sent_zones=dict(zone_status)
                 threading.Thread(target=push_to_backend,
                     args=(occupied,free,n_slots,pct,round(fps_val,1),zone_status,
-                          ann.copy(),car_count,moto_count,bicycle_count,CAMERA_ID,CAMERA_ROLE,
+                          car_count,moto_count,bicycle_count,CAMERA_ID,CAMERA_ROLE,
                           reporting,
                           "calibration_required" if calibration_required else (
                               "online" if reporting else "offline"

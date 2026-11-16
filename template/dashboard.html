@@ -425,6 +425,51 @@
       overflow: hidden;
     }
 
+    /* Desktop navigation rail: compact like a parking-control console while
+       labels and native titles remain available for clarity and accessibility. */
+    @media (min-width: 841px) {
+      .sidebar {
+        inset: 12px auto 12px 14px;
+        width: 90px;
+        overflow: hidden;
+        border: 1px solid var(--sidebar-border);
+        border-radius: 32px;
+        box-shadow: 8px 12px 34px rgba(0, 0, 0, .2);
+      }
+      .logo { min-height: 96px; justify-content: center; padding: 14px 8px 8px; border-bottom: 0; }
+      .logo-icon { width: 46px; height: 46px; color: var(--sidebar-accent); background: transparent; font-size: 28px; }
+      .logo-text { display: none; }
+      .nav { gap: 5px; padding: 6px 9px; }
+      .nav-item {
+        flex-direction: column;
+        justify-content: center;
+        gap: 3px;
+        min-height: 58px;
+        padding: 6px 3px;
+        border-radius: 24px;
+        text-align: center;
+        font-size: 9px;
+        line-height: 1.1;
+      }
+      .nav-item::before { display: none; }
+      .nav-item:hover { transform: none; }
+      .nav-icon { width: 29px; height: 29px; background: transparent; }
+      .nav-icon .icon { width: 19px; height: 19px; }
+      .nav-item.active {
+        color: #32444A;
+        background: #DFE2D5;
+        box-shadow: 0 8px 20px rgba(0, 0, 0, .18);
+      }
+      .nav-item.active .nav-icon { transform: none; }
+      .sidebar-footer { padding: 8px; border-top: 0; }
+      .user-card { justify-content: center; padding: 7px; border: 0; background: transparent; }
+      .user-info { display: none; }
+      .signout-btn { display: flex; align-items: center; justify-content: center; gap: 0; min-height: 40px; margin-top: 3px; padding: 8px; text-align: center; }
+      .signout-btn span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+      .signout-btn .icon { width: 18px; height: 18px; }
+      .main { width: calc(100% - 120px); margin-left: 120px; }
+    }
+
     .topbar {
       display: flex;
       align-items: flex-start;
@@ -1848,21 +1893,117 @@
     }
     .forecast-value.highlight { color: var(--green); font-size: 16px; }
 
-    .lot-status-grid {
+    .lot-status-grid { display: grid; gap: 16px; }
+    .parking-plan {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(26px, 1fr));
-      gap: 6px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .parking-plan.compact { grid-template-columns: 1fr; }
+    .parking-plan-section {
+      min-width: 0;
+      overflow: hidden;
+      border: 1px solid var(--border-soft);
+      border-radius: 14px;
+      background: color-mix(in srgb, var(--panel) 88%, #07110e 12%);
+    }
+    .parking-plan-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 11px 12px;
+      border-bottom: 1px solid var(--border-soft);
+    }
+    .parking-plan-name { display: flex; align-items: center; gap: 8px; font-weight: 850; }
+    .parking-plan-name svg { width: 17px; height: 17px; color: var(--green); }
+    .parking-plan-count { color: var(--muted); font-family: "Space Mono", monospace; font-size: 10px; }
+    .parking-plan-body {
+      padding: 12px;
+      background:
+        linear-gradient(90deg, transparent 49.7%, rgba(255,255,255,.1) 50%, transparent 50.3%),
+        #0b1512;
+    }
+    .parking-bank { display: grid; grid-template-columns: repeat(5, minmax(38px, 1fr)); gap: 6px; }
+    .parking-lane {
+      position: relative;
+      height: 28px;
+      margin: 8px -12px;
+      border-top: 1px solid rgba(255,255,255,.12);
+      border-bottom: 1px solid rgba(255,255,255,.12);
+      background: repeating-linear-gradient(90deg, transparent 0 22px, rgba(255,255,255,.22) 22px 36px, transparent 36px 52px);
+      background-position: center;
+      background-size: auto 1px;
+      background-repeat: repeat-x;
+    }
+    .parking-lane::after {
+      content: 'DRIVE LANE';
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      color: rgba(255,255,255,.46);
+      background: #111b18;
+      font-family: "Space Mono", monospace;
+      font-size: 8px;
+      letter-spacing: .16em;
     }
     .lot-cell {
-      aspect-ratio: 1;
-      border-radius: 5px;
-      border: 1px solid var(--border-soft);
-      background: var(--tint);
-      transition: background .2s ease, border-color .2s ease;
+      position: relative;
+      display: grid;
+      min-width: 0;
+      min-height: 76px;
+      place-items: center;
+      overflow: hidden;
+      border: 1px solid rgba(52, 211, 153, .6);
+      border-radius: 7px;
+      color: #70e5ba;
+      background: rgba(34, 201, 150, .08);
+      transition: transform .18s ease, background .2s ease, border-color .2s ease;
     }
-    .lot-cell.free { background: var(--green-soft); border-color: var(--accent-border); }
-    .lot-cell.occ { background: var(--red-soft); border-color: var(--red-border); }
-    .lot-cell.reserved { background: var(--reserved-fill); border-color: var(--reserved-border); }
+    .lot-cell::before, .lot-cell::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 1px;
+      background: rgba(255,255,255,.12);
+    }
+    .lot-cell::before { left: 5px; }
+    .lot-cell::after { right: 5px; }
+    .lot-cell.free { background: rgba(34, 201, 150, .08); border-color: rgba(52, 211, 153, .55); }
+    .lot-cell.occ, .lot-cell.occupied { color: #ff7b94; background: rgba(255, 92, 122, .13); border-color: rgba(255, 92, 122, .72); }
+    .lot-cell.reserved {
+      color: #f4cb45;
+      border-color: rgba(242, 201, 76, .85);
+      background: repeating-linear-gradient(135deg, rgba(242,201,76,.18) 0 7px, rgba(242,201,76,.07) 7px 14px);
+    }
+    .lot-cell.unknown { color: var(--muted); border-color: var(--border-soft); background: var(--tint); }
+    .lot-slot-id { position: relative; z-index: 2; font-family: "Space Mono", monospace; font-size: 10px; font-weight: 850; }
+    .lot-slot-state { position: relative; z-index: 2; font-size: 7px; font-weight: 850; letter-spacing: .08em; text-transform: uppercase; }
+    .lot-vehicle {
+      position: absolute;
+      z-index: 1;
+      width: 30px;
+      height: 52px;
+      border: 2px solid currentColor;
+      border-radius: 11px 11px 8px 8px;
+      opacity: .82;
+      background: currentColor;
+      box-shadow: inset 0 11px 0 rgba(3,12,9,.62), inset 0 -11px 0 rgba(3,12,9,.62), 0 5px 13px rgba(0,0,0,.3);
+    }
+    .lot-cell.motorcycle { min-height: 58px; }
+    .lot-cell.motorcycle .lot-vehicle { width: 13px; height: 43px; border-radius: 8px; }
+    .lot-cell.occ .lot-slot-id, .lot-cell.occ .lot-slot-state,
+    .lot-cell.occupied .lot-slot-id, .lot-cell.occupied .lot-slot-state { text-shadow: 0 1px 3px #07100d; }
+    .status-chip .lot-cell { min-width: 9px; min-height: 9px; padding: 0; }
+    @media (max-width: 1100px) { .parking-plan { grid-template-columns: 1fr; } }
+    @media (max-width: 560px) {
+      .parking-bank { grid-template-columns: repeat(5, minmax(30px, 1fr)); gap: 4px; }
+      .lot-cell { min-height: 62px; }
+      .lot-cell.motorcycle { min-height: 52px; }
+      .lot-vehicle { transform: scale(.82); }
+    }
     .lot-legend { display: flex; align-items: center; gap: 8px; }
 
     .gcash-alert-banner {
@@ -2239,6 +2380,7 @@
   <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="m12 3 1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8L12 3Z"/><path d="m19 14 .9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9L19 14Z"/><path d="m5 13 .7 1.6L7 15l-1.3.4L5 17l-.7-1.6L3 15l1.3-.4L5 13Z"/></symbol>
   <symbol id="i-parking" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="M9 17V7h4.2a3.2 3.2 0 1 1 0 6.4H9"/><path d="M9 13.4h4.2"/></symbol>
   <symbol id="i-car" viewBox="0 0 24 24"><path d="m5 12 2-5h10l2 5"/><path d="M5 12h14v6H5z"/><circle cx="8" cy="18" r="1.5"/><circle cx="16" cy="18" r="1.5"/><path d="M7 12V9h10v3"/></symbol>
+  <symbol id="i-motorcycle" viewBox="0 0 24 24"><circle cx="6" cy="17" r="3"/><circle cx="18" cy="17" r="3"/><path d="m8 17 3-7h4l3 7"/><path d="M9 13h7l-2-4h-3"/><path d="m15 9 2-2h2"/></symbol>
   <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
   <symbol id="i-gauge" viewBox="0 0 24 24"><path d="M4 14a8 8 0 0 1 16 0"/><path d="M12 14l4-4"/><path d="M6 18h12"/><path d="M8 14h.01"/><path d="M16 14h.01"/></symbol>
   <symbol id="i-activity" viewBox="0 0 24 24"><path d="M3 12h4l2-7 4 14 2-7h6"/></symbol>
@@ -2251,11 +2393,12 @@
   <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
   <symbol id="i-dollar" viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M17 7.5c-1-1-2.5-1.5-4.2-1.5-2.5 0-4.3 1.1-4.3 2.8 0 4 9 2.1 9 6.4 0 1.7-1.8 2.8-4.6 2.8-2 0-3.8-.6-5-1.8"/></symbol>
   <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2.8 20h18.4L12 3Z"/><path d="M12 9v5"/><path d="M12 17h.01"/></symbol>
+  <symbol id="i-logout" viewBox="0 0 24 24"><path d="M10 5H5v14h5"/><path d="M14 8l4 4-4 4"/><path d="M8 12h10"/></symbol>
 </svg>
 <aside class="sidebar" id="dashboardSidebar" aria-label="Dashboard navigation">
   <div class="logo">
     <button type="button" class="mobile-menu-close" id="mobileMenuClose" aria-label="Close navigation">&#215;</button>
-    <div class="logo-icon"><img src="/static/occupai_logo.png" alt="OccupAI logo" /></div>
+    <div class="logo-icon" aria-hidden="true">P</div>
     <div class="logo-text">
       <div class="logo-name">OccupAI</div>
       <div class="logo-meta">Parking Ops</div>
@@ -2263,31 +2406,31 @@
   </div>
 
   <nav class="nav" aria-label="Dashboard sections">
-    <button class="nav-item active" onclick="switchPanel('overview', this)">
+    <button class="nav-item active" title="Overview" onclick="switchPanel('overview', this)">
       <span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-dashboard"></use></svg></span>
       <span>Overview</span>
     </button>
-    <button class="nav-item" onclick="switchPanel('revenue', this)">
+    <button class="nav-item" title="Revenue" onclick="switchPanel('revenue', this)">
       <span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-dollar"></use></svg></span>
       <span>Revenue</span>
     </button>
-    <button class="nav-item" onclick="switchPanel('livefeed', this)">
+    <button class="nav-item" title="Live Feed" onclick="switchPanel('livefeed', this)">
       <span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-video"></use></svg></span>
       <span>Live Feed</span>
     </button>
-    <button class="nav-item" onclick="switchPanel('insights', this)">
+    <button class="nav-item" title="Parking Guide" onclick="switchPanel('insights', this)">
       <span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-sparkles"></use></svg></span>
       <span>Parking Guide</span>
     </button>
-    <button class="nav-item" onclick="switchPanel('predictions', this)">
+    <button class="nav-item" title="Expected Activity" onclick="switchPanel('predictions', this)">
       <span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-chart"></use></svg></span>
       <span>Expected Activity</span>
     </button>
-    <button class="nav-item" onclick="switchPanel('reports', this)">
+    <button class="nav-item" title="Reports" onclick="switchPanel('reports', this)">
       <span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-sparkles"></use></svg></span>
       <span>Reports</span>
     </button>
-    <button class="nav-item" onclick="switchPanel('settings', this)">
+    <button class="nav-item" title="Settings" onclick="switchPanel('settings', this)">
       <span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-settings"></use></svg></span>
       <span>Settings</span>
     </button>
@@ -2301,7 +2444,7 @@
         <div class="user-role" id="sidebarRole">--</div>
       </div>
     </div>
-    <button class="signout-btn" onclick="signOut()">Sign out</button>
+    <button class="signout-btn" title="Sign out" onclick="signOut()"><svg class="icon" aria-hidden="true"><use href="#i-logout"></use></svg><span>Sign out</span></button>
   </div>
 </aside>
 
@@ -2778,7 +2921,7 @@
       </div>
 
       <aside class="zone-panel">
-        <div class="zone-title">Combined Zone Status</div>
+        <div class="zone-title">Live Parking Plan</div>
         <div class="zone-summary">
           <div class="zone-stat">
             <span>Free</span>
@@ -5437,6 +5580,57 @@ async function recordPayment() {
   }
 }
 
+function parkingPlanMarkup(zones, slotStatuses = [], compact = false) {
+  const byId = Object.fromEntries(slotStatuses.map(slot => [slot.slot_id, slot]));
+  let ids = [...new Set([...Object.keys(zones), ...slotStatuses.map(slot => slot.slot_id)])];
+  if (!ids.length) {
+    ids = [
+      ...Array.from({ length: Number(capacitySettings.car_slots || 10) }, (_, i) => `cars:C${String(i + 1).padStart(2, '0')}`),
+      ...Array.from({ length: Number(capacitySettings.motorcycle_slots || 20) }, (_, i) => `motorcycles:M${String(i + 1).padStart(2, '0')}`),
+    ];
+  }
+  const slotState = id => {
+    if (zones[id] === true) return 'occupied';
+    const apiState = byId[id]?.status;
+    if (apiState === 'reserved') return 'reserved';
+    if (zones[id] === false || apiState === 'available') return 'free';
+    if (apiState === 'occupied') return 'occupied';
+    return 'unknown';
+  };
+  const numericPart = id => Number((id.split(':').pop().match(/\d+/) || ['999'])[0]);
+  const section = (type, title, prefix) => {
+    const isMotorcycle = type === 'motorcycle';
+    const slots = ids
+      .filter(id => isMotorcycle ? id.startsWith('motorcycles:') || id.split(':').pop().startsWith('M') : id.startsWith('cars:') || id.split(':').pop().startsWith('C'))
+      .sort((a, b) => numericPart(a) - numericPart(b));
+    if (!slots.length) return '';
+    const free = slots.filter(id => slotState(id) === 'free').length;
+    const midpoint = Math.ceil(slots.length / 10) * 5;
+    const top = slots.slice(0, Math.min(midpoint, slots.length));
+    const bottom = slots.slice(Math.min(midpoint, slots.length));
+    const bay = id => {
+      const state = slotState(id);
+      const label = id.split(':').pop();
+      const stateText = state === 'occupied' ? 'In use' : state === 'reserved' ? (byId[id]?.dedicated_slot ? 'Dedicated' : 'Reserved') : state === 'free' ? 'Free' : 'Waiting';
+      const vehicle = state === 'occupied' ? '<span class="lot-vehicle" aria-hidden="true"></span>' : '';
+      return `<div class="lot-cell ${state} ${isMotorcycle ? 'motorcycle' : 'car'}" title="${escapeHtml(label)}: ${stateText}">
+        ${vehicle}<span class="lot-slot-id">${escapeHtml(label)}</span><span class="lot-slot-state">${stateText}</span>
+      </div>`;
+    };
+    return `<section class="parking-plan-section" aria-label="${title} parking plan">
+      <div class="parking-plan-head">
+        <span class="parking-plan-name"><svg class="icon" aria-hidden="true"><use href="#${isMotorcycle ? 'i-motorcycle' : 'i-car'}"></use></svg>${title}</span>
+        <span class="parking-plan-count">${free} free / ${slots.length}</span>
+      </div>
+      <div class="parking-plan-body">
+        <div class="parking-bank">${top.map(bay).join('')}</div>
+        ${bottom.length ? `<div class="parking-lane" aria-hidden="true"></div><div class="parking-bank">${bottom.map(bay).join('')}</div>` : ''}
+      </div>
+    </section>`;
+  };
+  return `<div class="parking-plan${compact ? ' compact' : ''}">${section('car', 'Car parking', 'C')}${section('motorcycle', 'Motorcycle parking', 'M')}</div>`;
+}
+
 function renderZones(zones, total, occupied, slotStatuses = []) {
   const list = document.getElementById('zoneList');
   const slotById = Object.fromEntries(slotStatuses.map(slot => [slot.slot_id, slot]));
@@ -5447,7 +5641,7 @@ function renderZones(zones, total, occupied, slotStatuses = []) {
   const occCountEl = document.getElementById('zoneOccCount');
   const lotGrid = document.getElementById('lotStatusGrid');
 
-  if (entries.length === 0) {
+  if (entries.length === 0 && slotStatuses.length === 0) {
     if (freeCountEl) freeCountEl.textContent = total > 0 ? Math.max(0, total - occupied) : '--';
     if (occCountEl) occCountEl.textContent = total > 0 ? occupied : '--';
     if (total > 0) {
@@ -5457,11 +5651,7 @@ function renderZones(zones, total, occupied, slotStatuses = []) {
           <span class="zone-name">Main Lot</span>
           <span class="zone-badge ${occupied > 0 ? 'occ' : 'free'}">${total - occupied} free / ${occupied} occ</span>
         </div>`;
-      if (lotGrid) {
-        lotGrid.innerHTML = Array.from({ length: total }, (_, i) =>
-          `<div class="lot-cell ${i < occupied ? 'occ' : 'free'}" title="Spot ${i + 1}: ${i < occupied ? 'Occupied' : 'Free'}"></div>`
-        ).join('');
-      }
+      if (lotGrid) lotGrid.innerHTML = parkingPlanMarkup({}, [], false);
     } else {
       list.innerHTML = '<div class="empty-state"><strong>No zones yet</strong>Zone states will appear after detection starts.</div>';
       if (lotGrid) lotGrid.innerHTML = '<div class="empty-state"><strong>Waiting for zone data</strong>Lot status will appear here.</div>';
@@ -5475,24 +5665,8 @@ function renderZones(zones, total, occupied, slotStatuses = []) {
   if (freeCountEl) freeCountEl.textContent = knownZones ? freeZones : '--';
   if (occCountEl) occCountEl.textContent = knownZones ? occZones : '--';
 
-  list.innerHTML = entries.map(([name, isOccupied]) => {
-    const known = typeof isOccupied === 'boolean';
-    const cls = known ? (isOccupied ? 'occ' : statusById[name] === 'reserved' ? 'reserved' : 'free') : 'unknown';
-    const label = known ? (isOccupied ? 'Occupied' : cls === 'reserved' ? reservedLabel(name) : 'Free') : 'Unknown';
-    return `
-      <div class="zone-row">
-        <div class="zone-dot ${cls}"></div>
-        <span class="zone-name">${escapeHtml(name)}</span>
-        <span class="zone-badge ${cls}">${label}</span>
-      </div>`;
-  }).join('');
-
-  if (lotGrid) {
-    lotGrid.innerHTML = entries.map(([name, isOccupied]) => {
-      const cls = isOccupied === true ? 'occ' : isOccupied === false ? (statusById[name] === 'reserved' ? 'reserved' : 'free') : '';
-      return `<div class="lot-cell ${cls}" title="${escapeHtml(name)}: ${isOccupied === true ? 'Occupied' : isOccupied === false ? (cls === 'reserved' ? reservedLabel(name) : 'Free') : 'Unknown'}"></div>`;
-    }).join('');
-  }
+  list.innerHTML = parkingPlanMarkup(zones, slotStatuses, true);
+  if (lotGrid) lotGrid.innerHTML = parkingPlanMarkup(zones, slotStatuses, false);
 }
 
 function clampPct(v) {
@@ -5883,28 +6057,33 @@ function onCameraStreamError(img, cardKey) {
   const state = _cameraStreamState[cardKey];
   if (!state || !state.cameraId) return;
   state.error = true;
-  if (adminCameraMode === 'local') state.localPermissionGranted = false;
   const placeholder = document.getElementById(cameraCardElementId(cardKey, 'Placeholder'));
   const badge = document.getElementById(cameraCardElementId(cardKey, 'Badge'));
   const inline = document.getElementById(cameraCardElementId(cardKey, 'InlineStatus'));
   const statusMsg = document.getElementById(cameraCardElementId(cardKey, 'StatusMsg'));
   if (placeholder) placeholder.style.display = 'flex';
   if (badge) badge.style.display = 'none';
-  if (inline) { inline.textContent = 'Video unavailable'; inline.className = 'status-chip bad'; }
+  const canRetryLocal = adminCameraMode === 'local' && state.localPermissionGranted;
+  if (inline) {
+    inline.textContent = canRetryLocal ? 'Reconnecting' : 'Video unavailable';
+    inline.className = canRetryLocal ? 'status-chip warn' : 'status-chip bad';
+  }
   if (statusMsg) statusMsg.textContent = adminCameraMode === 'local'
-    ? 'The local feed could not connect. Allow Loopback network access in this site\'s Chrome settings, then try again.'
+    ? canRetryLocal
+      ? 'The local camera paused. Reconnecting automatically...'
+      : 'The local feed could not connect. Allow Loopback network access in this site\'s Chrome settings, then try again.'
     : 'Parking counts are available, but the live video cannot connect right now.';
   const localButton = document.getElementById(cardKey + 'LocalCameraButton');
-  if (localButton) localButton.style.display = adminCameraMode === 'local' ? 'inline-flex' : 'none';
+  if (localButton) localButton.style.display = adminCameraMode === 'local' && !canRetryLocal ? 'inline-flex' : 'none';
   state.retries += 1;
-  if (adminCameraMode !== 'local' && !state.timer) {
+  if ((adminCameraMode !== 'local' || canRetryLocal) && !state.timer) {
     state.timer = setTimeout(() => {
       state.timer = null;
       const endpoint = state.endpoint;
       if (endpoint && img.dataset.endpoint === endpoint) {
         img.src = cacheBustUrl(endpoint);
       }
-    }, Math.min(state.retries * 3, 15) * 1000);
+    }, Math.min(state.retries * 2, 10) * 1000);
   }
 }
 
