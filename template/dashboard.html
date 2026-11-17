@@ -430,35 +430,40 @@
     @media (min-width: 841px) {
       .sidebar {
         inset: 12px auto 12px 14px;
-        width: 90px;
+        width: 82px;
         overflow: hidden;
-        border: 1px solid var(--sidebar-border);
-        border-radius: 32px;
+        border: 0;
+        border-radius: 34px 34px 24px 24px;
+        background: #52646A;
         box-shadow: 8px 12px 34px rgba(0, 0, 0, .2);
       }
       .logo { min-height: 96px; justify-content: center; padding: 14px 8px 8px; border-bottom: 0; }
-      .logo-icon { width: 46px; height: 46px; color: var(--sidebar-accent); background: transparent; font-size: 28px; }
+      .logo-icon { width: 50px; height: 50px; padding: 3px; border-radius: 50%; background: #F1F2E8; }
+      .logo-icon img { border-radius: 50%; object-fit: contain; }
       .logo-text { display: none; }
-      .nav { gap: 5px; padding: 6px 9px; }
+      .nav { align-items: center; gap: 4px; padding: 6px 8px; }
       .nav-item {
-        flex-direction: column;
+        flex: 0 0 auto;
         justify-content: center;
-        gap: 3px;
-        min-height: 58px;
-        padding: 6px 3px;
-        border-radius: 24px;
+        gap: 0;
+        width: 52px;
+        min-height: 52px;
+        padding: 0;
+        border-radius: 50%;
+        color: #F7F8F3;
         text-align: center;
-        font-size: 9px;
-        line-height: 1.1;
       }
+      .nav-item > span:last-child { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
       .nav-item::before { display: none; }
-      .nav-item:hover { transform: none; }
-      .nav-icon { width: 29px; height: 29px; background: transparent; }
-      .nav-icon .icon { width: 19px; height: 19px; }
+      .nav-item:hover { color: #FFFFFF; background: rgba(255,255,255,.12); transform: none; }
+      .nav-icon { width: 32px; height: 32px; background: transparent; }
+      .nav-icon .icon { width: 20px; height: 20px; }
       .nav-item.active {
-        color: #32444A;
-        background: #DFE2D5;
-        box-shadow: 0 8px 20px rgba(0, 0, 0, .18);
+        width: 58px;
+        min-height: 58px;
+        color: #52646A;
+        background: #E2E3D7;
+        box-shadow: 0 8px 20px rgba(0, 0, 0, .2), 0 0 0 5px rgba(226,227,215,.12);
       }
       .nav-item.active .nav-icon { transform: none; }
       .sidebar-footer { padding: 8px; border-top: 0; }
@@ -467,7 +472,7 @@
       .signout-btn { display: flex; align-items: center; justify-content: center; gap: 0; min-height: 40px; margin-top: 3px; padding: 8px; text-align: center; }
       .signout-btn span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
       .signout-btn .icon { width: 18px; height: 18px; }
-      .main { width: calc(100% - 120px); margin-left: 120px; }
+      .main { width: calc(100% - 110px); margin-left: 110px; }
     }
 
     .topbar {
@@ -2398,7 +2403,7 @@
 <aside class="sidebar" id="dashboardSidebar" aria-label="Dashboard navigation">
   <div class="logo">
     <button type="button" class="mobile-menu-close" id="mobileMenuClose" aria-label="Close navigation">&#215;</button>
-    <div class="logo-icon" aria-hidden="true">P</div>
+    <div class="logo-icon"><img src="/static/occupai_logo.png" alt="OccupAI logo" /></div>
     <div class="logo-text">
       <div class="logo-name">OccupAI</div>
       <div class="logo-meta">Parking Ops</div>

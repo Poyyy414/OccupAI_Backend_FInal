@@ -87,7 +87,22 @@ def test_desktop_dashboard_uses_compact_labeled_navigation_rail():
     )
 
     assert "Desktop navigation rail" in html
-    assert 'class="logo-icon" aria-hidden="true">P</div>' in html
+    assert 'class="logo-icon"><img src="/static/occupai_logo.png"' in html
     assert 'title="Live Feed"' in html
     assert 'title="Settings"' in html
     assert 'id="i-logout"' in html
+
+
+def test_all_web_pages_use_the_current_occupai_logo():
+    root = Path(__file__).parents[1]
+    for name in (
+        "dashboard.html",
+        "driver.html",
+        "login.html",
+        "register.html",
+        "forgot_password.html",
+        "reset_password.html",
+    ):
+        html = (root / "template" / name).read_text(encoding="utf-8")
+        assert "/static/occupai_logo.png" in html
+    assert (root / "template" / "occupai_logo.png").is_file()
