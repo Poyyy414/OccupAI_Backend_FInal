@@ -5347,7 +5347,7 @@ def _gcash_result_page(
             f'<a href="{escaped_url}">Return to OccupAI app</a>'
             f'<script>window.setTimeout(function(){{window.location.href={json.dumps(app_return_url)};}},250);</script>'
         )
-    html = """<!DOCTYPE html>
+    page_html = """<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>""" + title + """</title>
 <style>
@@ -5365,7 +5365,7 @@ text-decoration:none;font-weight:600}
 <p>""" + message + """</p>
 """ + (app_return_markup or '<a href="/driver">Back to Driver View</a>') + """
 </div></body></html>"""
-    return HTMLResponse(content=html)
+    return HTMLResponse(content=page_html)
 
 
 def _gcash_pending_page(ref: str, next_attempt: int, *, return_to_app: bool = False):
