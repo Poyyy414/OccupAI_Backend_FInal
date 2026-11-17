@@ -628,6 +628,11 @@ OCC_HIGH_THRESH = 20.0
 PAYMONGO_SECRET_KEY = os.getenv("PAYMONGO_SECRET_KEY", "")
 PAYMONGO_PUBLIC_KEY = os.getenv("PAYMONGO_PUBLIC_KEY", "")
 PAYMONGO_WEBHOOK_SECRET = os.getenv("PAYMONGO_WEBHOOK_SECRET", "").strip()
+# This custom scheme is owned by the Android/iOS client.  PayMongo returns to
+# an HTTPS success page first; that page then hands the driver back to the app.
+# Keeping the scheme fixed prevents an API caller from turning this into an
+# open redirect.
+OCCUPAI_APP_RETURN_URL = "occupai://payment-return"
 PAYMONGO_WEBHOOK_TOLERANCE_SECONDS = max(
     30, int(os.getenv("PAYMONGO_WEBHOOK_TOLERANCE_SECONDS", "300"))
 )
@@ -1595,6 +1600,11 @@ def _ensure_payment_table():
         # verifying them (see _check_discount_id_abuse below).
         execute("ALTER TABLE parking_payments ADD COLUMN IF NOT EXISTS verified_by_user_id INTEGER")
         execute("ALTER TABLE parking_payments ADD COLUMN IF NOT EXISTS discount_verification_id BIGINT")
+        # A driver can end a prepaid plan without altering the immutable payment
+        # receipt.  Cancelled plans are excluded from the current-plan card but
+        # remain visible in payment history for reconciliation.
+        execute("ALTER TABLE parking_payments ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ")
+        execute("ALTER TABLE parking_payments ADD COLUMN IF NOT EXISTS cancellation_reason TEXT")
     except Exception as e:
         print(f"[DB] payment table setup warning: {e}")
 
@@ -4122,7 +4132,7 @@ def _load_driver_payment_plan(user_id):
                    ELSE paid_at + INTERVAL '1 day'
                END AS expires_at
         FROM parking_payments
-        WHERE user_id=%s
+        WHERE user_id=%s AND cancelled_at IS NULL
         ORDER BY expires_at DESC, paid_at DESC
         LIMIT 1
         """,
@@ -4187,6 +4197,86 @@ def _driver_payment_plan(user_id):
         )
         plan["status"] = "active" if plan["remaining_seconds"] > 0 else "expired"
     return plan
+
+
+@app.post("/api/payments/{payment_id}/cancel-plan")
+def cancel_driver_payment_plan(payment_id: int, _auth=Depends(require_user)):
+    """End an unused active plan without deleting its financial receipt.
+
+    This is intentionally not a refund endpoint.  If the payment backs a
+    reservation, its space is released too, unless the camera already shows
+    that the driver's vehicle is parked in it.
+    """
+    user_id = int(_auth["user_id"])
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT p.payment_id, p.paid_at, p.duration_type, r.reservation_id, "
+            "r.status AS reservation_status "
+            "FROM parking_payments p "
+            "LEFT JOIN parking_reservations r ON r.payment_id=p.payment_id "
+            "WHERE p.payment_id=%s AND p.user_id=%s AND p.cancelled_at IS NULL "
+            "FOR UPDATE OF p",
+            (payment_id, user_id),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(404, "Active parking plan not found")
+
+        expires_at = _payment_expiry_at(
+            _coerce_datetime(row["paid_at"]),
+            row.get("duration_type"),
+        )
+        if expires_at <= datetime.now(PH_TZ):
+            return {
+                "ok": True,
+                "payment_id": payment_id,
+                "already_expired": True,
+                "message": "This parking plan has already expired.",
+            }
+        if row.get("reservation_status") == "occupied":
+            raise HTTPException(409, "You cannot cancel a plan while the vehicle is parked")
+
+        cur.execute(
+            "UPDATE parking_payments SET cancelled_at=NOW(), "
+            "cancellation_reason='Cancelled by driver' WHERE payment_id=%s",
+            (payment_id,),
+        )
+        released_reservation = False
+        if row.get("reservation_id") and row.get("reservation_status") in {"pending_payment", "reserved"}:
+            cur.execute(
+                "UPDATE parking_reservations SET status='cancelled', completed_at=NOW() "
+                "WHERE reservation_id=%s AND user_id=%s "
+                "AND status IN ('pending_payment', 'reserved')",
+                (row["reservation_id"], user_id),
+            )
+            released_reservation = cur.rowcount == 1
+        conn.commit()
+        _invalidate_driver_payment_plan_cache(user_id)
+        if released_reservation:
+            _invalidate_reservation_cache()
+        return {
+            "ok": True,
+            "payment_id": payment_id,
+            "released_reservation": released_reservation,
+            "refund_automatic": False,
+            "message": (
+                "Plan cancelled and its reserved space was released. "
+                "The GCash payment was not automatically refunded."
+                if released_reservation else
+                "Plan cancelled. The GCash payment was not automatically refunded."
+            ),
+        }
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
 
 
 @app.get("/api/driver/summary")
@@ -4959,6 +5049,10 @@ class GcashCheckoutPayload(BaseModel):
     discount_verification_id: Optional[int] = None
     payment_purpose: str = "parking"
     start_date: Optional[str] = None
+    # Native clients ask the HTTPS confirmation page to hand control back to
+    # the installed app after PayMongo completes. Browser clients keep the
+    # normal web confirmation page.
+    return_to_app: bool = False
 
 
 def _claim_discount_verification(user_id: int, discount_type: str, id_number: str,
@@ -5168,7 +5262,11 @@ def gcash_create_checkout(
                     "phone": mobile_number,
                 },
                 "reference_number": ref,
-                "success_url": f"{base_url}/api/gcash/success?ref={ref}",
+                "success_url": (
+                    f"{base_url}/api/gcash/success?ref={ref}&return_to_app=1"
+                    if payload.return_to_app else
+                    f"{base_url}/api/gcash/success?ref={ref}"
+                ),
                 "cancel_url": f"{base_url}/driver",
                 "description": (payload.description or "OccupAI Parking Payment").strip()[:200],
             }
@@ -5226,10 +5324,29 @@ def gcash_create_checkout(
     }
 
 
-def _gcash_result_page(ok: bool, message: str):
+def _gcash_result_page(
+    ok: bool,
+    message: str,
+    *,
+    return_to_app: bool = False,
+    ref: Optional[str] = None,
+):
     color = "#22c996" if ok else "#ef4444"
     icon = "&#10003;" if ok else "&#10007;"
     title = "Payment Successful!" if ok else "Payment Not Confirmed"
+    app_return_url = (
+        f"{OCCUPAI_APP_RETURN_URL}?payment={'success' if ok else 'failed'}"
+        f"&ref={quote(ref or '', safe='')}"
+        if return_to_app else None
+    )
+    app_return_markup = ""
+    if app_return_url:
+        escaped_url = html.escape(app_return_url, quote=True)
+        app_return_markup = (
+            '<p class="returning">Returning to OccupAI app…</p>'
+            f'<a href="{escaped_url}">Return to OccupAI app</a>'
+            f'<script>window.setTimeout(function(){{window.location.href={json.dumps(app_return_url)};}},250);</script>'
+        )
     html = """<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>""" + title + """</title>
@@ -5246,18 +5363,22 @@ text-decoration:none;font-weight:600}
 <div class="check">""" + icon + """</div>
 <h1>""" + title + """</h1>
 <p>""" + message + """</p>
-<a href="/driver">Back to Driver View</a>
+""" + (app_return_markup or '<a href="/driver">Back to Driver View</a>') + """
 </div></body></html>"""
     return HTMLResponse(content=html)
 
 
-def _gcash_pending_page(ref: str, next_attempt: int):
+def _gcash_pending_page(ref: str, next_attempt: int, *, return_to_app: bool = False):
     """Auto-refreshing page shown while PayMongo is still confirming a GCash payment.
 
     GCash confirmation frequently lags a few seconds past the redirect, so instead of
     hard-failing we reload the success URL a few times before giving up.
     """
-    retry_url = f"/api/gcash/success?ref={ref}&attempt={next_attempt}"
+    retry_url = (
+        f"/api/gcash/success?ref={quote(ref, safe='')}&attempt={next_attempt}"
+        f"&return_to_app=1" if return_to_app else
+        f"/api/gcash/success?ref={quote(ref, safe='')}&attempt={next_attempt}"
+    )
     html = """<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Confirming Payment…</title>
@@ -5475,23 +5596,28 @@ def gcash_success(
     request: Request,
     ref: str = Query(..., min_length=20, max_length=64),
     attempt: int = Query(0, ge=0, le=100),
+    return_to_app: bool = Query(False),
 ):
     _rate_limit(request, "gcash-success", max_calls=60, window_seconds=60)
     rows = query("SELECT * FROM gcash_checkouts WHERE ref = %s", (ref,))
     if not rows:
-        return _gcash_result_page(False, "We couldn't find this checkout session.")
+        return _gcash_result_page(False, "We couldn't find this checkout session.",
+                                  return_to_app=return_to_app, ref=ref)
     checkout = rows[0]
 
     if checkout["status"] == "paid":
         return _gcash_result_page(
-            True, f"Your GCash payment of PHP {float(checkout['final_amount_php']):,.2f} has been recorded."
+            True, f"Your GCash payment of PHP {float(checkout['final_amount_php']):,.2f} has been recorded.",
+            return_to_app=return_to_app, ref=ref,
         )
     if checkout["status"] == "error":
-        return _gcash_result_page(False, "This payment needs manual reconciliation. Please contact support.")
+        return _gcash_result_page(False, "This payment needs manual reconciliation. Please contact support.",
+                                  return_to_app=return_to_app, ref=ref)
 
     checkout_id = checkout["checkout_id"]
     if not checkout_id:
-        return _gcash_result_page(False, "This checkout session was never started with PayMongo.")
+        return _gcash_result_page(False, "This checkout session was never started with PayMongo.",
+                                  return_to_app=return_to_app, ref=ref)
 
     import time
     import urllib.request
@@ -5513,8 +5639,11 @@ def gcash_success(
             print(f"[GCash] Could not verify checkout {checkout_id}: {e}")
             # Transient network/API hiccup — let the page retry rather than hard-fail.
             if attempt < _GCASH_MAX_PAGE_RETRIES:
-                return _gcash_pending_page(ref, attempt + 1)
-            return _gcash_result_page(False, "We couldn't verify your payment with PayMongo. Please contact support.")
+                return _gcash_pending_page(ref, attempt + 1, return_to_app=return_to_app)
+            return _gcash_result_page(
+                False, "We couldn't verify your payment with PayMongo. Please contact support.",
+                return_to_app=return_to_app, ref=ref,
+            )
 
         attributes = result.get("data", {}).get("attributes", {})
         if _checkout_is_paid(attributes):
@@ -5528,30 +5657,44 @@ def gcash_success(
         # GCash confirmation often lags past the redirect. Auto-refresh a few times
         # before giving up so a slightly-late payment still gets recorded.
         if attempt < _GCASH_MAX_PAGE_RETRIES:
-            return _gcash_pending_page(ref, attempt + 1)
+            return _gcash_pending_page(ref, attempt + 1, return_to_app=return_to_app)
         print(f"[GCash] checkout {checkout_id} still not paid after retries: {attributes}")
-        return _gcash_result_page(False, "PayMongo has not confirmed this payment yet.")
+        return _gcash_result_page(
+            False, "PayMongo has not confirmed this payment yet.",
+            return_to_app=return_to_app, ref=ref,
+        )
 
     try:
         checkout, claim_status, _payment = _finalize_gcash_checkout(ref)
     except Exception as e:
         print(f"[GCash] Could not claim checkout {ref}: {e}")
-        return _gcash_result_page(False, "We couldn't finalize this payment yet. Please try again.")
+        return _gcash_result_page(
+            False, "We couldn't finalize this payment yet. Please try again.",
+            return_to_app=return_to_app, ref=ref,
+        )
 
     if checkout is None:
-        return _gcash_result_page(False, "We couldn't find this checkout session.")
+        return _gcash_result_page(False, "We couldn't find this checkout session.",
+                                  return_to_app=return_to_app, ref=ref)
     if claim_status == "paid":
         return _gcash_result_page(
-            True, f"Your GCash payment of PHP {float(checkout['final_amount_php']):,.2f} has been recorded."
+            True, f"Your GCash payment of PHP {float(checkout['final_amount_php']):,.2f} has been recorded.",
+            return_to_app=return_to_app, ref=ref,
         )
     if claim_status == "error":
-        return _gcash_result_page(False, "Payment was confirmed by PayMongo, but we couldn't save the record. Please contact support.")
+        return _gcash_result_page(
+            False, "Payment was confirmed by PayMongo, but we couldn't save the record. Please contact support.",
+            return_to_app=return_to_app, ref=ref,
+        )
 
     if claim_status != "claimed":
-        return _gcash_pending_page(ref, min(attempt + 1, _GCASH_MAX_PAGE_RETRIES))
+        return _gcash_pending_page(
+            ref, min(attempt + 1, _GCASH_MAX_PAGE_RETRIES), return_to_app=return_to_app,
+        )
 
     return _gcash_result_page(
-        True, f"Your GCash payment of PHP {float(checkout['final_amount_php']):,.2f} has been recorded."
+        True, f"Your GCash payment of PHP {float(checkout['final_amount_php']):,.2f} has been recorded.",
+        return_to_app=return_to_app, ref=ref,
     )
 
 
