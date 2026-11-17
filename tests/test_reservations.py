@@ -1,12 +1,48 @@
 """Reservation state and slot availability tests without a live database."""
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from pathlib import Path
 import time
 
 import pytest
 from fastapi import HTTPException
 
 import backend.main as m
+
+
+def test_weekly_and_monthly_bookings_require_a_valid_future_start_date():
+    today = datetime.now(m.PH_TZ).date()
+    assert m._normalize_reservation_start_date(today.isoformat(), "weekly") == today
+    assert m._normalize_reservation_start_date(
+        (today + timedelta(days=30)).isoformat(), "monthly"
+    ) == today + timedelta(days=30)
+    with pytest.raises(HTTPException) as missing:
+        m._normalize_reservation_start_date(None, "weekly")
+    assert missing.value.status_code == 400
+    with pytest.raises(HTTPException) as past:
+        m._normalize_reservation_start_date(
+            (today - timedelta(days=1)).isoformat(), "monthly"
+        )
+    assert past.value.status_code == 400
+
+
+def test_future_reservation_starts_at_philippine_midnight():
+    paid_at = datetime(2026, 11, 17, 18, 30, tzinfo=m.PH_TZ)
+    start = m._reservation_start_at(date(2026, 11, 20), paid_at)
+    assert start == datetime(2026, 11, 20, 0, 0, tzinfo=m.PH_TZ)
+    assert m._payment_expiry_at(start, "weekly") == datetime(
+        2026, 11, 27, 0, 0, tzinfo=m.PH_TZ
+    )
+
+
+def test_reservation_cancel_and_change_routes_are_exposed():
+    routes = {
+        (route.path, method)
+        for route in m.app.routes
+        for method in getattr(route, "methods", set())
+    }
+    assert ("/api/reservations/{reservation_id}/cancel", "POST") in routes
+    assert ("/api/reservations/{reservation_id}/slot", "PATCH") in routes
 
 
 def _camera(role, count, prefix, occupied=()):
@@ -348,6 +384,22 @@ def test_driver_with_active_reservation_cannot_hold_another_slot(monkeypatch):
     else:
         raise AssertionError("A driver with an active reservation was allowed another slot")
     assert connection.rollbacks == 1
+
+
+def test_change_slot_accepts_mobile_post_and_patch_methods():
+    matching = [
+        route
+        for route in m.app.routes
+        if getattr(route, "path", None) == "/api/reservations/{reservation_id}/slot"
+    ]
+    methods = set().union(*(getattr(route, "methods", set()) for route in matching))
+    assert {"POST", "PATCH"}.issubset(methods)
+
+
+def test_schema_enforces_one_active_reservation_per_account():
+    source = Path(m.__file__).read_text(encoding="utf-8")
+    assert "idx_reservations_current_user" in source
+    assert "pg_advisory_xact_lock" in source
 
 
 def test_driver_template_separates_reservation_and_actual_parking_payment():

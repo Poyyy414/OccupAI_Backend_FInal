@@ -16,7 +16,7 @@ import pandas as pd
 from pathlib import Path
 from collections import deque, defaultdict
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import date, datetime, time as datetime_time, timedelta
 from types import SimpleNamespace
 from typing import Optional
 from urllib.parse import quote, urlparse
@@ -1707,6 +1707,10 @@ def _ensure_reservation_table():
     execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reservations_current_user "
             "ON parking_reservations(user_id) "
             "WHERE status IN ('pending_payment', 'reserved', 'occupied')")
+    execute(
+        "ALTER TABLE parking_reservations "
+        "ADD COLUMN IF NOT EXISTS requested_start_date DATE"
+    )
 
 
 def _ensure_admin_settings_table():
@@ -3628,6 +3632,37 @@ def _payment_expiry_at(paid_at, duration_type):
     return starts_at + timedelta(days=1)
 
 
+def _normalize_reservation_start_date(value, duration_type):
+    """Validate an optional driver-selected reservation date."""
+    duration = _normalize_duration_type(duration_type, default="daily")
+    if value in (None, ""):
+        if duration in {"weekly", "monthly"}:
+            raise HTTPException(400, "Choose a start date for a weekly or monthly booking")
+        return datetime.now(PH_TZ).date()
+    try:
+        selected = date.fromisoformat(str(value).strip())
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, "start_date must use YYYY-MM-DD format") from exc
+    today = datetime.now(PH_TZ).date()
+    if selected < today:
+        raise HTTPException(400, "The reservation start date cannot be in the past")
+    if selected > today + timedelta(days=365):
+        raise HTTPException(400, "The reservation start date must be within one year")
+    return selected
+
+
+def _reservation_start_at(requested_start_date, paid_at):
+    """Use payment time for today, or Philippine midnight for a future date."""
+    paid = _coerce_datetime(paid_at)
+    if not requested_start_date or requested_start_date <= paid.date():
+        return paid
+    return datetime.combine(
+        requested_start_date,
+        datetime_time.min,
+        tzinfo=PH_TZ,
+    )
+
+
 def _reservation_slot_role(slot_id: str):
     for camera_id, config in CAMERA_ROLE_CONFIG.items():
         names = (f"{camera_id}:{config['prefix']}{index:02d}"
@@ -3742,6 +3777,10 @@ def _reservation_public(row):
         "created_at": row["created_at"].isoformat(),
         "starts_at": row["starts_at"].isoformat() if row.get("starts_at") else None,
         "expires_at": row["expires_at"].isoformat() if row.get("expires_at") else None,
+        "requested_start_date": (
+            row["requested_start_date"].isoformat()
+            if row.get("requested_start_date") else None
+        ),
         "dedicated_slot": dedicated,
         "reservation_type": "dedicated_slot" if dedicated else "single_session",
         "release_policy": "at_expiry" if dedicated else "on_departure_or_expiry",
@@ -3789,6 +3828,7 @@ def reservation_slots(_auth=Depends(require_user)):
     rows = query(
         "SELECT r.reservation_id, r.slot_id, r.vehicle_type, r.duration_type, r.status, "
         "r.payment_status, r.amount_php, r.created_at, r.starts_at, r.expires_at, "
+        "r.requested_start_date, "
         "u.email AS account_email "
         "FROM parking_reservations r JOIN users u ON u.user_id=r.user_id "
         "WHERE r.user_id=%s ORDER BY r.created_at DESC LIMIT 1",
@@ -3797,7 +3837,145 @@ def reservation_slots(_auth=Depends(require_user)):
     return {"slots": slots, "my_reservation": _reservation_public(rows[0]) if rows else None}
 
 
-def _hold_reservation(user_id, slot_id, duration_type, amount_php, checkout_ref):
+class ReservationSlotChangePayload(BaseModel):
+    slot_id: str
+
+
+@app.post("/api/reservations/{reservation_id}/cancel")
+def cancel_reservation(reservation_id: int, _auth=Depends(require_user)):
+    """Release the authenticated driver's reservation.
+
+    Cancelling a paid reservation does not imply a payment-provider refund;
+    that policy is stated explicitly in the response and the driver UI.
+    """
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT reservation_id, status, payment_status, slot_id "
+            "FROM parking_reservations WHERE reservation_id=%s AND user_id=%s "
+            "FOR UPDATE",
+            (reservation_id, int(_auth["user_id"])),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(404, "Reservation not found")
+        if row["status"] == "occupied":
+            raise HTTPException(409, "You cannot cancel while the vehicle is parked")
+        if row["status"] not in {"pending_payment", "reserved"}:
+            return {
+                "ok": True,
+                "reservation_id": reservation_id,
+                "status": row["status"],
+                "already_closed": True,
+            }
+        paid = row["payment_status"] == "paid"
+        cur.execute(
+            "UPDATE parking_reservations SET status='cancelled', completed_at=NOW() "
+            "WHERE reservation_id=%s",
+            (reservation_id,),
+        )
+        conn.commit()
+        _invalidate_reservation_cache()
+        _invalidate_driver_payment_plan_cache(int(_auth["user_id"]))
+        return {
+            "ok": True,
+            "reservation_id": reservation_id,
+            "slot_id": row["slot_id"],
+            "status": "cancelled",
+            "payment_status": row["payment_status"],
+            "refund_automatic": False,
+            "message": (
+                "Reservation cancelled and the space was released. "
+                "The GCash payment was not automatically refunded."
+                if paid else
+                "Reservation cancelled and the space was released."
+            ),
+        }
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+@app.post("/api/reservations/{reservation_id}/slot")
+@app.patch("/api/reservations/{reservation_id}/slot")
+def change_reservation_slot(
+    reservation_id: int,
+    payload: ReservationSlotChangePayload,
+    _auth=Depends(require_user),
+):
+    """Move a paid reservation to another currently available same-type slot."""
+    target_slot_id = str(payload.slot_id or "").strip()
+    _, target_vehicle_type = _reservation_slot_role(target_slot_id)
+    with state_lock:
+        _refresh_aggregated_state_locked()
+        target_detected = state["zones"].get(target_slot_id)
+    if target_detected is not False:
+        raise HTTPException(409, "The new space is occupied or its camera is offline")
+
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT reservation_id, slot_id, vehicle_type, status, payment_status "
+            "FROM parking_reservations WHERE reservation_id=%s AND user_id=%s "
+            "FOR UPDATE",
+            (reservation_id, int(_auth["user_id"])),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(404, "Reservation not found")
+        if row["status"] == "occupied":
+            raise HTTPException(409, "Move the vehicle out before changing its reserved space")
+        if row["status"] != "reserved" or row["payment_status"] != "paid":
+            raise HTTPException(409, "Only an active paid reservation can change spaces")
+        if row["vehicle_type"] != target_vehicle_type:
+            raise HTTPException(400, "The new space must match the reserved vehicle type")
+        if row["slot_id"] == target_slot_id:
+            return {"ok": True, "reservation_id": reservation_id, "slot_id": target_slot_id}
+        cur.execute(
+            "UPDATE parking_reservations SET slot_id=%s WHERE reservation_id=%s "
+            "RETURNING slot_id",
+            (target_slot_id, reservation_id),
+        )
+        updated = cur.fetchone()
+        conn.commit()
+        _invalidate_reservation_cache()
+        return {
+            "ok": True,
+            "reservation_id": reservation_id,
+            "previous_slot_id": row["slot_id"],
+            "slot_id": updated["slot_id"],
+            "message": "Reserved space changed successfully.",
+        }
+    except HTTPException:
+        conn.rollback()
+        raise
+    except psycopg2.errors.UniqueViolation as exc:
+        conn.rollback()
+        raise HTTPException(409, "Another driver already reserved that space") from exc
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def _hold_reservation(
+    user_id,
+    slot_id,
+    duration_type,
+    amount_php,
+    checkout_ref,
+    requested_start_date=None,
+):
     camera_id, vehicle_type = _reservation_slot_role(slot_id)
     _expire_reservations()
     with state_lock:
@@ -3821,10 +3999,12 @@ def _hold_reservation(user_id, slot_id, duration_type, amount_php, checkout_ref)
             raise HTTPException(409, "You already have an active reservation")
         cur.execute(
             "INSERT INTO parking_reservations "
-            "(user_id, slot_id, vehicle_type, duration_type, amount_php, checkout_ref, hold_expires_at) "
-            "VALUES (%s,%s,%s,%s,%s,%s,NOW() + INTERVAL '15 minutes') "
+            "(user_id, slot_id, vehicle_type, duration_type, amount_php, checkout_ref, "
+            "requested_start_date, hold_expires_at) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,NOW() + INTERVAL '15 minutes') "
             "RETURNING reservation_id",
-            (user_id, slot_id, vehicle_type, duration_type, amount_php, checkout_ref),
+            (user_id, slot_id, vehicle_type, duration_type, amount_php,
+             checkout_ref, requested_start_date),
         )
         reservation_id = int(cur.fetchone()["reservation_id"])
         conn.commit()
@@ -4778,6 +4958,7 @@ class GcashCheckoutPayload(BaseModel):
     slot_id: Optional[str] = None
     discount_verification_id: Optional[int] = None
     payment_purpose: str = "parking"
+    start_date: Optional[str] = None
 
 
 def _claim_discount_verification(user_id: int, discount_type: str, id_number: str,
@@ -4898,6 +5079,12 @@ def gcash_create_checkout(
         raise HTTPException(400, "Select an available parking slot before reservation payment")
     if payment_purpose == "parking" and slot_id:
         raise HTTPException(400, "Actual parking payment cannot include a reservation slot")
+    requested_start_date = None
+    if payment_purpose == "reservation":
+        requested_start_date = _normalize_reservation_start_date(
+            payload.start_date,
+            duration_type,
+        )
     mobile_number = _normalize_ph_mobile(payload.mobile_number)
     customer_rows = query(
         "SELECT full_name, email FROM users WHERE user_id=%s AND is_active=TRUE LIMIT 1",
@@ -4939,7 +5126,12 @@ def gcash_create_checkout(
             if slot_vehicle_type != vehicle_type:
                 raise HTTPException(400, "Selected slot does not match the vehicle type")
             reservation_id = _hold_reservation(
-                int(_auth["user_id"]), slot_id, duration_type, final_amount, ref
+                int(_auth["user_id"]),
+                slot_id,
+                duration_type,
+                final_amount,
+                ref,
+                requested_start_date,
             )
     except Exception:
         _release_discount_verification(discount_verification_id, ref)
@@ -5022,6 +5214,15 @@ def gcash_create_checkout(
         "reservation_id": reservation_id,
         "slot_id": slot_id or None,
         "payment_purpose": payment_purpose,
+        "start_date": requested_start_date.isoformat() if requested_start_date else None,
+        "booking_summary": {
+            "vehicle_type": vehicle_type,
+            "duration_type": duration_type,
+            "slot_id": slot_id or None,
+            "start_date": requested_start_date.isoformat() if requested_start_date else None,
+            "amount_php": final_amount,
+            "discount_type": discount_type,
+        },
     }
 
 
@@ -5187,7 +5388,10 @@ def _finalize_paid_reservation(checkout):
         if not payment:
             cur.execute("SELECT payment_id, paid_at FROM parking_payments WHERE external_reference=%s", (external_ref,))
             payment = cur.fetchone()
-        starts_at = _coerce_datetime(payment["paid_at"])
+        starts_at = _reservation_start_at(
+            reservation.get("requested_start_date"),
+            payment["paid_at"],
+        )
         expires_at = _payment_expiry_at(starts_at, reservation["duration_type"])
         cur.execute(
             "UPDATE parking_reservations SET status='reserved', payment_status='paid', "
