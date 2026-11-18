@@ -407,9 +407,6 @@ def test_gcash_checkout_requires_explicit_matching_payment_purpose(monkeypatch):
             mobile_number='09171234567', payment_purpose='reservation'
         ), 'Select an available parking slot'),
         (m.GcashCheckoutPayload(
-            mobile_number='09171234567', payment_purpose='parking', slot_id='cars:C01'
-        ), 'cannot include a reservation slot'),
-        (m.GcashCheckoutPayload(
             mobile_number='09171234567', payment_purpose='other'
         ), 'must be parking or reservation'),
     )
@@ -421,3 +418,18 @@ def test_gcash_checkout_requires_explicit_matching_payment_purpose(monkeypatch):
             assert expected in str(getattr(exc, 'detail', ''))
         else:
             raise AssertionError(f'{payload.payment_purpose!r} should have been rejected')
+
+
+def test_parking_checkout_rejects_unoccupied_or_unknown_slot(monkeypatch):
+    import pytest
+    monkeypatch.setattr(m, 'PAYMONGO_SECRET_KEY', 'sk_test_not_real')
+    monkeypatch.setattr(m, '_rate_limit', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(m, '_refresh_aggregated_state_locked', lambda: None)
+    monkeypatch.setitem(m.state, 'zones', {'cars:C01': False})
+    payload = m.GcashCheckoutPayload(
+        mobile_number='09171234567', payment_purpose='parking', slot_id='cars:C01'
+    )
+    with pytest.raises(m.HTTPException) as exc:
+        m.gcash_create_checkout(payload, SimpleNamespace(base_url='https://example.com/'),
+                                {'user_id': 7, 'role': 'driver'})
+    assert exc.value.status_code == 409

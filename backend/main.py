@@ -1632,6 +1632,8 @@ def _ensure_gcash_checkout_table():
         execute("ALTER TABLE gcash_checkouts ADD COLUMN IF NOT EXISTS reservation_id BIGINT")
         execute("ALTER TABLE gcash_checkouts ADD COLUMN IF NOT EXISTS discount_verification_id BIGINT")
         execute("ALTER TABLE gcash_checkouts ADD COLUMN IF NOT EXISTS payment_purpose TEXT NOT NULL DEFAULT 'parking'")
+        execute("ALTER TABLE gcash_checkouts ADD COLUMN IF NOT EXISTS parking_slot_id TEXT")
+        execute("ALTER TABLE parking_payments ADD COLUMN IF NOT EXISTS parking_slot_id TEXT")
     except Exception as e:
         print(f"[DB] gcash checkout table setup warning: {e}")
 
@@ -1721,6 +1723,17 @@ def _ensure_reservation_table():
         "ALTER TABLE parking_reservations "
         "ADD COLUMN IF NOT EXISTS requested_start_date DATE"
     )
+    execute("""
+        CREATE TABLE IF NOT EXISTS reservation_slot_changes (
+            change_id BIGSERIAL PRIMARY KEY,
+            reservation_id BIGINT NOT NULL REFERENCES parking_reservations(reservation_id),
+            previous_slot_id TEXT NOT NULL,
+            new_slot_id TEXT NOT NULL,
+            changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    execute("CREATE INDEX IF NOT EXISTS idx_reservation_slot_changes_history "
+            "ON reservation_slot_changes(reservation_id, changed_at DESC)")
 
 
 def _ensure_admin_settings_table():
@@ -3831,6 +3844,39 @@ def _reservation_slot_statuses(user_id=None):
     return result
 
 
+@app.get("/api/reservations/history")
+def reservation_history(_auth=Depends(require_user)):
+    """Return this driver's bookings and their recorded slot moves."""
+    rows = query(
+        "SELECT reservation_id, slot_id, vehicle_type, duration_type, status, "
+        "payment_status, amount_php, created_at, starts_at, expires_at, completed_at "
+        "FROM parking_reservations WHERE user_id=%s "
+        "ORDER BY created_at DESC LIMIT 100", (int(_auth['user_id']),),
+    )
+    changes = query(
+        "SELECT c.reservation_id, c.previous_slot_id, c.new_slot_id, c.changed_at "
+        "FROM reservation_slot_changes c JOIN parking_reservations r "
+        "ON r.reservation_id=c.reservation_id WHERE r.user_id=%s "
+        "ORDER BY c.changed_at DESC", (int(_auth['user_id']),),
+    )
+    grouped = {}
+    for change in changes:
+        grouped.setdefault(change['reservation_id'], []).append({
+            'previous_slot_id': change['previous_slot_id'],
+            'new_slot_id': change['new_slot_id'],
+            'changed_at': change['changed_at'].isoformat(),
+        })
+    records = []
+    for row in rows:
+        item = dict(row)
+        for key in ('created_at', 'starts_at', 'expires_at', 'completed_at'):
+            item[key] = item[key].isoformat() if item.get(key) else None
+        item['amount_php'] = float(item['amount_php'])
+        item['slot_changes'] = grouped.get(item['reservation_id'], [])
+        records.append(item)
+    return {'reservations': records}
+
+
 @app.get("/api/reservations/slots")
 def reservation_slots(_auth=Depends(require_user)):
     user_id = int(_auth["user_id"])
@@ -3862,7 +3908,8 @@ def cancel_reservation(reservation_id: int, _auth=Depends(require_user)):
     cur = conn.cursor()
     try:
         cur.execute(
-            "SELECT reservation_id, status, payment_status, slot_id "
+            "SELECT reservation_id, status, payment_status, slot_id, "
+            "(starts_at > NOW()) AS is_upcoming "
             "FROM parking_reservations WHERE reservation_id=%s AND user_id=%s "
             "FOR UPDATE",
             (reservation_id, int(_auth["user_id"])),
@@ -3879,6 +3926,8 @@ def cancel_reservation(reservation_id: int, _auth=Depends(require_user)):
                 "status": row["status"],
                 "already_closed": True,
             }
+        if row["status"] == "reserved" and not row.get("is_upcoming"):
+            raise HTTPException(409, "Only upcoming reservations can be cancelled")
         paid = row["payment_status"] == "paid"
         cur.execute(
             "UPDATE parking_reservations SET status='cancelled', completed_at=NOW() "
@@ -3933,7 +3982,8 @@ def change_reservation_slot(
     cur = conn.cursor()
     try:
         cur.execute(
-            "SELECT reservation_id, slot_id, vehicle_type, status, payment_status "
+            "SELECT reservation_id, slot_id, vehicle_type, status, payment_status, "
+            "(starts_at > NOW()) AS is_upcoming "
             "FROM parking_reservations WHERE reservation_id=%s AND user_id=%s "
             "FOR UPDATE",
             (reservation_id, int(_auth["user_id"])),
@@ -3945,6 +3995,8 @@ def change_reservation_slot(
             raise HTTPException(409, "Move the vehicle out before changing its reserved space")
         if row["status"] != "reserved" or row["payment_status"] != "paid":
             raise HTTPException(409, "Only an active paid reservation can change spaces")
+        if not row.get("is_upcoming"):
+            raise HTTPException(409, "Only upcoming reservations can change spaces")
         if row["vehicle_type"] != target_vehicle_type:
             raise HTTPException(400, "The new space must match the reserved vehicle type")
         if row["slot_id"] == target_slot_id:
@@ -3955,6 +4007,11 @@ def change_reservation_slot(
             (target_slot_id, reservation_id),
         )
         updated = cur.fetchone()
+        cur.execute(
+            "INSERT INTO reservation_slot_changes "
+            "(reservation_id, previous_slot_id, new_slot_id) VALUES (%s,%s,%s)",
+            (reservation_id, row["slot_id"], target_slot_id),
+        )
         conn.commit()
         _invalidate_reservation_cache()
         return {
@@ -4237,6 +4294,17 @@ def cancel_driver_payment_plan(payment_id: int, _auth=Depends(require_user)):
             }
         if row.get("reservation_status") == "occupied":
             raise HTTPException(409, "You cannot cancel a plan while the vehicle is parked")
+        if row.get("reservation_id"):
+            cur.execute(
+                "SELECT status, (starts_at > NOW()) AS is_upcoming "
+                "FROM parking_reservations WHERE reservation_id=%s AND user_id=%s FOR UPDATE",
+                (row['reservation_id'], user_id),
+            )
+            reservation = cur.fetchone()
+            if reservation and reservation['status'] == 'occupied':
+                raise HTTPException(409, "You cannot cancel a plan while the vehicle is parked")
+            if reservation and reservation['status'] == 'reserved' and not reservation.get('is_upcoming'):
+                raise HTTPException(409, "Only upcoming reservations can be cancelled")
 
         cur.execute(
             "UPDATE parking_payments SET cancelled_at=NOW(), "
@@ -4836,6 +4904,50 @@ def _public_discount_verification(row):
     }
 
 
+def _notify_admin_discount_submission(discount_type):
+    """Send a minimal alert; never include ID images or ID numbers in email."""
+    try:
+        admins = query("SELECT email FROM users WHERE role='admin' AND is_active=TRUE")
+        for admin in admins:
+            recipient = (admin.get('email') or '').strip()
+            if not recipient:
+                continue
+            subject = 'OccupAI: discount ID awaiting review'
+            body = (f'A driver submitted a {discount_type.upper()} ID for review. '
+                    'Sign in to the OccupAI admin dashboard to review it.')
+            if BREVO_API_KEY and BREVO_SENDER_EMAIL:
+                response = httpx.post(BREVO_API_URL, headers={
+                    'api-key': BREVO_API_KEY, 'content-type': 'application/json',
+                }, json={
+                    'sender': {'name': BREVO_SENDER_NAME, 'email': BREVO_SENDER_EMAIL},
+                    'to': [{'email': recipient}], 'subject': subject, 'textContent': body,
+                }, timeout=10.0)
+                if response.status_code == 201:
+                    continue
+                print(f'[discount notification] Email delivery failed: HTTP {response.status_code}')
+            if SMTP_HOST and SMTP_FROM:
+                message = EmailMessage()
+                message['Subject'], message['From'], message['To'] = subject, SMTP_FROM, recipient
+                message.set_content(body)
+                if SMTP_USE_TLS:
+                    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
+                        server.ehlo()
+                        server.starttls()
+                        server.ehlo()
+                        if SMTP_USER:
+                            server.login(SMTP_USER, SMTP_PASSWORD)
+                        server.send_message(message)
+                else:
+                    with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=10) as server:
+                        if SMTP_USER:
+                            server.login(SMTP_USER, SMTP_PASSWORD)
+                        server.send_message(message)
+            elif not (BREVO_API_KEY and BREVO_SENDER_EMAIL):
+                print('[discount notification] Email delivery is not configured')
+    except Exception as exc:
+        print(f'[discount notification] Could not send alert: {type(exc).__name__}')
+
+
 @app.post("/api/discount-verifications")
 def submit_discount_verification(payload: DiscountVerificationSubmitPayload, request: Request, _auth=Depends(require_user)):
     _rate_limit(request, "discount-verification-submit", max_calls=5, window_seconds=300)
@@ -4861,6 +4973,8 @@ def submit_discount_verification(payload: DiscountVerificationSubmitPayload, req
         )
         row = cur.fetchone()
         conn.commit()
+        threading.Thread(target=_notify_admin_discount_submission,
+                         args=(discount_type,), daemon=True).start()
         return _public_discount_verification(row)
     except Exception as exc:
         conn.rollback()
@@ -4984,6 +5098,7 @@ def api_driver_history(user_id: int, period: str = "all", limit: int = 50, _auth
                 final_amount_php,
                 payment_method,
                 notes,
+                parking_slot_id,
                 paid_at AT TIME ZONE 'Asia/Manila' AS paid_at_ph,
                 CASE LOWER(COALESCE(duration_type, 'daily'))
                     WHEN 'weekly' THEN paid_at + INTERVAL '7 days'
@@ -5011,7 +5126,7 @@ def api_driver_history(user_id: int, period: str = "all", limit: int = 50, _auth
                 "discount_amount_php": float(r["discount_amount_php"]),
                 "final_amount_php": float(r["final_amount_php"]),
                 "payment_method": r["payment_method"],
-                "slot_label": "--",
+                "slot_label": (r.get("parking_slot_id") or "--").split(":")[-1],
                 "duration_minutes": 0,
                 "notes": r["notes"] or "",
                 "paid_date": paid_at.strftime("%b %d, %Y") if paid_at else "--",
@@ -5172,7 +5287,14 @@ def gcash_create_checkout(
     if payment_purpose == "reservation" and not slot_id:
         raise HTTPException(400, "Select an available parking slot before reservation payment")
     if payment_purpose == "parking" and slot_id:
-        raise HTTPException(400, "Actual parking payment cannot include a reservation slot")
+        _, slot_vehicle_type = _reservation_slot_role(slot_id)
+        if slot_vehicle_type != vehicle_type:
+            raise HTTPException(400, "Selected slot does not match the vehicle type")
+        with state_lock:
+            _refresh_aggregated_state_locked()
+            occupied = state["zones"].get(slot_id)
+        if occupied is not True:
+            raise HTTPException(409, "The selected space is not currently detected as occupied, or its camera is offline")
     requested_start_date = None
     if payment_purpose == "reservation":
         requested_start_date = _normalize_reservation_start_date(
@@ -5233,10 +5355,10 @@ def gcash_create_checkout(
     try:
         execute(
             """
-            INSERT INTO gcash_checkouts (ref, user_id, vehicle_type, duration_type, regular_price_php, discount_type, final_amount_php, discount_id_number, customer_mobile, reservation_id, discount_verification_id, payment_purpose)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            INSERT INTO gcash_checkouts (ref, user_id, vehicle_type, duration_type, regular_price_php, discount_type, final_amount_php, discount_id_number, customer_mobile, reservation_id, discount_verification_id, payment_purpose, parking_slot_id)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             """,
-            (ref, int(_auth["user_id"]), vehicle_type, duration_type, regular_price, discount_type, final_amount, discount_id_number, mobile_number, reservation_id, discount_verification_id, payment_purpose),
+            (ref, int(_auth["user_id"]), vehicle_type, duration_type, regular_price, discount_type, final_amount, discount_id_number, mobile_number, reservation_id, discount_verification_id, payment_purpose, slot_id if payment_purpose == 'parking' else None),
         )
     except Exception:
         _release_unpaid_reservation(reservation_id)
@@ -5267,7 +5389,15 @@ def gcash_create_checkout(
                     if payload.return_to_app else
                     f"{base_url}/api/gcash/success?ref={ref}"
                 ),
-                "cancel_url": f"{base_url}/driver",
+                # A reservation is only a temporary payment hold until PayMongo
+                # confirms it.  Send a cancelled checkout back through our API so
+                # we can release that hold immediately instead of leaving a yellow
+                # slot until its 15-minute timeout.
+                "cancel_url": (
+                    f"{base_url}/api/gcash/cancel?ref={ref}&return_to_app=1"
+                    if payload.return_to_app else
+                    f"{base_url}/api/gcash/cancel?ref={ref}"
+                ),
                 "description": (payload.description or "OccupAI Parking Payment").strip()[:200],
             }
         }
@@ -5298,6 +5428,7 @@ def gcash_create_checkout(
     execute("UPDATE gcash_checkouts SET checkout_id=%s WHERE ref=%s", (checkout_id, ref))
 
     return {
+        "reference": ref,
         "checkout_url": checkout_url,
         "checkout_id": checkout_id,
         "amount_php": final_amount,
@@ -5575,6 +5706,9 @@ def _finalize_gcash_checkout(ref: str, allow_processing: bool = False):
             payment_payload,
             external_reference=f"paymongo:{checkout.get('checkout_id') or ref}",
         )
+        if checkout.get('parking_slot_id'):
+            execute("UPDATE parking_payments SET parking_slot_id=%s WHERE payment_id=%s",
+                    (checkout['parking_slot_id'], payment['payment_id']))
         execute(
             "UPDATE gcash_checkouts SET status='paid', error_message=NULL WHERE ref=%s",
             (ref,),
@@ -5589,6 +5723,89 @@ def _finalize_gcash_checkout(ref: str, allow_processing: bool = False):
             (str(exc)[:500], ref),
         )
         return checkout, "error", None
+
+
+def _cancel_pending_gcash_checkout(ref: str):
+    """Cancel an abandoned checkout and release its unpaid reservation hold.
+
+    Creating a PayMongo checkout happens before the provider can confirm a
+    payment.  The reservation row is therefore a short exclusive *hold*, not a
+    successful booking.  This function is intentionally idempotent: the
+    browser can follow the payment-provider cancel URL more than once without
+    changing a paid checkout.
+    """
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT * FROM gcash_checkouts WHERE ref=%s FOR UPDATE", (ref,))
+        checkout = cur.fetchone()
+        if not checkout:
+            conn.commit()
+            return None, "missing"
+
+        status = str(checkout.get("status") or "pending").lower()
+        if status == "pending":
+            cur.execute(
+                "UPDATE gcash_checkouts SET status='cancelled', "
+                "error_message='Checkout cancelled before payment confirmation' "
+                "WHERE ref=%s",
+                (ref,),
+            )
+            checkout["status"] = "cancelled"
+            conn.commit()
+            _release_unpaid_reservation(checkout.get("reservation_id"))
+            _release_discount_verification(
+                checkout.get("discount_verification_id"), ref,
+            )
+            _invalidate_driver_payment_plan_cache(int(checkout["user_id"]))
+            return checkout, "cancelled"
+
+        conn.commit()
+        return checkout, status
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+@app.get("/api/gcash/cancel")
+def gcash_cancel(
+    request: Request,
+    ref: str = Query(..., min_length=20, max_length=64),
+    return_to_app: bool = Query(False),
+):
+    """Handle PayMongo's cancellation return without treating it as paid."""
+    _rate_limit(request, "gcash-cancel", max_calls=60, window_seconds=60)
+    checkout, status = _cancel_pending_gcash_checkout(ref)
+    if checkout is None:
+        return _gcash_result_page(
+            False,
+            "We couldn't find this checkout session.",
+            return_to_app=return_to_app,
+            ref=ref,
+        )
+    if status == "cancelled":
+        return _gcash_result_page(
+            False,
+            "Payment was cancelled. No reservation was confirmed and the temporary slot hold was released.",
+            return_to_app=return_to_app,
+            ref=ref,
+        )
+    if status == "paid":
+        return _gcash_result_page(
+            True,
+            f"Your GCash payment of PHP {float(checkout['final_amount_php']):,.2f} has already been recorded.",
+            return_to_app=return_to_app,
+            ref=ref,
+        )
+    return _gcash_result_page(
+        False,
+        "This checkout is already being processed. Please wait for PayMongo's payment confirmation.",
+        return_to_app=return_to_app,
+        ref=ref,
+    )
 
 
 @app.get("/api/gcash/success")

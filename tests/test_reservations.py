@@ -410,3 +410,30 @@ def test_driver_template_separates_reservation_and_actual_parking_payment():
     assert "does not save a parking space" in driver
     assert "One week · same space" in driver
     assert "reservation.dedicated_slot" in driver
+def test_ongoing_paid_reservation_cannot_be_cancelled(monkeypatch):
+    class Cursor:
+        def execute(self, *_args):
+            pass
+
+        def fetchone(self):
+            return {'status': 'reserved', 'payment_status': 'paid',
+                    'reservation_id': 1, 'slot_id': 'cars:C01', 'is_upcoming': False}
+
+        def close(self):
+            pass
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(m, 'get_db', lambda: Connection())
+    with pytest.raises(m.HTTPException) as exc:
+        m.cancel_reservation(1, {'user_id': 7})
+    assert exc.value.status_code == 409
+    assert 'upcoming' in exc.value.detail
