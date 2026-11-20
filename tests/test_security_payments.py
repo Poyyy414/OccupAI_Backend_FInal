@@ -4,6 +4,7 @@ import hmac
 import json
 import time
 import urllib.request
+import pytest
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
@@ -433,3 +434,16 @@ def test_parking_checkout_rejects_unoccupied_or_unknown_slot(monkeypatch):
         m.gcash_create_checkout(payload, SimpleNamespace(base_url='https://example.com/'),
                                 {'user_id': 7, 'role': 'driver'})
     assert exc.value.status_code == 409
+def test_checkout_rate_limit_can_separate_users_on_same_network(monkeypatch):
+    from starlette.requests import Request
+    monkeypatch.delenv('DATABASE_URL', raising=False)
+    monkeypatch.setattr(m, '_rate_limit_buckets', {})
+    request = Request({'type': 'http', 'method': 'POST', 'path': '/',
+                       'headers': [], 'client': ('127.0.0.1', 1234),
+                       'server': ('localhost', 80), 'scheme': 'http',
+                       'query_string': b''})
+    m._rate_limit(request, 'gcash-checkout', 1, 60, client_key='user:1')
+    m._rate_limit(request, 'gcash-checkout', 1, 60, client_key='user:2')
+    with pytest.raises(m.HTTPException) as exc:
+        m._rate_limit(request, 'gcash-checkout', 1, 60, client_key='user:1')
+    assert exc.value.status_code == 429

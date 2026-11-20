@@ -404,7 +404,9 @@ def _audit_auth_event(request: Request, event_type: str, email: str = "", user_i
         print(f"[auth] audit log write failed: {exc}")
 
 
-def _rate_limit(request: Request, bucket_name: str, max_calls: int, window_seconds: int):
+def _rate_limit(request: Request, bucket_name: str, max_calls: int, window_seconds: int,
+                client_key: Optional[str] = None):
+    key_value = client_key or _client_key(request)
     if os.getenv("DATABASE_URL"):
         conn = get_db()
         cur = conn.cursor()
@@ -424,7 +426,7 @@ def _rate_limit(request: Request, bucket_name: str, max_calls: int, window_secon
                     updated_at = NOW()
                 RETURNING call_count
                 """,
-                (bucket_name, _client_key(request), window_seconds, window_seconds),
+                (bucket_name, key_value, window_seconds, window_seconds),
             )
             count = int(cur.fetchone()["call_count"])
             conn.commit()
@@ -439,7 +441,7 @@ def _rate_limit(request: Request, bucket_name: str, max_calls: int, window_secon
             raise HTTPException(429, "Too many requests. Please slow down and try again shortly.")
         return
 
-    key = (bucket_name, _client_key(request))
+    key = (bucket_name, key_value)
     now = time.time()
     cutoff = now - window_seconds
     with _rate_limit_lock:
@@ -1690,7 +1692,7 @@ def _ensure_reservation_table():
             vehicle_type TEXT NOT NULL CHECK (vehicle_type IN ('car', 'motorcycle')),
             duration_type TEXT NOT NULL CHECK (duration_type IN ('daily', 'weekly', 'monthly')),
             status TEXT NOT NULL DEFAULT 'pending_payment'
-                CHECK (status IN ('pending_payment', 'reserved', 'occupied', 'completed', 'expired', 'cancelled')),
+                CHECK (status IN ('pending_payment', 'reserved', 'occupied', 'completed', 'expired', 'cancelled', 'no_show')),
             payment_status TEXT NOT NULL DEFAULT 'unpaid'
                 CHECK (payment_status IN ('unpaid', 'paid')),
             checkout_ref TEXT NOT NULL UNIQUE,
@@ -1705,6 +1707,9 @@ def _ensure_reservation_table():
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
     """)
+    execute("ALTER TABLE parking_reservations DROP CONSTRAINT IF EXISTS parking_reservations_status_check; "
+            "ALTER TABLE parking_reservations ADD CONSTRAINT parking_reservations_status_check "
+            "CHECK (status IN ('pending_payment', 'reserved', 'occupied', 'completed', 'expired', 'cancelled', 'no_show'))")
     execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reservations_current_slot "
             "ON parking_reservations(slot_id) "
             "WHERE status IN ('pending_payment', 'reserved', 'occupied')")
@@ -1716,9 +1721,9 @@ def _ensure_reservation_table():
     execute("CREATE INDEX IF NOT EXISTS idx_reservations_hold_expiry "
             "ON parking_reservations(hold_expires_at) "
             "WHERE status='pending_payment'")
-    execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reservations_current_user "
-            "ON parking_reservations(user_id) "
-            "WHERE status IN ('pending_payment', 'reserved', 'occupied')")
+    # Each booking is for one slot, but a driver may hold several bookings.
+    # The separate current-slot index continues to prevent double booking.
+    execute("DROP INDEX IF EXISTS idx_reservations_current_user")
     execute(
         "ALTER TABLE parking_reservations "
         "ADD COLUMN IF NOT EXISTS requested_start_date DATE"
@@ -1734,6 +1739,27 @@ def _ensure_reservation_table():
     """)
     execute("CREATE INDEX IF NOT EXISTS idx_reservation_slot_changes_history "
             "ON reservation_slot_changes(reservation_id, changed_at DESC)")
+    execute("""CREATE TABLE IF NOT EXISTS reservation_refund_requests (
+        request_id BIGSERIAL PRIMARY KEY,
+        reservation_id BIGINT NOT NULL UNIQUE REFERENCES parking_reservations(reservation_id),
+        user_id BIGINT NOT NULL REFERENCES users(user_id),
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'reviewed')),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        reviewed_at TIMESTAMPTZ,
+        reviewed_by_user_id BIGINT REFERENCES users(user_id)
+    )""")
+    execute("CREATE INDEX IF NOT EXISTS idx_refund_requests_status_created "
+            "ON reservation_refund_requests(status, created_at DESC)")
+    execute("""CREATE TABLE IF NOT EXISTS driver_feedback (
+        feedback_id BIGSERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL REFERENCES users(user_id),
+        reservation_id BIGINT REFERENCES parking_reservations(reservation_id),
+        rating INTEGER CHECK (rating BETWEEN 1 AND 5),
+        message TEXT NOT NULL CHECK (char_length(message) BETWEEN 1 AND 2000),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )""")
+    execute("CREATE INDEX IF NOT EXISTS idx_driver_feedback_recent ON driver_feedback(created_at DESC)")
+    execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_driver_feedback_one_review ON driver_feedback(user_id,reservation_id) WHERE reservation_id IS NOT NULL")
 
 
 def _ensure_admin_settings_table():
@@ -3698,6 +3724,7 @@ def _reservation_slot_role(slot_id: str):
 RESERVATION_CLAIMS_CACHE_TTL_SECONDS = max(
     0.25, float(os.getenv("RESERVATION_CLAIMS_CACHE_TTL_SECONDS", "1.0"))
 )
+ARRIVAL_GRACE_MINUTES = max(1, int(os.getenv('ARRIVAL_GRACE_MINUTES', '30')))
 RESERVATION_EXPIRY_CHECK_SECONDS = max(
     1.0, float(os.getenv("RESERVATION_EXPIRY_CHECK_SECONDS", "5.0"))
 )
@@ -3804,6 +3831,7 @@ def _reservation_public(row):
             row["requested_start_date"].isoformat()
             if row.get("requested_start_date") else None
         ),
+        "arrival_grace_minutes": ARRIVAL_GRACE_MINUTES if row.get('duration_type') == 'daily' else None,
         "dedicated_slot": dedicated,
         "reservation_type": "dedicated_slot" if dedicated else "single_session",
         "release_policy": "at_expiry" if dedicated else "on_departure_or_expiry",
@@ -3844,12 +3872,46 @@ def _reservation_slot_statuses(user_id=None):
     return result
 
 
+class DriverFeedbackPayload(BaseModel):
+    message: str
+    reservation_id: Optional[int] = None
+    rating: Optional[int] = None
+
+
+@app.post('/api/driver/feedback')
+def submit_driver_feedback(payload: DriverFeedbackPayload, request: Request, _auth=Depends(require_user)):
+    _rate_limit(request, 'driver-feedback', max_calls=10, window_seconds=3600)
+    message = payload.message.strip()
+    if not message or len(message) > 2000:
+        raise HTTPException(400, 'Feedback must contain 1 to 2000 characters')
+    if payload.reservation_id is not None:
+        if payload.rating is None or not 1 <= payload.rating <= 5:
+            raise HTTPException(400, 'Choose a rating from 1 to 5')
+        rows = query("SELECT reservation_id FROM parking_reservations WHERE reservation_id=%s AND user_id=%s AND payment_status='paid' AND status IN ('completed','expired')", (payload.reservation_id, int(_auth['user_id'])))
+        if not rows:
+            raise HTTPException(403, 'Only your completed paid bookings can be reviewed')
+    elif payload.rating is not None:
+        raise HTTPException(400, 'Ratings are only for booking reviews')
+    try:
+        execute('INSERT INTO driver_feedback (user_id,reservation_id,rating,message) VALUES (%s,%s,%s,%s)',
+                (int(_auth['user_id']), payload.reservation_id, payload.rating, message))
+    except psycopg2.errors.UniqueViolation as exc:
+        raise HTTPException(409, 'You already reviewed this booking') from exc
+    return {'ok': True}
+
+
+@app.get('/api/admin/driver-feedback')
+def admin_driver_feedback(_admin=Depends(require_admin)):
+    rows = query('SELECT f.feedback_id,f.reservation_id,f.rating,f.message,f.created_at,u.full_name,r.slot_id FROM driver_feedback f JOIN users u ON u.user_id=f.user_id LEFT JOIN parking_reservations r ON r.reservation_id=f.reservation_id ORDER BY f.created_at DESC LIMIT 100')
+    return {'feedback': [{**dict(row), 'created_at': row['created_at'].isoformat()} for row in rows]}
+
+
 @app.get("/api/reservations/history")
 def reservation_history(_auth=Depends(require_user)):
     """Return this driver's bookings and their recorded slot moves."""
     rows = query(
         "SELECT reservation_id, slot_id, vehicle_type, duration_type, status, "
-        "payment_status, amount_php, created_at, starts_at, expires_at, completed_at "
+        "payment_status, payment_id, amount_php, created_at, starts_at, expires_at, completed_at "
         "FROM parking_reservations WHERE user_id=%s "
         "ORDER BY created_at DESC LIMIT 100", (int(_auth['user_id']),),
     )
@@ -3887,10 +3949,21 @@ def reservation_slots(_auth=Depends(require_user)):
         "r.requested_start_date, "
         "u.email AS account_email "
         "FROM parking_reservations r JOIN users u ON u.user_id=r.user_id "
-        "WHERE r.user_id=%s ORDER BY r.created_at DESC LIMIT 1",
+        "WHERE r.user_id=%s ORDER BY "
+        "CASE WHEN r.status IN ('pending_payment', 'reserved', 'occupied') THEN 0 ELSE 1 END, "
+        "r.created_at DESC LIMIT 1",
         (user_id,),
     )
-    return {"slots": slots, "my_reservation": _reservation_public(rows[0]) if rows else None}
+    active = query(
+        "SELECT r.reservation_id, r.slot_id, r.vehicle_type, r.duration_type, r.status, "
+        "r.payment_status, r.amount_php, r.created_at, r.starts_at, r.expires_at, "
+        "r.requested_start_date, u.email AS account_email "
+        "FROM parking_reservations r JOIN users u ON u.user_id=r.user_id "
+        "WHERE r.user_id=%s AND r.status IN ('pending_payment', 'reserved', 'occupied') "
+        "ORDER BY r.created_at DESC", (user_id,),
+    )
+    return {"slots": slots, "my_reservation": _reservation_public(rows[0]) if rows else None,
+            "my_reservations": [_reservation_public(row) for row in active]}
 
 
 class ReservationSlotChangePayload(BaseModel):
@@ -3934,6 +4007,12 @@ def cancel_reservation(reservation_id: int, _auth=Depends(require_user)):
             "WHERE reservation_id=%s",
             (reservation_id,),
         )
+        if paid:
+            cur.execute(
+                "INSERT INTO reservation_refund_requests (reservation_id, user_id) "
+                "VALUES (%s, %s) ON CONFLICT (reservation_id) DO NOTHING",
+                (reservation_id, int(_auth['user_id'])),
+            )
         conn.commit()
         _invalidate_reservation_cache()
         _invalidate_driver_payment_plan_cache(int(_auth["user_id"]))
@@ -3944,9 +4023,10 @@ def cancel_reservation(reservation_id: int, _auth=Depends(require_user)):
             "status": "cancelled",
             "payment_status": row["payment_status"],
             "refund_automatic": False,
+            "refund_request_status": "pending" if paid else None,
             "message": (
                 "Reservation cancelled and the space was released. "
-                "The GCash payment was not automatically refunded."
+                "A refund request was sent for admin review; no refund has been issued automatically."
                 if paid else
                 "Reservation cancelled and the space was released."
             ),
@@ -3960,6 +4040,33 @@ def cancel_reservation(reservation_id: int, _auth=Depends(require_user)):
     finally:
         cur.close()
         conn.close()
+
+
+@app.get('/api/admin/refund-requests')
+def admin_refund_requests(_admin=Depends(require_admin)):
+    rows = query(
+        "SELECT f.request_id, f.reservation_id, f.status, f.created_at, "
+        "f.reviewed_at, u.full_name, u.email, r.slot_id, r.amount_php, r.payment_id "
+        "FROM reservation_refund_requests f JOIN users u ON u.user_id=f.user_id "
+        "JOIN parking_reservations r ON r.reservation_id=f.reservation_id "
+        "ORDER BY CASE WHEN f.status='pending' THEN 0 ELSE 1 END, f.created_at DESC LIMIT 100"
+    )
+    return {'requests': [{**dict(row), 'amount_php': float(row['amount_php']),
+                          'created_at': row['created_at'].isoformat(),
+                          'reviewed_at': row['reviewed_at'].isoformat() if row['reviewed_at'] else None}
+                         for row in rows]}
+
+
+@app.post('/api/admin/refund-requests/{request_id}/review')
+def admin_review_refund_request(request_id: int, _admin=Depends(require_admin)):
+    affected = execute(
+        "UPDATE reservation_refund_requests SET status='reviewed', reviewed_at=NOW(), "
+        "reviewed_by_user_id=%s WHERE request_id=%s AND status='pending'",
+        (int(_admin['user_id']), request_id),
+    )
+    if not affected:
+        raise HTTPException(404, 'Pending refund request not found')
+    return {'ok': True, 'message': 'Marked reviewed. No refund was issued.'}
 
 
 @app.post("/api/reservations/{reservation_id}/slot")
@@ -4053,17 +4160,6 @@ def _hold_reservation(
     conn = get_db()
     cur = conn.cursor()
     try:
-        # Serialize reservation attempts for this driver, including concurrent
-        # requests for different slots where a simple slot lock is insufficient.
-        cur.execute("SELECT pg_advisory_xact_lock(%s, %s)", (894211, int(user_id)))
-        cur.execute(
-            "SELECT reservation_id FROM parking_reservations "
-            "WHERE user_id=%s AND status IN ('pending_payment', 'reserved', 'occupied') "
-            "LIMIT 1 FOR UPDATE",
-            (user_id,),
-        )
-        if cur.fetchone():
-            raise HTTPException(409, "You already have an active reservation")
         cur.execute(
             "INSERT INTO parking_reservations "
             "(user_id, slot_id, vehicle_type, duration_type, amount_php, checkout_ref, "
@@ -4082,9 +4178,6 @@ def _hold_reservation(
         raise
     except psycopg2.errors.UniqueViolation as exc:
         conn.rollback()
-        constraint = getattr(getattr(exc, "diag", None), "constraint_name", "")
-        if constraint == "idx_reservations_current_user":
-            raise HTTPException(409, "You already have an active reservation") from exc
         raise HTTPException(409, "Another driver is already paying for or using this slot") from exc
     except Exception:
         conn.rollback()
@@ -4127,10 +4220,23 @@ def _update_reservation_arrival(camera_id, zones):
                 "UPDATE parking_reservations SET status='occupied', "
                 "occupied_at=COALESCE(occupied_at,NOW()), vacant_since=NULL "
                 "WHERE slot_id=%s AND status IN ('reserved','occupied') "
-                "AND expires_at>NOW() AND (status='reserved' OR vacant_since IS NOT NULL)",
+                "AND starts_at<=NOW() AND expires_at>NOW() AND (status='reserved' OR vacant_since IS NOT NULL)",
                 (slot_id,),
             )
         elif occupied is False:
+            # Only an online camera's fresh vacant report may release a daily
+            # reservation. Never infer no-show from an offline/stale camera.
+            affected = execute(
+                "UPDATE parking_reservations SET status='no_show', completed_at=NOW() "
+                "WHERE slot_id=%s AND duration_type='daily' AND status='reserved' "
+                "AND payment_status='paid' AND occupied_at IS NULL "
+                "AND starts_at IS NOT NULL AND starts_at + (%s * INTERVAL '1 minute') <= NOW() "
+                "AND expires_at>NOW()",
+                (slot_id, ARRIVAL_GRACE_MINUTES),
+            )
+            if affected:
+                _invalidate_reservation_cache()
+                continue
             if _is_dedicated_reservation(relevant[slot_id]):
                 affected = execute(
                     "UPDATE parking_reservations SET "
@@ -4772,25 +4878,33 @@ def api_revenue_export(
 
 
 @app.get("/api/payments/recent")
-def api_payments_recent(limit: int = 10, offset: int = 0, _admin=Depends(require_admin)):
+def api_payments_recent(limit: int = 10, offset: int = 0, search: str = "", _admin=Depends(require_admin)):
     safe_limit = max(1, min(int(limit), 100))
     safe_offset = max(0, int(offset))
+    # Escape LIKE metacharacters so a search is treated as literal text.
+    term = search.strip()[:100].replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+    pattern = f"%{term}%"
 
     rows = query(
         """
-        WITH total AS (
-            SELECT COUNT(*) AS total FROM parking_payments
+        WITH matching AS (
+            SELECT p.*, u.full_name AS customer_name, u.email AS customer_email
+            FROM parking_payments p LEFT JOIN users u ON u.user_id=p.user_id
+            WHERE (%s = '' OR u.full_name ILIKE %s OR u.email ILIKE %s)
+        ), total AS (
+            SELECT COUNT(*) AS total FROM matching
         ), page AS (
             SELECT payment_id, vehicle_type, duration_type, regular_price_php,
                    discount_type, discount_amount_php, final_amount_php,
-                   payment_method, paid_at, discount_id_number, verified_by_user_id
-            FROM parking_payments
-            ORDER BY paid_at DESC
+                   payment_method, paid_at, discount_id_number, verified_by_user_id,
+                   user_id, customer_name, customer_email, external_reference
+            FROM matching
+            ORDER BY paid_at DESC, payment_id DESC
             LIMIT %s OFFSET %s
         )
         SELECT total.total, page.* FROM total LEFT JOIN page ON TRUE
         """,
-        (safe_limit, safe_offset),
+        (term, pattern, pattern, safe_limit, safe_offset),
     )
     total = _row_int(rows[0], "total") if rows else 0
     items = []
@@ -4800,6 +4914,10 @@ def api_payments_recent(limit: int = 10, offset: int = 0, _admin=Depends(require
         paid_at = _coerce_datetime(row.get("paid_at"))
         items.append({
             "payment_id": row.get("payment_id"),
+            "user_id": row.get("user_id"),
+            "customer_name": row.get("customer_name"),
+            "customer_email": row.get("customer_email"),
+            "external_reference": row.get("external_reference"),
             "vehicle_type": row.get("vehicle_type") or "car",
             "duration_type": row.get("duration_type") or "daily",
             "regular_price_php": _row_float(row, "regular_price_php"),
@@ -5274,7 +5392,8 @@ def gcash_create_checkout(
     request: Request,
     _auth=Depends(require_user),
 ):
-    _rate_limit(request, "gcash-checkout", max_calls=10, window_seconds=60)
+    _rate_limit(request, "gcash-checkout", max_calls=10, window_seconds=60,
+                client_key=f"user:{int(_auth['user_id'])}")
     if not PAYMONGO_SECRET_KEY:
         raise HTTPException(503, "PayMongo is not configured. Set PAYMONGO_SECRET_KEY in .env")
 

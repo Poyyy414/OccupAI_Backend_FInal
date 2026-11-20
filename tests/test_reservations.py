@@ -265,6 +265,31 @@ def test_dedicated_slot_returns_to_reserved_after_departure(monkeypatch):
     assert not any("THEN 'completed'" in sql for sql, _ in statements)
 
 
+def test_no_show_requires_fresh_vacant_camera_report(monkeypatch):
+    statements = []
+    monkeypatch.setattr(m, '_active_reservation_claims', lambda: [
+        {'slot_id': 'cars:C01', 'status': 'reserved', 'duration_type': 'daily'},
+    ])
+    monkeypatch.setattr(m, 'execute', lambda sql, params=None: statements.append((sql, params)) or 0)
+    m._update_reservation_arrival('cars', {'C01': None})
+    assert not statements
+    m._update_reservation_arrival('cars', {'C01': False})
+    no_show = next((sql, params) for sql, params in statements if "status='no_show'" in sql)
+    assert "duration_type='daily'" in no_show[0]
+    assert "occupied_at IS NULL" in no_show[0]
+    assert no_show[1] == ('cars:C01', m.ARRIVAL_GRACE_MINUTES)
+
+
+def test_arrival_is_not_recorded_before_booking_start(monkeypatch):
+    statements = []
+    monkeypatch.setattr(m, '_active_reservation_claims', lambda: [
+        {'slot_id': 'cars:C01', 'status': 'reserved', 'duration_type': 'daily'},
+    ])
+    monkeypatch.setattr(m, 'execute', lambda sql, params=None: statements.append(sql) or 0)
+    m._update_reservation_arrival('cars', {'C01': True})
+    assert any('starts_at<=NOW()' in sql for sql in statements)
+
+
 def test_paid_empty_reservations_count_as_committed_capacity(monkeypatch):
     original = dict(m.state)
     try:
@@ -337,7 +362,7 @@ def test_reservation_templates_have_three_slot_colors():
     assert "slotById[name]?.dedicated_slot" in admin
 
 
-def test_driver_with_active_reservation_cannot_hold_another_slot(monkeypatch):
+def test_driver_can_hold_another_slot(monkeypatch):
     class Cursor:
         def __init__(self):
             self.last_sql = ""
@@ -346,7 +371,7 @@ def test_driver_with_active_reservation_cannot_hold_another_slot(monkeypatch):
             self.last_sql = " ".join(sql.split())
 
         def fetchone(self):
-            if "FROM parking_reservations" in self.last_sql:
+            if "INSERT INTO parking_reservations" in self.last_sql:
                 return {"reservation_id": 77}
             return None
 
@@ -357,6 +382,7 @@ def test_driver_with_active_reservation_cannot_hold_another_slot(monkeypatch):
         def __init__(self):
             self.cur = Cursor()
             self.rollbacks = 0
+            self.commits = 0
 
         def cursor(self):
             return self.cur
@@ -365,7 +391,7 @@ def test_driver_with_active_reservation_cannot_hold_another_slot(monkeypatch):
             self.rollbacks += 1
 
         def commit(self):
-            raise AssertionError("A second reservation must not be committed")
+            self.commits += 1
 
         def close(self):
             pass
@@ -376,14 +402,9 @@ def test_driver_with_active_reservation_cannot_hold_another_slot(monkeypatch):
     monkeypatch.setattr(m, "_refresh_aggregated_state_locked", lambda: None)
     monkeypatch.setitem(m.state["zones"], "cars:C02", False)
 
-    try:
-        m._hold_reservation(7, "cars:C02", "daily", 50, "second-checkout")
-    except Exception as exc:
-        assert getattr(exc, "status_code", None) == 409
-        assert "active reservation" in str(getattr(exc, "detail", ""))
-    else:
-        raise AssertionError("A driver with an active reservation was allowed another slot")
-    assert connection.rollbacks == 1
+    assert m._hold_reservation(7, "cars:C02", "daily", 50, "second-checkout") == 77
+    assert connection.commits == 1
+    assert connection.rollbacks == 0
 
 
 def test_change_slot_accepts_mobile_post_and_patch_methods():
@@ -396,10 +417,26 @@ def test_change_slot_accepts_mobile_post_and_patch_methods():
     assert {"POST", "PATCH"}.issubset(methods)
 
 
-def test_schema_enforces_one_active_reservation_per_account():
+def test_schema_enforces_one_active_booking_per_slot_not_account():
     source = Path(m.__file__).read_text(encoding="utf-8")
-    assert "idx_reservations_current_user" in source
-    assert "pg_advisory_xact_lock" in source
+    assert "DROP INDEX IF EXISTS idx_reservations_current_user" in source
+    assert "CREATE UNIQUE INDEX IF NOT EXISTS idx_reservations_current_slot" in source
+
+
+def test_admin_payment_search_uses_parameterized_driver_filter(monkeypatch):
+    captured = {}
+
+    def fake_query(sql, params):
+        captured['sql'] = sql
+        captured['params'] = params
+        return [{'total': 0, 'payment_id': None}]
+
+    monkeypatch.setattr(m, 'query', fake_query)
+    result = m.api_payments_recent(search='driver@example.com', _admin={})
+    assert result['items'] == []
+    assert captured['params'][1] == '%driver@example.com%'
+    assert 'LEFT JOIN users' in captured['sql']
+    assert 'driver@example.com' not in captured['sql']
 
 
 def test_driver_template_separates_reservation_and_actual_parking_payment():
@@ -437,3 +474,45 @@ def test_ongoing_paid_reservation_cannot_be_cancelled(monkeypatch):
         m.cancel_reservation(1, {'user_id': 7})
     assert exc.value.status_code == 409
     assert 'upcoming' in exc.value.detail
+
+
+def test_paid_cancellation_records_refund_request_in_same_transaction(monkeypatch):
+    class Cursor:
+        def __init__(self):
+            self.statements = []
+        def execute(self, sql, params=None):
+            self.statements.append((sql, params))
+        def fetchone(self):
+            return {'status': 'reserved', 'payment_status': 'paid', 'reservation_id': 1,
+                    'slot_id': 'cars:C01', 'is_upcoming': True}
+        def close(self):
+            pass
+    class Connection:
+        def __init__(self):
+            self.cur = Cursor()
+            self.committed = False
+        def cursor(self):
+            return self.cur
+        def commit(self):
+            self.committed = True
+        def rollback(self):
+            pass
+        def close(self):
+            pass
+    connection = Connection()
+    monkeypatch.setattr(m, 'get_db', lambda: connection)
+    monkeypatch.setattr(m, '_invalidate_reservation_cache', lambda: None)
+    monkeypatch.setattr(m, '_invalidate_driver_payment_plan_cache', lambda _: None)
+    result = m.cancel_reservation(1, {'user_id': 7})
+    assert result['refund_request_status'] == 'pending'
+    assert result['refund_automatic'] is False
+    assert connection.committed
+    assert any('INSERT INTO reservation_refund_requests' in sql for sql, _ in connection.cur.statements)
+
+
+def test_refund_review_does_not_issue_payment(monkeypatch):
+    calls = []
+    monkeypatch.setattr(m, 'execute', lambda sql, params: calls.append((sql, params)) or 1)
+    result = m.admin_review_refund_request(3, {'user_id': 8})
+    assert 'No refund was issued' in result['message']
+    assert calls[0][1] == (8, 3)

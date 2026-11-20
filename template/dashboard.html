@@ -2736,6 +2736,9 @@
       <div class="discount-review-grid" id="discountVerificationReviewList">
         <div class="report-empty">Loading pending ID submissions...</div>
       </div>
+      <h3>Driver reviews and feedback</h3>
+      <button class="ghost-btn" type="button" onclick="fetchDriverFeedback()">Refresh feedback</button>
+      <div class="discount-review-grid" id="driverFeedbackList"><div class="report-empty">Select refresh to load feedback.</div></div>
     </section>
 
     <section class="panel-card" style="margin-bottom:16px">
@@ -2802,11 +2805,13 @@
         <span class="panel-title">Payment History</span>
         <span class="status-chip" id="txLogsRangeLabel">--</span>
       </div>
+      <label for="txLogsSearch">Find a driver by name or email</label>
+      <input class="payment-input" id="txLogsSearch" type="search" maxlength="100" placeholder="Name or email" oninput="searchTransactionLogs()" />
       <div class="report-table-wrap">
         <table class="report-table">
-          <thead><tr><th>Date / Time</th><th>Vehicle</th><th>Amount</th><th>Payment</th><th>Discount</th></tr></thead>
+          <thead><tr><th>Date / Time</th><th>Driver</th><th>Vehicle</th><th>Amount</th><th>Payment</th><th>Discount</th></tr></thead>
           <tbody id="transactionLogsBody">
-            <tr><td colspan="5" class="report-empty">No payments recorded yet.</td></tr>
+            <tr><td colspan="6" class="report-empty">No payments recorded yet.</td></tr>
           </tbody>
         </table>
       </div>
@@ -2814,6 +2819,12 @@
         <button class="ghost-btn" id="txLogsPrevBtn" onclick="txLogsPrevPage()" disabled>&larr; Prev</button>
         <button class="ghost-btn" id="txLogsNextBtn" onclick="txLogsNextPage()" disabled>Next &rarr;</button>
       </div>
+    </section>
+    <section class="panel-card">
+      <div class="panel-header"><span class="panel-title">Refund requests</span>
+        <button class="ghost-btn" type="button" onclick="fetchRefundRequests()">Refresh</button></div>
+      <p>Paid cancellations are sent for review. Marking a request reviewed does not issue a refund.</p>
+      <div id="refundRequestsList" class="discount-review-grid"><div class="report-empty">Loading requests…</div></div>
     </section>
   </section>
 
@@ -4132,7 +4143,7 @@ function _loadPanelData(name, force = false) {
   if (name === 'overview') {
     requests = [fetchStats, fetchHistory, fetchPredictions, fetchRevenueDashboard, fetchInsights, fetchGcashIssues];
   } else if (name === 'revenue') {
-    requests = [fetchRevenueDashboard, fetchTransactionLogs, fetchDiscountVerifications];
+    requests = [fetchRevenueDashboard, fetchTransactionLogs, fetchDiscountVerifications, fetchRefundRequests];
   } else if (name === 'insights') {
     requests = [fetchInsights, fetchMlConfidence];
   } else if (name === 'predictions') {
@@ -5069,11 +5080,18 @@ function toggleGcashAlertDetails() {
 let txLogsOffset = 0;
 const txLogsLimit = 10;
 let txLogsTotal = 0;
+let txLogsSearchTimer;
+
+function searchTransactionLogs() {
+  clearTimeout(txLogsSearchTimer);
+  txLogsSearchTimer = setTimeout(() => { txLogsOffset = 0; fetchTransactionLogs(); }, 300);
+}
 
 async function fetchTransactionLogs() {
   const body = document.getElementById('transactionLogsBody');
   try {
-    const r = await fetchWithRetry(`/api/payments/recent?limit=${txLogsLimit}&offset=${txLogsOffset}`, { headers: authHeaders() });
+    const search = document.getElementById('txLogsSearch')?.value || '';
+    const r = await fetchWithRetry(`/api/payments/recent?limit=${txLogsLimit}&offset=${txLogsOffset}&search=${encodeURIComponent(search)}`, { headers: authHeaders() });
     if (!r.ok) throw new Error(r.status);
     const d = await r.json();
     txLogsTotal = d.total || 0;
@@ -5090,12 +5108,13 @@ async function fetchTransactionLogs() {
         return `
           <tr>
             <td>${escapeHtml(cleanText(item.paid_at_ph || ''))}</td>
+            <td>${escapeHtml(cleanText(item.customer_name || 'Unknown driver'))}<br><small>${escapeHtml(cleanText(item.customer_email || (item.user_id ? `Account #${item.user_id}` : 'Account not recorded')))}</small><br><small>Payment #${escapeHtml(String(item.payment_id))}${item.external_reference ? ` · ${escapeHtml(cleanText(item.external_reference))}` : ''}</small></td>
             <td>${escapeHtml(vehicle)}${escapeHtml(duration)}</td>
             <td class="col-money">${escapeHtml(formatPhp(item.final_amount_php, { forceCents: true }))}</td>
             <td>${escapeHtml(cleanText(item.payment_method || 'cash').toUpperCase())}</td>
             <td class="col-discount">${discount}</td>
           </tr>`;
-      }).join('') : '<tr><td colspan="5" class="report-empty">No payments recorded yet.</td></tr>';
+      }).join('') : '<tr><td colspan="6" class="report-empty">No matching payments found.</td></tr>';
     }
 
     const rangeLabel = document.getElementById('txLogsRangeLabel');
@@ -5109,8 +5128,32 @@ async function fetchTransactionLogs() {
     if (prevBtn) prevBtn.disabled = txLogsOffset <= 0;
     if (nextBtn) nextBtn.disabled = txLogsOffset + txLogsLimit >= txLogsTotal;
   } catch (e) {
-    if (body) body.innerHTML = '<tr><td colspan="5" class="report-empty">Could not load transaction logs.</td></tr>';
+    if (body) body.innerHTML = '<tr><td colspan="6" class="report-empty">Could not load transaction logs.</td></tr>';
   }
+}
+
+async function fetchRefundRequests() {
+  const list = document.getElementById('refundRequestsList');
+  if (!list) return;
+  try {
+    const response = await fetchWithRetry('/api/admin/refund-requests', {headers: authHeaders(), cache: 'no-store'});
+    if (!response.ok) throw new Error('Could not load refund requests.');
+    const data = await response.json();
+    list.innerHTML = (data.requests || []).map(item => `<article class="discount-review-card">
+      <strong>Booking #${Number(item.reservation_id)} · ${escapeHtml(cleanText(item.status))}</strong>
+      <div>${escapeHtml(cleanText(item.full_name || 'Unknown driver'))} · ${escapeHtml(cleanText(item.email || ''))}</div>
+      <div>Slot ${escapeHtml(cleanText(item.slot_id))} · ${escapeHtml(formatPhp(item.amount_php, {forceCents: true}))} · Payment #${escapeHtml(String(item.payment_id || 'not recorded'))}</div>
+      <div>Requested ${escapeHtml(cleanText(item.created_at))}</div>
+      ${item.status === 'pending' ? `<button type="button" class="ghost-btn" onclick="reviewRefundRequest(${Number(item.request_id)})">Mark reviewed</button>` : ''}
+    </article>`).join('') || '<div class="report-empty">No refund requests.</div>';
+  } catch (_) { list.textContent = 'Refund requests are temporarily unavailable.'; }
+}
+
+async function reviewRefundRequest(id) {
+  if (!confirm('Mark this request reviewed? This does not issue a refund.')) return;
+  const response = await fetchWithRetry(`/api/admin/refund-requests/${id}/review`, {method: 'POST', headers: authHeaders()});
+  if (!response.ok) { alert('Could not update the request.'); return; }
+  await fetchRefundRequests();
 }
 
 function txLogsPrevPage() {
@@ -5339,7 +5382,19 @@ async function fetchRevenueDashboard() {
   }
 }
 
+async function fetchDriverFeedback() {
+  const list = document.getElementById('driverFeedbackList');
+  if (!list) return;
+  try {
+    const response = await fetchWithRetry('/api/admin/driver-feedback', {credentials: 'same-origin'});
+    if (!response.ok) throw new Error('Could not load feedback');
+    const data = await response.json();
+    list.innerHTML = (data.feedback || []).map(item => `<article class="discount-review-card"><strong>${escapeHtml(cleanText(item.full_name))} · ${item.reservation_id ? `Booking #${Number(item.reservation_id)} · ${escapeHtml(cleanText(item.slot_id || ''))} · ${Number(item.rating)}/5` : 'General feedback'}</strong><div class="discount-review-meta">${escapeHtml(cleanText(item.created_at))}</div><p>${escapeHtml(cleanText(item.message))}</p></article>`).join('') || '<div class="report-empty">No driver feedback yet.</div>';
+  } catch (_) { list.textContent = 'Feedback is temporarily unavailable.'; }
+}
+
 async function fetchDiscountVerifications() {
+  fetchDriverFeedback();
   const list = document.getElementById('discountVerificationReviewList');
   if (!list) return;
   try {
