@@ -12,6 +12,24 @@ import backend.main as m
 from fastapi.testclient import TestClient
 
 
+def test_checkout_status_is_scoped_to_authenticated_user(monkeypatch):
+    captured = {}
+    def fake_query(sql, params):
+        captured['sql'] = sql
+        captured['params'] = params
+        return [{'status': 'pending', 'final_amount_php': 50, 'reservation_id': 4}]
+    monkeypatch.setattr(m, 'query', fake_query)
+    result = m.gcash_checkout_status('a' * 24, {'user_id': 17})
+    assert result['status'] == 'pending'
+    assert 'user_id=%s' in captured['sql']
+    assert captured['params'] == ('a' * 24, 17)
+
+
+def test_checkout_status_does_not_claim_unverified_payment(monkeypatch):
+    monkeypatch.setattr(m, 'query', lambda *_: [{'status': 'processing', 'final_amount_php': 50, 'reservation_id': None}])
+    assert m.gcash_checkout_status('a' * 24, {'user_id': 1})['status'] == 'processing'
+
+
 def test_paymongo_signature_requires_current_timestamp_and_correct_mode(monkeypatch):
     secret = "webhook-test-secret"
     body = json.dumps({"data": {"id": "evt_123"}}).encode("utf-8")

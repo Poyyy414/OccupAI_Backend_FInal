@@ -3949,21 +3949,16 @@ def reservation_slots(_auth=Depends(require_user)):
         "r.requested_start_date, "
         "u.email AS account_email "
         "FROM parking_reservations r JOIN users u ON u.user_id=r.user_id "
-        "WHERE r.user_id=%s ORDER BY "
+        "WHERE r.user_id=%s AND (r.status IN ('pending_payment', 'reserved', 'occupied') "
+        "OR r.reservation_id=(SELECT reservation_id FROM parking_reservations "
+        "WHERE user_id=%s ORDER BY created_at DESC LIMIT 1)) ORDER BY "
         "CASE WHEN r.status IN ('pending_payment', 'reserved', 'occupied') THEN 0 ELSE 1 END, "
-        "r.created_at DESC LIMIT 1",
-        (user_id,),
-    )
-    active = query(
-        "SELECT r.reservation_id, r.slot_id, r.vehicle_type, r.duration_type, r.status, "
-        "r.payment_status, r.amount_php, r.created_at, r.starts_at, r.expires_at, "
-        "r.requested_start_date, u.email AS account_email "
-        "FROM parking_reservations r JOIN users u ON u.user_id=r.user_id "
-        "WHERE r.user_id=%s AND r.status IN ('pending_payment', 'reserved', 'occupied') "
-        "ORDER BY r.created_at DESC", (user_id,),
+        "r.created_at DESC",
+        (user_id, user_id),
     )
     return {"slots": slots, "my_reservation": _reservation_public(rows[0]) if rows else None,
-            "my_reservations": [_reservation_public(row) for row in active]}
+            "my_reservations": [_reservation_public(row) for row in rows
+                                if row['status'] in ('pending_payment', 'reserved', 'occupied')]}
 
 
 class ReservationSlotChangePayload(BaseModel):
@@ -6186,6 +6181,26 @@ def gcash_status():
     return {"enabled": bool(PAYMONGO_SECRET_KEY)}
 
 
+@app.get("/api/gcash/checkouts/{ref}")
+def gcash_checkout_status(ref: str, _auth=Depends(require_user)):
+    """Return only the authenticated driver's recorded checkout state.
+
+    A browser redirect is not proof of payment: only the existing verified
+    PayMongo finalization/webhook can set the durable paid status.
+    """
+    if not 20 <= len(ref) <= 64:
+        raise HTTPException(404, "Checkout not found")
+    rows = query(
+        "SELECT status, final_amount_php, reservation_id FROM gcash_checkouts "
+        "WHERE ref=%s AND user_id=%s", (ref, int(_auth['user_id'])),
+    )
+    if not rows:
+        raise HTTPException(404, "Checkout not found")
+    row = rows[0]
+    return {'status': row['status'], 'amount_php': float(row['final_amount_php']),
+            'reservation_id': row['reservation_id']}
+
+
 @app.get("/api/gcash/issues")
 def gcash_issues(_admin=Depends(require_admin)):
     """
@@ -6193,7 +6208,6 @@ def gcash_issues(_admin=Depends(require_admin)):
     parking_payments row — the customer was charged and nothing is recorded.
     Needs manual reconciliation.
     """
-    _reconcile_stale_gcash_checkouts()
     rows = query("""
         SELECT ref, user_id, vehicle_type, duration_type, final_amount_php, discount_type,
                error_message, created_at
