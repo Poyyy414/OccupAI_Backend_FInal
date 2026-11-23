@@ -523,6 +523,19 @@ def require_stream_access(
 DB_LOG_CONFIRM_SECONDS = max(0.0, float(os.getenv("DB_LOG_CONFIRM_SECONDS", "20")))
 DB_LOG_MIN_INTERVAL_SECONDS = max(1.0, float(os.getenv("DB_LOG_MIN_INTERVAL_SECONDS", "20")))
 CAMERA_STATE_TTL_SECONDS = max(5.0, float(os.getenv("CAMERA_STATE_TTL_SECONDS", "15")))
+
+# ── CV Simulation Mode ─────────────────────────────────────────────────────────
+# Set SIMULATE_CV=true in environment variables to enable built-in occupancy
+# simulation without a physical camera or running a separate script.
+# Useful for demos, thesis defense, and mobile app testing.
+_SIMULATE_CV = os.getenv("SIMULATE_CV", "").strip().lower() in {"1", "true", "yes", "on"}
+_SIM_INTERVAL = max(1.0, float(os.getenv("SIMULATE_CV_INTERVAL", "3")))
+
+# Default simulated slot states — edit these or override via SIMULATE_CV_PRESET env var.
+# Format: comma-separated occupied slot IDs  e.g. "C01,C03,M02,M05"
+_SIM_PRESET_ENV = os.getenv("SIMULATE_CV_PRESET", "C01,C02,C04,M01,M03,M05,M08,M12").strip()
+_SIM_OCCUPIED_SLOTS: set = {s.strip().upper() for s in _SIM_PRESET_ENV.split(",") if s.strip()}
+# ──────────────────────────────────────────────────────────────────────────────
 # A short local detector run must not replace the complete historical pattern
 # with one or two populated hours. These thresholds are configurable so a
 # smaller staging lot can tune them without changing prediction code.
@@ -1763,6 +1776,7 @@ def _ensure_reservation_table():
 
 
 def _ensure_admin_settings_table():
+
     # Backs the admin-toggle settings (discounts, layout override, price
     # override) — these used to live in a local .env file, which Render
     # wipes on every restart (including OOM crash-restarts), silently
@@ -1790,6 +1804,54 @@ def _ensure_admin_settings_table():
         )
     except Exception as e:
         print(f"[DB] admin_settings table setup warning: {e}")
+
+
+def _cv_simulation_loop():
+    """Background thread: pushes synthetic camera states when SIMULATE_CV=true.
+
+    Directly writes into camera_states (bypassing HTTP auth) so there is no
+    network round-trip and no dependency on a running detector process.
+    Both cameras (cars + motorcycles) are kept perpetually 'online' and fresh
+    so the aggregated state is always complete and all slot statuses resolve
+    to occupied or available — never unknown.
+    """
+    while True:
+        try:
+            now = time.monotonic()
+            ts = datetime.now(PH_TZ).strftime("%Y-%m-%d %H:%M:%S")
+            with state_lock:
+                for camera_id, config in CAMERA_ROLE_CONFIG.items():
+                    prefix = config["prefix"]
+                    capacity = config["capacity"]
+                    zones = {}
+                    for idx in range(1, capacity + 1):
+                        slot_id = f"{prefix}{idx:02d}"
+                        zones[slot_id] = slot_id in _SIM_OCCUPIED_SLOTS
+                    occupied = sum(1 for v in zones.values() if v)
+                    free = max(0, capacity - occupied)
+                    pct = round(occupied / capacity * 100, 1) if capacity else 0.0
+                    camera_states[camera_id] = {
+                        "camera_role": config["role"],
+                        "occupied": occupied,
+                        "free": free,
+                        "total": capacity,
+                        "occupancy_pct": pct,
+                        "yolo_count": occupied,
+                        "car_count": occupied if config["role"] == "car" else 0,
+                        "motorcycle_count": occupied if config["role"] == "motorcycle" else 0,
+                        "bicycle_count": 0,
+                        "fps": 15.0,
+                        "timestamp": ts,
+                        "zones": zones,
+                        "reporting": True,
+                        "camera_status": "online",
+                        "calibration_required": False,
+                        "received_at": now,
+                    }
+                _refresh_aggregated_state_locked()
+        except Exception as exc:
+            print(f"[SIM] simulation loop error: {exc}")
+        time.sleep(_SIM_INTERVAL)
 
 
 @asynccontextmanager
@@ -1837,6 +1899,17 @@ async def lifespan(app: FastAPI):
     )
     reservation_thread.start()
     print("[OccupAI] Insight scheduler started (15s warmup, then hourly).")
+    if _SIMULATE_CV:
+        sim_thread = threading.Thread(
+            target=_cv_simulation_loop,
+            daemon=True,
+            name="cv-simulation",
+        )
+        sim_thread.start()
+        print(
+            f"[SIM] CV simulation mode ENABLED — interval={_SIM_INTERVAL}s "
+            f"occupied_slots={sorted(_SIM_OCCUPIED_SLOTS)}"
+        )
     yield
     print("[OccupAI] Shutdown.")
 
